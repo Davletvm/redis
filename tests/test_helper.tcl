@@ -11,6 +11,11 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
+set ::all_tests_1 {
+    unit/limits
+}
+
+
 set ::all_tests {
     unit/printver
     unit/auth
@@ -71,7 +76,7 @@ set ::force_failure 0
 # The server is responsible of showing the result to the user, and exit with
 # the appropriate exit code depending on the test outcome.
 set ::client 0
-set ::numclients 16
+set ::numclients 1
 
 proc execute_tests name {
     set path "tests/$name.tcl"

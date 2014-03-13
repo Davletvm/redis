@@ -493,6 +493,7 @@ void loadServerConfigFromString(char *config) {
             }
 #ifdef _WIN32
 		} else if (!strcasecmp(argv[0],"bypass-system-reserve")) {
+        } else if (!strcasecmp(argv[0],"maxvirtualmemory")) {
 			// handled in qfork init. bypass here,
 #endif
 		} else {

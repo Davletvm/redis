@@ -68,6 +68,10 @@ BOOL AbortForkOperation();
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh);
 int FreeHeapBlock(LPVOID block, size_t size);
 
+// Need to change default Redis maxmemory setting which is normally infinite
+extern SIZE_T g_win64maxmemory;
+extern BOOL g_isForkedProcess;
+
 #ifndef NO_QFORKIMPL
 #ifdef QFORK_MAIN_IMPL
 int redis_main(int argc, char** argv);

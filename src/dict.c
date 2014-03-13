@@ -292,6 +292,12 @@ int dictExpand(dict *d, unsigned long size)
  * Note that a rehashing step consists in moving a bucket (that may have more
  * thank one key as we use chaining) from the old to the new hash table. */
 int dictRehash(dict *d, int n) {
+
+
+#ifdef _WIN32
+    if (g_isForkedProcess)
+        return 0;
+#endif
     if (!dictIsRehashing(d)) return 0;
 
     while(n--) {
@@ -630,7 +636,12 @@ dictEntry *dictNext(dictIterator *iter)
             dictht *ht = &iter->d->ht[iter->table];
             if (iter->index == -1 && iter->table == 0) {
                 if (iter->safe)
-                    iter->d->iterators++;
+#ifdef _WIN32
+                    if (!g_isForkedProcess)
+                        iter->d->iterators++;
+#else
+                    iter->d->iterators++; 
+#endif
                 else
                     iter->fingerprint = dictFingerprint(iter->d);
             }
@@ -662,7 +673,12 @@ void dictReleaseIterator(dictIterator *iter)
 {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (iter->safe)
-            iter->d->iterators--;
+#ifdef _WIN32
+            if (!g_isForkedProcess) 
+                iter->d->iterators--;
+#else
+            iter->d->iterators--; 
+#endif
         else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }

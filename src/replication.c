@@ -606,6 +606,7 @@ void sendBulkToSlaveDataDone(aeEventLoop *el, int fd, void *privdata, int nwritt
         redisLog(REDIS_NOTICE,"Synchronization with slave succeeded");
     }
 }
+
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *slave = privdata;
     char *buf;
@@ -971,6 +972,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         server.master->authenticated = 1;
         server.repl_state = REDIS_REPL_CONNECTED;
         server.master->reploff = server.repl_master_initial_offset;
+
         memcpy(server.master->replrunid, server.repl_master_runid,
             sizeof(server.repl_master_runid));
         /* If master offset is set to -1, this master is old and is not
@@ -1334,6 +1336,7 @@ error:
 int connectWithMaster(void) {
     int fd;
 
+    
     fd = anetTcpNonBlockConnect(NULL,server.masterhost,server.masterport);
     if (fd == -1) {
         redisLog(REDIS_WARNING,"Unable to connect to MASTER: %s",

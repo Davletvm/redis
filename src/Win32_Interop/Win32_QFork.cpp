@@ -123,12 +123,10 @@ const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlm
 const int cMaxBlocks = 1 << 16;                                  // 64KB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
 const char* qforkFlag = "--QFork";
-const char* maxmemoryFlag = "maxmemory";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
 
-// for Azure team testing
-const char* bypassSystemReserveFlag = "bypass-system-reserve";
+const char* maxvirtualmemoryflag = "maxvirtualmemory";
 
 
 typedef enum BlockState {
@@ -154,16 +152,17 @@ struct QForkControl {
 
     // global data pointers to be passed to the forked process
     QForkBeginInfo globalData;
-    BYTE DLMallocGlobalState[1000];
-    size_t DLMallocGlobalStateSize;
 };
 
-QForkControl* g_pQForkControl;
-HANDLE g_hQForkControlFileMap;
-HANDLE g_hForkedProcess;
+QForkControl* g_pQForkControl = NULL;
+HANDLE g_hQForkControlFileMap = NULL;
+HANDLE g_hForkedProcess = NULL;
+SIZE_T g_win64maxmemory = 0;
+BOOL g_isForkedProcess = FALSE;
 
 BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     try {
+        g_isForkedProcess = TRUE;
         SmartHandle shParent( 
             OpenProcess(SYNCHRONIZE | PROCESS_DUP_HANDLE, TRUE, ParentProcessID),
             string("Could not open parent process"));
@@ -193,22 +192,17 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
        SIZE_T mmSize = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
        SmartFileMapHandle sfmhMapFile(
            g_pQForkControl->heapMemoryMapFile, 
-           PAGE_WRITECOPY, 
+           PAGE_READONLY, 
            HIDWORD(mmSize), LODWORD(mmSize),
            string("QForkSlaveInit: Could not open file mapping object in slave"));
        g_pQForkControl->heapMemoryMap = sfmhMapFile;
 
         SmartFileView<byte> sfvHeap(
             g_pQForkControl->heapMemoryMap,
-            FILE_MAP_COPY,
+            FILE_MAP_READ,
             0, 0, 0,
             g_pQForkControl->heapStart,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
-
-        // setup DLMalloc global data
-        if( SetDLMallocGlobalState(g_pQForkControl->DLMallocGlobalStateSize, g_pQForkControl->DLMallocGlobalState) != 0) {
-            throw std::runtime_error("QForkSlaveInit: DLMalloc global state copy failed.");
-        }
 
         // signal parent that we are ready
         SetEvent(g_pQForkControl->forkedProcessReady);
@@ -255,7 +249,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 }
 
 
-BOOL QForkMasterInit( __int64 maxmemoryBytes, bool bypassSystemReserve ) {
+BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
     try {
         // allocate file map for qfork control so it can be passed to the forked process
         g_hQForkControlFileMap = CreateFileMappingW(
@@ -285,6 +279,12 @@ BOOL QForkMasterInit( __int64 maxmemoryBytes, bool bypassSystemReserve ) {
 
         // This must be called only once per process! Calling it more times than that will not recreate existing 
         // section, and dlmalloc will ultimately fail with an access violation. Once is good.
+        if (dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity) == 0) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
+        }
         if (dlmallopt(M_GRANULARITY, cAllocationGranularity) == 0) {
             throw std::system_error(
                 GetLastError(),
@@ -294,21 +294,21 @@ BOOL QForkMasterInit( __int64 maxmemoryBytes, bool bypassSystemReserve ) {
         g_pQForkControl->heapBlockSize = cAllocationGranularity;
 
         // determine the number of blocks we can allocate (heap must be completely mappable in physical memory for qfork to succeed)
-		PERFORMANCE_INFORMATION perfinfo;
-		perfinfo.cb = sizeof(PERFORMANCE_INFORMATION);
-		if (FALSE == GetPerformanceInfo(&perfinfo, sizeof(PERFORMANCE_INFORMATION))) {
-			throw system_error(GetLastError(), system_category(), "GetPerformanceInfo failed");
-		}
-		SIZE_T maxSystemReservePages = 3i64 * 1024i64 * 1024i64 * 1024i64 / pageSize;
-		SIZE_T twentyPercentPhysical = (perfinfo.PhysicalTotal * 2i64) / 10i64;
-		SIZE_T maxPhysicalPagesToUse = perfinfo.PhysicalTotal - min(maxSystemReservePages, bypassSystemReserve ? 0 : twentyPercentPhysical);
-        SIZE_T maxPhysicalMapping = maxPhysicalPagesToUse * pageSize;
-        if (maxmemoryBytes != -1) {
-			SIZE_T allocationBlocks = maxmemoryBytes / cAllocationGranularity;
-			allocationBlocks += ((maxmemoryBytes % cAllocationGranularity) != 0);
-			allocationBlocks = (SIZE_T)ceil(allocationBlocks * 1.5);				// extra reserve for fragmentation
-			allocationBlocks = max(2, allocationBlocks);
-			maxPhysicalMapping = min(maxPhysicalMapping,allocationBlocks * cAllocationGranularity);
+        PERFORMANCE_INFORMATION perfinfo;
+        perfinfo.cb = sizeof(PERFORMANCE_INFORMATION);
+        if (FALSE == GetPerformanceInfo(&perfinfo, sizeof(PERFORMANCE_INFORMATION))) {
+            throw system_error(GetLastError(), system_category(), "GetPerformanceInfo failed");
+        }
+        SIZE_T maxSystemReservePages = 3i64 * 1024i64 * 1024i64 * 1024i64 / pageSize;
+        SIZE_T maxPhysicalPagesToUse = perfinfo.PhysicalTotal;
+        SIZE_T maxPhysicalMapping = (maxPhysicalPagesToUse * pageSize * 14i64) / 10i64;
+        g_win64maxmemory = maxPhysicalPagesToUse * pageSize;
+        if (maxMemoryVirtualBytes != -1) {
+            SIZE_T allocationBlocks = maxMemoryVirtualBytes / cAllocationGranularity;
+            allocationBlocks += ((maxMemoryVirtualBytes % cAllocationGranularity) != 0);
+            allocationBlocks = max(2, allocationBlocks);
+            maxPhysicalMapping = allocationBlocks * cAllocationGranularity;
+            g_win64maxmemory = maxPhysicalMapping * 7i64 / 10i64;
         }
         g_pQForkControl->availableBlocksInHeap = (int)(maxPhysicalMapping / cAllocationGranularity);
         if (g_pQForkControl->availableBlocksInHeap <= 0) {
@@ -363,7 +363,7 @@ BOOL QForkMasterInit( __int64 maxmemoryBytes, bool bypassSystemReserve ) {
             GetCurrentProcess(),
             NULL,
             mmSize,
-            MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN, 
+            MEM_RESERVE | MEM_TOP_DOWN, 
             PAGE_READWRITE);
         if (pHigh == NULL) {
             throw std::system_error(
@@ -455,8 +455,8 @@ StartupStatus QForkStartup(int argc, char** argv) {
     bool foundSlaveFlag = false;
     HANDLE QForkConrolMemoryMapHandle = NULL;
     DWORD PPID = 0;
-    __int64 maxmemory = -1;
-	bool bypassSystemReserve = false;
+    __int64 maxvirtualmemory = -1;
+    bool bypassSystemReserve = false;
     if ((argc == 3) && (strcmp(argv[0], qforkFlag) == 0)) {
         // slave command line looks like: --QFork [QForkConrolMemoryMap handle] [parent process id]
         foundSlaveFlag = true;
@@ -465,58 +465,53 @@ StartupStatus QForkStartup(int argc, char** argv) {
         char* end = NULL;
         PPID = strtoul(argv[2], &end, 10);
     } else {
-		bool maxMemoryFlagFound = false;
+        bool maxMemoryFlagFound = false;
         for (int n = 1; n < argc; n++) {
-			// check for maxmemory + reserve bypass flags in .conf file
-			if( n == 1  && strncmp(argv[n],"--",2) != 0 ) {
-				ifstream config;
-				config.open(argv[n]);
-				if (config.fail())
-					continue;
-				while (!config.eof()) {
-					string line;
-					getline(config,line);
-					istringstream iss(line);
-					string token;
-					if (getline(iss, token, ' ')) {
-						if (_stricmp(token.c_str(), maxmemoryFlag) == 0) {
-							string maxmemoryString;
-							if (getline(iss, maxmemoryString, ' ')) {
-								maxmemory = _atoi64(maxmemoryString.c_str());
-								maxMemoryFlagFound = true;
-							}
-						}
-						else if( _stricmp(token.c_str(), bypassSystemReserveFlag) == 0 ) {
-							bypassSystemReserve = true;
-						}
-					}
-				}
-				continue;
-			}
+            // check for maxmemory + reserve bypass flags in .conf file
+            if( n == 1  && strncmp(argv[n],"--",2) != 0 ) {
+                ifstream config;
+                config.open(argv[n]);
+                if (config.fail())
+                    continue;
+                while (!config.eof()) {
+                    string line;
+                    getline(config,line);
+                    istringstream iss(line);
+                    string token;
+                    if (getline(iss, token, ' ')) {
+                        if (_stricmp(token.c_str(), maxvirtualmemoryflag) == 0) {
+                            string maxmemoryString;
+                            if (getline(iss, maxmemoryString, ' ')) {
+                                maxvirtualmemory = _atoi64(maxmemoryString.c_str());
+                                maxMemoryFlagFound = true;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             if( strncmp(argv[n],"--", 2) == 0) {
-				if (_stricmp(argv[n]+2,maxmemoryFlag) == 0) {
-					maxmemory = _atoi64(argv[n+1]);
-					if (maxmemory == 0) {
-						printf (
-							"%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
-							maxmemory,
-							argv[n+1] );
-						printf( "Failing startup.\n");
-						return StartupStatus::ssFAILED;
-					} else {
-						maxMemoryFlagFound = true;
-	                }
-				} else if(_stricmp(argv[n]+2,bypassSystemReserveFlag) == 0) {
-					bypassSystemReserve = true;
-				}
-			}
+                if (_stricmp(argv[n]+2,maxvirtualmemoryflag) == 0) {
+                    maxvirtualmemory = _atoi64(argv[n+1]);
+                    if (maxvirtualmemory == 0) {
+                        printf (
+                            "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
+                            maxvirtualmemory,
+                            argv[n+1] );
+                        printf( "Failing startup.\n");
+                        return StartupStatus::ssFAILED;
+                    } else {
+                        maxMemoryFlagFound = true;
+                    }
+                }
+            }
         }
     }
 
     if (foundSlaveFlag) {
         return QForkSlaveInit( QForkConrolMemoryMapHandle, PPID ) ? StartupStatus::ssSLAVE_EXIT : StartupStatus::ssFAILED;
     } else {
-		return QForkMasterInit(maxmemory,bypassSystemReserve) ? StartupStatus::ssCONTINUE_AS_MASTER : StartupStatus::ssFAILED;
+        return QForkMasterInit(maxvirtualmemory) ? StartupStatus::ssCONTINUE_AS_MASTER : StartupStatus::ssFAILED;
     }
 }
 
@@ -586,13 +581,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         g_pQForkControl->globalData.globalDataSize = sizeOfGlobalData;
         g_pQForkControl->globalData.dictHashSeed = dictHashSeed;
 
-        GetDLMallocGlobalState(&g_pQForkControl->DLMallocGlobalStateSize, NULL);
-        if (g_pQForkControl->DLMallocGlobalStateSize > sizeof(g_pQForkControl->DLMallocGlobalState)) {
-            throw std::runtime_error("DLMalloc global state too large.");
-        }
-        if(GetDLMallocGlobalState(&g_pQForkControl->DLMallocGlobalStateSize, g_pQForkControl->DLMallocGlobalState) != 0) {
-            throw std::runtime_error("DLMalloc global state copy failed.");
-        }
 
         // protect both the heap and the fork control map from propagating local changes 
         DWORD oldProtect = 0;
@@ -600,7 +588,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "BeginForkOperation: VirtualProtect failed");
+                "BeginForkOperation: VirtualProtect 1 failed");
         }
         if (VirtualProtect( 
             g_pQForkControl->heapStart, 
@@ -610,7 +598,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "BeginForkOperation: VirtualProtect failed");
+                "BeginForkOperation: VirtualProtect 2 failed");
         }
 
         // ensure events are in the correst state
@@ -618,31 +606,31 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
             throw std::system_error(
                 GetLastError(),
                 system_category(), 
-                "BeginForkOperation: ResetEvent() failed.");
+                "BeginForkOperation: ResetEvent() 1 failed.");
         }
         if (ResetEvent(g_pQForkControl->operationFailed) == FALSE ) {
             throw std::system_error(
                 GetLastError(),
                 system_category(), 
-                "BeginForkOperation: ResetEvent() failed.");
+                "BeginForkOperation: ResetEvent() 2 failed.");
         }
         if (ResetEvent(g_pQForkControl->startOperation) == FALSE ) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "BeginForkOperation: ResetEvent() failed.");
+                "BeginForkOperation: ResetEvent() 3 failed.");
         }
         if (ResetEvent(g_pQForkControl->forkedProcessReady) == FALSE) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "BeginForkOperation: ResetEvent() failed.");
+                "BeginForkOperation: ResetEvent() 4 failed.");
         }
         if (ResetEvent(g_pQForkControl->terminateForkedProcess) == FALSE) {
             throw std::system_error(
                 GetLastError(), 
                 system_category(),
-                "BeginForkOperation: ResetEvent() failed.");
+                "BeginForkOperation: ResetEvent() 5 failed.");
         }
 
         // Launch the "forked" process
@@ -668,6 +656,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
                 "Problem creating slave process" );
         }
         (*childPID) = pi.dwProcessId;
+        g_hForkedProcess = pi.hProcess;
 
         // wait for "forked" process to map memory
         if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,10000) != WAIT_OBJECT_0) {
@@ -793,7 +782,7 @@ BOOL EndForkOperation() {
             throw std::system_error(
                 GetLastError(), 
                 system_category(),
-                "EndForkOperation: VirtualProtect failed.");
+                "EndForkOperation: VirtualProtect 3 failed.");
         }
         if (VirtualProtect( 
             g_pQForkControl->heapStart, 
@@ -803,7 +792,7 @@ BOOL EndForkOperation() {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "EndForkOperation: VirtualProtect failed.");
+                "EndForkOperation: VirtualProtect 4 failed.");
         }
 
         //
@@ -832,7 +821,6 @@ BOOL EndForkOperation() {
                 "pwsi == NULL");
         }
         memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
-        int virtualLockFailures = 0;
         for (int page = 0; page < pages; page++) {
             pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize;
         }
@@ -857,26 +845,37 @@ BOOL EndForkOperation() {
         }
 
         if (cowList.size() > 0) {
-            LPBYTE cowBuffer = (LPBYTE)malloc(cowList.size() * pageSize);
-            int bufPageIndex = 0;
-            for (COWListIterator cli = cowList.begin(); cli != cowList.end(); cli++) {
-                memcpy(
-                    cowBuffer + (bufPageIndex * pageSize),
-                    (BYTE*)g_pQForkControl->heapStart + ((*cli) * pageSize),
-                    pageSize);
-                bufPageIndex++;
+            void * heapAltRegion;
+
+            heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0, 0);
+            if (heapAltRegion == NULL) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "EndForkOperation: Remapping ForkControl block failed.");
             }
 
-            delete [] pwsi;
-            pwsi = NULL;
+            for (COWListIterator cli = cowList.begin(); cli != cowList.end(); cli++) {
+                memcpy(
+                    (BYTE*)heapAltRegion + ((*cli) * pageSize),
+                    (BYTE*)g_pQForkControl->heapStart + ((*cli) * pageSize),                    
+                    pageSize);
+            }
 
-            // discard local changes
             if (UnmapViewOfFile(g_pQForkControl->heapStart) == FALSE) {
                 throw std::system_error(
                     GetLastError(),
                     system_category(),
                     "EndForkOperation: UnmapViewOfFile failed.");
             }
+
+            if (UnmapViewOfFile(heapAltRegion) == FALSE) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "EndForkOperation: UnmapViewOfFile failed.");
+            }
+
             g_pQForkControl->heapStart = 
                 MapViewOfFileEx(
                     g_pQForkControl->heapMemoryMap,
@@ -884,6 +883,7 @@ BOOL EndForkOperation() {
                     0,0,                            
                     0,  
                     g_pQForkControl->heapStart);
+
             if (g_pQForkControl->heapStart == NULL) {
                 throw std::system_error(
                     GetLastError(),
@@ -891,17 +891,6 @@ BOOL EndForkOperation() {
                     "EndForkOperation: Remapping ForkControl block failed.");
             }
 
-            // copied back local changes to remapped view
-            bufPageIndex = 0;
-            for (COWListIterator cli = cowList.begin(); cli != cowList.end(); cli++) {
-                memcpy(
-                    (BYTE*)g_pQForkControl->heapStart + ((*cli) * pageSize),
-                    cowBuffer + (bufPageIndex * pageSize),
-                    pageSize);
-                bufPageIndex++;
-            }
-            delete cowBuffer;
-            cowBuffer = NULL;
         }
 
         // now do the same with qfork control
@@ -935,6 +924,8 @@ BOOL EndForkOperation() {
         memcpy(g_pQForkControl, controlCopy,sizeof(QForkControl));
         delete controlCopy;
         controlCopy = NULL;
+        delete [] pwsi;
+        pwsi = NULL;
 
         return TRUE;
     }
@@ -956,6 +947,9 @@ int totalAllocCalls = 0;
 int totalFreeCalls = 0;
 
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
+    if (g_isForkedProcess) {
+        return VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT| (allocateHigh ? MEM_TOP_DOWN: 0), PAGE_READWRITE);
+    }
     totalAllocCalls++;
     LPVOID retPtr = (LPVOID)NULL;
     if (size % g_pQForkControl->heapBlockSize != 0 ) {
@@ -1008,6 +1002,26 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
 
 BOOL FreeHeapBlock(LPVOID block, size_t size)
 {
+    if (g_isForkedProcess) {
+        char* cptr = (char*)block;
+
+        MEMORY_BASIC_INFORMATION minfo;
+        while (size) {
+            if (VirtualQuery(cptr, &minfo, sizeof(minfo)) == 0)
+                return -1;
+            if (minfo.BaseAddress != cptr || minfo.AllocationBase != cptr ||
+                minfo.State != MEM_COMMIT || minfo.RegionSize > size)
+                return -1;
+    
+            if (VirtualFree(cptr, 0, MEM_RELEASE) == 0) {
+                return -1;
+            }
+            cptr += minfo.RegionSize;
+            size -= minfo.RegionSize;
+        }
+        return 0;
+    }
+
     totalFreeCalls++;
     if (size == 0) {
         return FALSE;

@@ -837,16 +837,6 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    if (c->flags & REDIS_MASTER) {
-        /* do not send to master */
-        c->bufpos = 0;
-        c->sentlen = 0;
-        while (listLength(c->reply)) {
-            listDelNode(c->reply,listFirst(c->reply));
-        }
-        c->lastinteraction = time(NULL);
-        return;
-    }
 
     /* move list pointer to last one sent or first in list */
     listRewind(c->reply, &li);
@@ -905,7 +895,13 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory)) break;
     }
-    if (totwritten > 0) c->lastinteraction = server.unixtime;
+    if (totwritten > 0) {
+        /* For clients representing masters we don't count sending data
+         * as an interaction, since we always send REPLCONF ACK commands
+         * that take some time to just fill the socket output buffer.
+         * We just rely on data / pings received for timeout detection. */
+        if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
+    }
 
 }
 
@@ -1372,7 +1368,12 @@ int getClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
     } else {
         /* TCP client. */
         int retval = anetPeerToString(client->fd,ip,sizeof(ip),&port);
-        formatPeerId(peerid,peerid_len,ip,port);
+        if (retval == -1 && client->flags & REDIS_MASTER) {
+            formatPeerId(peerid, peerid_len, "MASTER", 0);
+            retval = 0;
+        } else {
+            formatPeerId(peerid,peerid_len,ip,port);\
+        }
         return (retval == -1) ? REDIS_ERR : REDIS_OK;
     }
 }

@@ -1358,7 +1358,11 @@ void initServerConfig() {
     server.notify_keyspace_events = 0;
     server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
+#ifdef _WIN32
+    server.maxmemory = g_win64maxmemory;
+#else
     server.maxmemory = REDIS_DEFAULT_MAXMEMORY;
+#endif
     server.maxmemory_policy = REDIS_DEFAULT_MAXMEMORY_POLICY;
     server.maxmemory_samples = REDIS_DEFAULT_MAXMEMORY_SAMPLES;
     server.hash_max_ziplist_entries = REDIS_HASH_MAX_ZIPLIST_ENTRIES;

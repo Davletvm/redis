@@ -4,7 +4,7 @@ proc start_bg_complex_data {host port db ops} {
 }
 
 proc stop_bg_complex_data {handle} {
-    catch {exec /bin/kill -9 $handle}
+        kill_proc2 $handle
 }
 
 # Creates a master-slave pair and breaks the link continuously to force
@@ -43,17 +43,24 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
                 # link multiple times.
                 for {set j 0} {$j < $duration*10} {incr j} {
                     after 100
-                    # catch {puts "MASTER [$master dbsize] keys, SLAVE [$slave dbsize] keys"}
+                    #catch {puts "MASTER [$master dbsize] keys, SLAVE [$slave dbsize] keys"}
 
                     if {($j % 20) == 0} {
                         catch {
                             if {$delay} {
+								#puts "in loop1"
                                 $slave multi
-                                $slave client kill $master_host:$master_port
+                                $slave client kill MASTER:0
                                 $slave debug sleep $delay
                                 $slave exec
+								#puts "in loop2"
                             } else {
-                                $slave client kill $master_host:$master_port
+								#puts "in loop3"
+								#puts [$slave client list]
+								#puts [$master client list]
+								#puts "in loop3a"
+                                $slave client kill MASTER:0
+								#puts "in loop4"
                             }
                         }
                     }
@@ -62,13 +69,13 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
                 stop_bg_complex_data $load_handle1
                 stop_bg_complex_data $load_handle2
                 set retry 10
-                while {$retry && ([$master debug digest] ne [$slave debug digest])}\
-                {
+                while {$retry && ([$master debug digest] ne [$slave debug digest])} {
+					
+					#catch { puts ">>>MASTER [$master dbsize] keys, SLAVE  keys" }
                     after 1000
                     incr retry -1
                 }
                 assert {[$master dbsize] > 0}
-
                 if {[$master debug digest] ne [$slave debug digest]} {
                     set csv1 [csvdump r]
                     set csv2 [csvdump {r -1}]
@@ -103,17 +110,21 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
 }
 
 test_psync {ok psync} 6 1000000 3600 0 {
+	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_ok] > 0}
 }
 
 test_psync {no backlog} 6 100 3600 0 {
+	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_err] > 0}
 }
 
-test_psync {ok after delay} 3 100000000 3600 3 {
+test_psync {ok after delay} 6 100000000 3600 3 {
+	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_ok] > 0}
 }
 
-test_psync {backlog expired} 3 100000000 1 3 {
+test_psync {backlog expired} 6 100000000 1 3 {
+	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_err] > 0}
 }
