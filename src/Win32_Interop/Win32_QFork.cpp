@@ -160,6 +160,15 @@ HANDLE g_hForkedProcess = NULL;
 SIZE_T g_win64maxmemory = 0;
 BOOL g_isForkedProcess = FALSE;
 
+
+extern "C"
+{
+    // forward def from util.h. 
+    long long memtoll(const char *p, int *err);
+}
+
+
+
 BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     try {
         g_isForkedProcess = TRUE;
@@ -456,7 +465,7 @@ StartupStatus QForkStartup(int argc, char** argv) {
     HANDLE QForkConrolMemoryMapHandle = NULL;
     DWORD PPID = 0;
     __int64 maxvirtualmemory = -1;
-    bool bypassSystemReserve = false;
+    int memtollerr;
     if ((argc == 3) && (strcmp(argv[0], qforkFlag) == 0)) {
         // slave command line looks like: --QFork [QForkConrolMemoryMap handle] [parent process id]
         foundSlaveFlag = true;
@@ -482,7 +491,15 @@ StartupStatus QForkStartup(int argc, char** argv) {
                         if (_stricmp(token.c_str(), maxvirtualmemoryflag) == 0) {
                             string maxmemoryString;
                             if (getline(iss, maxmemoryString, ' ')) {
-                                maxvirtualmemory = _atoi64(maxmemoryString.c_str());
+                                maxvirtualmemory = memtoll(maxmemoryString.c_str(), &memtollerr);
+                                if (memtollerr != 0) {
+                                    printf (
+                                        "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
+                                        maxvirtualmemoryflag,
+                                        maxmemoryString.c_str());
+                                    printf( "Failing startup.\n");
+                                    return StartupStatus::ssFAILED;
+                                }
                                 maxMemoryFlagFound = true;
                             }
                         }
@@ -492,17 +509,23 @@ StartupStatus QForkStartup(int argc, char** argv) {
             }
             if( strncmp(argv[n],"--", 2) == 0) {
                 if (_stricmp(argv[n]+2,maxvirtualmemoryflag) == 0) {
-                    maxvirtualmemory = _atoi64(argv[n+1]);
-                    if (maxvirtualmemory == 0) {
+                    if (n + 1 >= argc) {
+                        printf (
+                            "%s specified without a size.\n", 
+                            argv[n] );
+                        printf( "Failing startup.\n");
+                        return StartupStatus::ssFAILED;
+                    }
+                    maxvirtualmemory = memtoll(argv[n+1], &memtollerr);
+                    if (memtollerr != 0) {
                         printf (
                             "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
-                            maxvirtualmemory,
+                            argv[n],
                             argv[n+1] );
                         printf( "Failing startup.\n");
                         return StartupStatus::ssFAILED;
-                    } else {
-                        maxMemoryFlagFound = true;
-                    }
+                    } 
+                    maxMemoryFlagFound = true;
                 }
             }
         }
