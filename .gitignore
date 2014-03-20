@@ -70,3 +70,4 @@ msvs/RedisWAInst/src/RedisServer/obj/
 *.obj
 *.tlog
 *.idb
+*.dat
