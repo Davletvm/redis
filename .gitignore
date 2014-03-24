@@ -1,6 +1,9 @@
 .*.swp
 *.o
 *.log
+obj/
+bin/
+x64/
 dump.rdb
 redis-benchmark
 redis-check-aof
