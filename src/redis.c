@@ -1080,17 +1080,20 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         if (GetForkOperationStatus() == osCOMPLETE) {
             OperationType type = server.rdb_child_pid != -1 ? otRDB : otAOF;
             redisLog(REDIS_WARNING,"fork operation complete");
-            EndForkOperation();
+			int exitCode;			
+			EndForkOperation(&exitCode);
             if (type == otRDB) {
-                backgroundSaveDoneHandler(0, 0);
+                backgroundSaveDoneHandler(exitCode, 0);
             } else {
-                backgroundRewriteDoneHandler(0, 0);
+				backgroundRewriteDoneHandler(exitCode, 0);
             }
             updateDictResizePolicy();
         } else if (GetForkOperationStatus() == osFAILED) {
             OperationType type = server.rdb_child_pid != -1 ? otRDB : otAOF;
             redisLog(REDIS_WARNING,"fork operation failed");
-            EndForkOperation();
+            
+			int exitCode;
+			EndForkOperation(&exitCode);
             if (type == otRDB) {
                 backgroundSaveDoneHandler(0, 1);
             } else {

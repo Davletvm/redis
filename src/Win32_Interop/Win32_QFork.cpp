@@ -149,8 +149,8 @@ struct QForkControl {
     HANDLE operationComplete;
     HANDLE operationFailed;
     HANDLE terminateForkedProcess;
-
-    // global data pointers to be passed to the forked process
+	
+	// global data pointers to be passed to the forked process
     QForkBeginInfo globalData;
 };
 
@@ -159,7 +159,7 @@ HANDLE g_hQForkControlFileMap = NULL;
 HANDLE g_hForkedProcess = NULL;
 SIZE_T g_win64maxmemory = 0;
 BOOL g_isForkedProcess = FALSE;
-
+int g_SlaveExitCode = 0; // For slave process
 
 extern "C"
 {
@@ -215,7 +215,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 
         // signal parent that we are ready
         SetEvent(g_pQForkControl->forkedProcessReady);
-
+		
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
 
@@ -223,14 +223,16 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
 
         // execute requiested operation
+		int exitCode;
         if (g_pQForkControl->typeOfOperation == OperationType::otRDB) {
-            do_rdbSave(g_pQForkControl->globalData.filename);
+			exitCode = do_rdbSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
-            do_aofSave(g_pQForkControl->globalData.filename);
+			exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else {
             throw runtime_error("unexpected operation type");
         }
-
+		g_SlaveExitCode = exitCode;		
+			
         // let parent know weare done
         SetEvent(g_pQForkControl->operationComplete);
 
@@ -679,7 +681,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
                 "Problem creating slave process" );
         }
         (*childPID) = pi.dwProcessId;
-        g_hForkedProcess = pi.hProcess;
+        g_hForkedProcess = pi.hProcess; // must CloseHandle on this
+		CloseHandle(pi.hThread);
 
         // wait for "forked" process to map memory
         if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,10000) != WAIT_OBJECT_0) {
@@ -733,10 +736,11 @@ BOOL AbortForkOperation()
                     system_category(),
                     "EndForkOperation: Killing forked process failed.");
             }
+			CloseHandle(g_hForkedProcess);
             g_hForkedProcess = 0;
         }
 
-        return EndForkOperation();
+        return EndForkOperation(NULL);
     }
     catch(std::system_error syserr) {
         printf("0x%08x - %s\n", syserr.code().value(), syserr.what());
@@ -752,7 +756,7 @@ BOOL AbortForkOperation()
 }
 
 
-BOOL EndForkOperation() {
+BOOL EndForkOperation(int * pExitCode) {
     try {
         SetEvent(g_pQForkControl->terminateForkedProcess);
         if( g_hForkedProcess != 0 )
@@ -765,6 +769,13 @@ BOOL EndForkOperation() {
                         "EndForkOperation: Killing forked process failed.");
                 }
             }
+			
+			if (pExitCode != NULL)
+			{
+				GetExitCodeProcess(g_hForkedProcess, (DWORD*) pExitCode);
+			}
+
+			CloseHandle(g_hForkedProcess);
             g_hForkedProcess = 0;
         }
 
@@ -1103,7 +1114,7 @@ extern "C"
         } else if (status == ssSLAVE_EXIT) {
             // slave is done - clean up and exit
             QForkShutdown();
-            return 1;
+			return g_SlaveExitCode;
         } else if (status == ssFAILED) {
             // master or slave failed initialization
             return 1;
