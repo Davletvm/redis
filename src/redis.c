@@ -1076,41 +1076,29 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
     if (server.rdb_child_pid != -1 || server.aof_child_pid != -1) {
+        pid_t pid = 0;
+		int exitcode;
+		int bysignal;
+
 #ifdef _WIN32
-        if (GetForkOperationStatus() == osCOMPLETE) {
-            OperationType type = server.rdb_child_pid != -1 ? otRDB : otAOF;
-            redisLog(REDIS_WARNING,"fork operation complete");
-			int exitCode;			
-			EndForkOperation(&exitCode);
-            if (type == otRDB) {
-                backgroundSaveDoneHandler(exitCode, 0);
-            } else {
-				backgroundRewriteDoneHandler(exitCode, 0);
-            }
-            updateDictResizePolicy();
-        } else if (GetForkOperationStatus() == osFAILED) {
-            OperationType type = server.rdb_child_pid != -1 ? otRDB : otAOF;
-            redisLog(REDIS_WARNING,"fork operation failed");
-            
-			int exitCode;
-			EndForkOperation(&exitCode);
-            if (type == otRDB) {
-                backgroundSaveDoneHandler(0, 1);
-            } else {
-                backgroundRewriteDoneHandler(0, 1);
-            }
-            updateDictResizePolicy();
+        OperationStatus opStatus = GetForkOperationStatus();
+        if (opStatus == osCOMPLETE || opStatus == osFAILED) {
+	        redisLog(REDIS_WARNING, "fork operation complete");
+
+	        bysignal = (opStatus == osFAILED);
+	        EndForkOperation(&exitcode);
+
+	        pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
         }
 #else
         int statloc;
-        pid_t pid;
-
-        if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
-            int exitcode = WEXITSTATUS(statloc);
-            int bysignal = 0;
-            
-            if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
-
+		if ((pid = wait3(&statloc, WNOHANG, NULL)) != 0) {
+			exitcode = WEXITSTATUS(statloc);
+			bysignal = 0;
+			if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
+		}
+#endif
+		if (pid != 0) {
             if (pid == server.rdb_child_pid) {
                 backgroundSaveDoneHandler(exitcode,bysignal);
             } else if (pid == server.aof_child_pid) {
@@ -1122,7 +1110,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             }
             updateDictResizePolicy();
         }
-#endif
     } else {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now */
