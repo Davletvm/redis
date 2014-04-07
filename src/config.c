@@ -378,7 +378,14 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
             server.requirepass = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"pidfile") && argc == 2) {
+        } else if (!strcasecmp(argv[0], "requirepass2") && argc == 2) {
+            if (strlen(argv[1]) > REDIS_AUTHPASS_MAX_LEN) {
+                err = "Password is longer than REDIS_AUTHPASS_MAX_LEN";
+                goto loaderr;
+            }
+            server.requirepass2 = zstrdup(argv[1]);
+        }
+        else if (!strcasecmp(argv[0], "pidfile") && argc == 2) {
             zfree(server.pidfile);
             server.pidfile = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"dbfilename") && argc == 2) {
@@ -575,7 +582,11 @@ void configSetCommand(redisClient *c) {
         if (sdslen(o->ptr) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
         zfree(server.requirepass);
         server.requirepass = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
-    } else if (!strcasecmp(c->argv[2]->ptr,"masterauth")) {
+    } else if (!strcasecmp(c->argv[2]->ptr, "requirepass2")) {
+        if (sdslen(o->ptr) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
+        zfree(server.requirepass2);
+        server.requirepass2 = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+    } else if (!strcasecmp(c->argv[2]->ptr, "masterauth")) {
         zfree(server.masterauth);
         server.masterauth = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
     } else if (!strcasecmp(c->argv[2]->ptr,"maxmemory")) {
@@ -932,6 +943,7 @@ void configGetCommand(redisClient *c) {
     /* String values */
     config_get_string_field("dbfilename",server.rdb_filename);
     config_get_string_field("requirepass",server.requirepass);
+    config_get_string_field("requirepass2", server.requirepass2);
     config_get_string_field("masterauth",server.masterauth);
     config_get_string_field("unixsocket",server.unixsocket);
     config_get_string_field("logfile",server.logfile);
@@ -1722,6 +1734,7 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"min-slaves-to-write",server.repl_min_slaves_to_write,REDIS_DEFAULT_MIN_SLAVES_TO_WRITE);
     rewriteConfigNumericalOption(state,"min-slaves-max-lag",server.repl_min_slaves_max_lag,REDIS_DEFAULT_MIN_SLAVES_MAX_LAG);
     rewriteConfigStringOption(state,"requirepass",server.requirepass,NULL);
+    rewriteConfigStringOption(state, "requirepass2", server.requirepass2, NULL);
     rewriteConfigNumericalOption(state,"maxclients",server.maxclients,REDIS_MAX_CLIENTS);
     rewriteConfigBytesOption(state,"maxmemory",server.maxmemory,REDIS_DEFAULT_MAXMEMORY);
     rewriteConfigEnumOption(state,"maxmemory-policy",server.maxmemory_policy,
