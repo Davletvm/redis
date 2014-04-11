@@ -51,7 +51,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;USE_DL_PREFIX;LACKS_STDLIB_H;%(PreprocessorDefinitions);NO_QFORKIMPL;WIN32_IOCP</PreprocessorDefinitions>
       <DisableSpecificWarnings>4996</DisableSpecificWarnings>
-      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(SolutionDir)..\deps\lua\src</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -71,7 +71,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;_CONSOLE;%(PreprocessorDefinitions);WIN32_IOCP;USE_DL_PREFIX;LACKS_STDLIB_H;NO_QFORKIMPL</PreprocessorDefinitions>
       <DisableSpecificWarnings>4996</DisableSpecificWarnings>
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalIncludeDirectories>$(SolutionDir)..\deps\lua\src</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -87,9 +87,6 @@
     <ClCompile Include="..\..\src\redis-check-aof.c" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\APIBridge\APIBridge.vcxproj">
-      <Project>{0a28b490-79de-4d7f-bb46-d75cf0d026ed}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\..\src\Win32_Interop\Win32_Interop.vcxproj">
       <Project>{8c07f811-c81c-432c-b334-1ae6faecf951}</Project>
     </ProjectReference>
