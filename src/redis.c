@@ -2358,10 +2358,12 @@ sds genRedisInfoString(char *section) {
     if (allsections || defsections || !strcasecmp(section,"memory")) {
         char hmem[64];
         char peak_hmem[64];
+		char maxvirt_hmem[64];
 
         bytesToHuman(hmem,zmalloc_used_memory());
         bytesToHuman(peak_hmem,server.stat_peak_memory);
-        if (sections++) info = sdscat(info,"\r\n");
+		bytesToHuman(maxvirt_hmem, g_win64maxvirtualmemory);
+		if (sections++) info = sdscat(info, "\r\n");
 #ifdef _WIN32
         info = sdscatprintf(info,
             "# Memory\r\n"
@@ -2371,7 +2373,9 @@ sds genRedisInfoString(char *section) {
             "used_memory_peak:%llu\r\n"
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
-            "mem_fragmentation_ratio:%.2f\r\n"
+			"max_virtual_memory:%lld\r\n"
+			"max_virtual_memory_human:%s\r\n"
+			"mem_fragmentation_ratio:%.2f\r\n"
             "mem_allocator:%s\r\n",
             (long long)zmalloc_used_memory(),
             hmem,
@@ -2379,6 +2383,8 @@ sds genRedisInfoString(char *section) {
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
+			(long long)g_win64maxvirtualmemory,
+			maxvirt_hmem,
             zmalloc_get_fragmentation_ratio(),
             ZMALLOC_LIB
             );

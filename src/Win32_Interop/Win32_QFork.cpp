@@ -158,6 +158,7 @@ QForkControl* g_pQForkControl = NULL;
 HANDLE g_hQForkControlFileMap = NULL;
 HANDLE g_hForkedProcess = NULL;
 SIZE_T g_win64maxmemory = 0;
+SIZE_T g_win64maxvirtualmemory = 0;
 BOOL g_isForkedProcess = FALSE;
 int g_SlaveExitCode = 0; // For slave process
 
@@ -322,6 +323,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
             g_win64maxmemory = maxPhysicalMapping * 7i64 / 10i64;
         }
         g_pQForkControl->availableBlocksInHeap = (int)(maxPhysicalMapping / cAllocationGranularity);
+		g_win64maxvirtualmemory = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
         if (g_pQForkControl->availableBlocksInHeap <= 0) {
             throw std::runtime_error(
                 "QForkMasterInit: Not enough physical memory to initialize Redis.");
