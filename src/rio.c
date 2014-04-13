@@ -51,13 +51,10 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
-#include "rio.h"
 #include "util.h"
-#ifdef _WIN32
-//#include "win32fixes.h"
-#endif
 #include "config.h"
 #include "redis.h"
+#include "rio.h"
 #include "crc64.h"
 #include "config.h"
 #include "redis.h"

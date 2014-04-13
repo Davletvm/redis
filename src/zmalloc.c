@@ -59,6 +59,7 @@ void zlibc_free(void *ptr) {
 #endif
 
 /* Explicitly override malloc/free etc when using tcmalloc. */
+#define total_alloc_memory zmalloc_used_memory
 #if defined(USE_TCMALLOC)
 #define malloc(size) tc_malloc(size)
 #define calloc(count,size) tc_calloc(count,size)
@@ -74,6 +75,8 @@ void zlibc_free(void *ptr) {
 #define calloc(count,size) dlcalloc(count,size)
 #define realloc(ptr,size) dlrealloc(ptr,size)
 #define free(ptr) dlfree(ptr)
+#undef total_alloc_memory
+#define total_alloc_memory dlmalloc_footprint
 #endif
 
 #ifdef HAVE_ATOMIC
@@ -348,7 +351,7 @@ size_t zmalloc_get_rss(void) {
      *
      * Fragmentation will appear to be always 1 (no fragmentation)
      * of course... */
-    return zmalloc_used_memory();
+    return total_alloc_memory();
 }
 #endif
 

@@ -214,6 +214,20 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             g_pQForkControl->heapStart,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
 
+        if (dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity) == 0) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
+        }
+        if (dlmallopt(M_GRANULARITY, cAllocationGranularity) == 0) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: DLMalloc failed initializing allocation granularity.");
+        }
+
+
         // signal parent that we are ready
         SetEvent(g_pQForkControl->forkedProcessReady);
 		
@@ -687,7 +701,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
 		CloseHandle(pi.hThread);
 
         // wait for "forked" process to map memory
-        if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,10000) != WAIT_OBJECT_0) {
+        if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,100000) != WAIT_OBJECT_0) {
             throw system_error(
                 GetLastError(),
                 system_category(),
@@ -984,7 +998,8 @@ int totalFreeCalls = 0;
 
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
     if (g_isForkedProcess) {
-        return VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT| (allocateHigh ? MEM_TOP_DOWN: 0), PAGE_READWRITE);
+        LPVOID rv =  VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT| (allocateHigh ? MEM_TOP_DOWN: 0), PAGE_READWRITE);
+        return rv;
     }
     totalAllocCalls++;
     LPVOID retPtr = (LPVOID)NULL;

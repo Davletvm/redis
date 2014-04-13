@@ -21,6 +21,9 @@
 #define NOGDI
 #define __USE_W32_SOCKETS
 
+typedef long long _off_t_;
+
+
 #include "..\fmacros.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -32,6 +35,9 @@
 #include <limits.h>  /* INT_MAX */
 #include <process.h>
 #include <sys/types.h>
+
+#define off_t _off_t_
+
 
 #include "Win32_FDAPI.h"    
 #include "Win32_QFork.h"

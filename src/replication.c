@@ -881,7 +881,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             redisLog(REDIS_WARNING,"Bad protocol from MASTER, the first byte is not '$' (we received '%s'), are you sure the host and port are right?", buf);
             goto error;
         }
-        server.repl_transfer_size = strtol(buf+1,NULL,10);
+        server.repl_transfer_size = strtoll(buf+1,NULL,10);
         redisLog(REDIS_NOTICE,
             "MASTER <-> SLAVE sync: receiving %lld bytes from master",
             (long long) server.repl_transfer_size);
