@@ -754,21 +754,7 @@ werr:
     return REDIS_ERR;
 }
 
-#ifdef _WIN32
-int rdbSaveBackground(char *filename) {
-    long long start;
-    start = ustime();
-    if (BeginForkOperation(otRDB, filename, &server, sizeof(server),&server.rdb_child_pid, dictGetHashFunctionSeed())) {
-        server.stat_fork_time = ustime()-start;
-        updateDictResizePolicy();
-        return REDIS_OK;
-    } else  {
-        redisLog(REDIS_WARNING,"Can't save in background: fork: %s", strerror(errno));
-        return REDIS_ERR;
-    }
-}
 
-#else
 
 int rdbSaveBackground(char *filename) {
     pid_t childpid;
@@ -780,6 +766,7 @@ int rdbSaveBackground(char *filename) {
     server.lastbgsave_try = time(NULL);
 
     start = ustime();
+#ifndef _WIN32
     if ((childpid = fork()) == 0) {
         int retval;
 
@@ -798,6 +785,12 @@ int rdbSaveBackground(char *filename) {
         }
         exitFromChild((retval == REDIS_OK) ? 0 : 1);
     } else {
+#else
+    {
+        if (!BeginForkOperation(otRDB, filename, &server, sizeof(server), &childpid, dictGetHashFunctionSeed())) {
+            childpid = -1;
+        }    
+#endif
         /* Parent */
         server.stat_fork_time = ustime()-start;
         if (childpid == -1) {
@@ -814,7 +807,7 @@ int rdbSaveBackground(char *filename) {
     }
     return REDIS_OK; /* unreached */
 }
-#endif
+
 
 void rdbRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
