@@ -6,11 +6,11 @@
  * The original copyright notice follows. */
 
 
-/*	$NetBSD: qsort.c,v 1.19 2009/01/30 23:38:44 lukem Exp $	*/
+/*  $NetBSD: qsort.c,v 1.19 2009/01/30 23:38:44 lukem Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
- *	The Regents of the University of California.  All rights reserved.
+ *  The Regents of the University of California.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,18 +45,18 @@
 #define inline __inline
 #endif
 
-static inline char	*med3 (char *, char *, char *,
+static inline char  *med3 (char *, char *, char *,
     int (*)(const void *, const void *));
-static inline void	 swapfunc (char *, char *, size_t, int);
+static inline void   swapfunc (char *, char *, size_t, int);
 
 #ifndef _WIN32
-#define min(a, b)	(a) < (b) ? a : b
+#define min(a, b)   (a) < (b) ? a : b
 #endif
 
 /*
  * Qsort routine from Bentley & McIlroy's "Engineering a Sort Function".
  */
-#define swapcode(TYPE, parmi, parmj, n) { 		\
+#define swapcode(TYPE, parmi, parmj, n) {   	\
 	size_t i = (n) / sizeof (TYPE); 		\
 	TYPE *pi = (TYPE *)(void *)(parmi); 		\
 	TYPE *pj = (TYPE *)(void *)(parmj); 		\

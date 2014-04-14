@@ -101,7 +101,7 @@ int InitWinsock() {
 
 auto f_WSACleanup = dllfunctor_stdcall<int>("ws2_32.dll", "WSACleanup");
 int  CleanupWinsock() {
-	return f_WSACleanup();
+    return f_WSACleanup();
 }
 
 BOOL SetFDInformation(int FD, DWORD mask, DWORD flags){
@@ -938,7 +938,7 @@ private:
         CleanupWinsock();
     }
 
-    Win32_FDSockMap(Win32_FDSockMap const&);	  // Don't implement to guarantee singleton semantics
+    Win32_FDSockMap(Win32_FDSockMap const&);      // Don't implement to guarantee singleton semantics
     void operator=(Win32_FDSockMap const&); // Don't implement to guarantee singleton semantics
 };
 

@@ -133,15 +133,15 @@ int getrusage(int who, struct rusage * rusage);
 
 /* Signals */
 #define SIGNULL  0 /* Null	Check access to pid*/
-#define SIGHUP	 1 /* Hangup	Terminate; can be trapped*/
-#define SIGINT	 2 /* Interrupt	Terminate; can be trapped */
-#define SIGQUIT	 3 /* Quit	Terminate with core dump; can be trapped */
+#define SIGHUP   1 /* Hangup	Terminate; can be trapped*/
+#define SIGINT   2 /* Interrupt	Terminate; can be trapped */
+#define SIGQUIT  3 /* Quit	Terminate with core dump; can be trapped */
 #define SIGTRAP  5
 #define SIGBUS   7
-#define SIGKILL	 9 /* Kill	Forced termination; cannot be trapped */
+#define SIGKILL  9 /* Kill	Forced termination; cannot be trapped */
 #define SIGPIPE 13
 #define SIGALRM 14
-#define SIGTERM	15 /* Terminate	Terminate; can be trapped  */
+#define SIGTERM 15 /* Terminate	Terminate; can be trapped  */
 #define SIGSTOP 17
 #define SIGTSTP 18
 #define SIGCONT 19
@@ -149,9 +149,9 @@ int getrusage(int who, struct rusage * rusage);
 #define SIGTTIN 21
 #define SIGTTOU 22
 #define SIGABRT 22
-/* #define SIGSTOP	24 /*Pause the process; cannot be trapped*/
-/* #define SIGTSTP	25 /*Terminal stop	Pause the process; can be trapped*/
-/* #define SIGCONT	26 */
+/* #define SIGSTOP  24 /*Pause the process; cannot be trapped*/
+/* #define SIGTSTP  25 /*Terminal stop	Pause the process; can be trapped*/
+/* #define SIGCONT  26 */
 #define SIGWINCH 28
 #define SIGUSR1  30
 #define SIGUSR2  31
@@ -181,7 +181,7 @@ int getrusage(int who, struct rusage * rusage);
 #define SIG_UNBLOCK (2)
 #endif /*SIG_SETMASK*/
 
-typedef	void (*__p_sig_fn_t)(int);
+typedef void (*__p_sig_fn_t)(int);
 typedef DWORD pid_t;
 
 #ifndef _SIGSET_T_

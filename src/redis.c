@@ -1077,28 +1077,28 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Check if a background saving or AOF rewrite in progress terminated. */
     if (server.rdb_child_pid != -1 || server.aof_child_pid != -1) {
         pid_t pid = 0;
-		int exitcode;
-		int bysignal;
+        int exitcode;
+        int bysignal;
 
 #ifdef _WIN32
         OperationStatus opStatus = GetForkOperationStatus();
         if (opStatus == osCOMPLETE || opStatus == osFAILED) {
-	        redisLog(REDIS_WARNING, "fork operation complete");
+            redisLog(REDIS_WARNING, "fork operation complete");
 
-	        bysignal = (opStatus == osFAILED);
-	        EndForkOperation(&exitcode);
+            bysignal = (opStatus == osFAILED);
+            EndForkOperation(&exitcode);
 
-	        pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
+            pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
         }
 #else
         int statloc;
-		if ((pid = wait3(&statloc, WNOHANG, NULL)) != 0) {
-			exitcode = WEXITSTATUS(statloc);
-			bysignal = 0;
-			if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
-		}
+        if ((pid = wait3(&statloc, WNOHANG, NULL)) != 0) {
+            exitcode = WEXITSTATUS(statloc);
+            bysignal = 0;
+            if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
+        }
 #endif
-		if (pid != 0) {
+        if (pid != 0) {
             if (pid == server.rdb_child_pid) {
                 backgroundSaveDoneHandler(exitcode,bysignal);
             } else if (pid == server.aof_child_pid) {
@@ -2358,12 +2358,12 @@ sds genRedisInfoString(char *section) {
     if (allsections || defsections || !strcasecmp(section,"memory")) {
         char hmem[64];
         char peak_hmem[64];
-		char maxvirt_hmem[64];
+        char maxvirt_hmem[64];
 
         bytesToHuman(hmem,zmalloc_used_memory());
         bytesToHuman(peak_hmem,server.stat_peak_memory);
-		bytesToHuman(maxvirt_hmem, g_win64maxvirtualmemory);
-		if (sections++) info = sdscat(info, "\r\n");
+        bytesToHuman(maxvirt_hmem, g_win64maxvirtualmemory);
+        if (sections++) info = sdscat(info, "\r\n");
 #ifdef _WIN32
         info = sdscatprintf(info,
             "# Memory\r\n"
@@ -2373,9 +2373,9 @@ sds genRedisInfoString(char *section) {
             "used_memory_peak:%llu\r\n"
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
-			"max_virtual_memory:%lld\r\n"
-			"max_virtual_memory_human:%s\r\n"
-			"mem_fragmentation_ratio:%.2f\r\n"
+            "max_virtual_memory:%lld\r\n"
+            "max_virtual_memory_human:%s\r\n"
+            "mem_fragmentation_ratio:%.2f\r\n"
             "mem_allocator:%s\r\n",
             (long long)zmalloc_used_memory(),
             hmem,
@@ -2383,8 +2383,8 @@ sds genRedisInfoString(char *section) {
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
-			(long long)g_win64maxvirtualmemory,
-			maxvirt_hmem,
+            (long long)g_win64maxvirtualmemory,
+            maxvirt_hmem,
             zmalloc_get_fragmentation_ratio(),
             ZMALLOC_LIB
             );

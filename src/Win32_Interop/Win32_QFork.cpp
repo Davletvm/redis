@@ -247,7 +247,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         } else {
             throw runtime_error("unexpected operation type");
         }
-        g_SlaveExitCode = exitCode;		
+        g_SlaveExitCode = exitCode;
 
         // let parent know weare done
         SetEvent(g_pQForkControl->operationComplete);
@@ -755,7 +755,7 @@ BOOL AbortForkOperation()
                     system_category(),
                     "EndForkOperation: Killing forked process failed.");
             }
-			CloseHandle(g_hForkedProcess);
+            CloseHandle(g_hForkedProcess);
             g_hForkedProcess = 0;
         }
 

@@ -295,7 +295,7 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"masterauth") && argc == 2) {
-        	server.masterauth = zstrdup(argv[1]);
+            server.masterauth = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"slave-serve-stale-data") && argc == 2) {
             if ((server.repl_serve_stale_data = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
@@ -499,11 +499,11 @@ void loadServerConfigFromString(char *config) {
                 if (err) goto loaderr;
             }
 #ifdef _WIN32
-		} else if (!strcasecmp(argv[0],"bypass-system-reserve")) {
+        } else if (!strcasecmp(argv[0],"bypass-system-reserve")) {
         } else if (!strcasecmp(argv[0],"maxvirtualmemory")) {
-			// handled in qfork init. bypass here,
+        // handled in qfork init. bypass here,
 #endif
-		} else {
+        } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
         sdsfreesplitres(argv,argc);
