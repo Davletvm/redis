@@ -1349,11 +1349,8 @@ void initServerConfig() {
     server.notify_keyspace_events = 0;
     server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
-#ifdef _WIN32
     server.maxmemory = g_win64maxmemory;
-#else
-    server.maxmemory = REDIS_DEFAULT_MAXMEMORY;
-#endif
+    server.maxvirtualmemorytarget = (unsigned long long)(g_win64maxvirtualmemory * 0.95);
     server.maxmemory_policy = REDIS_DEFAULT_MAXMEMORY_POLICY;
     server.maxmemory_samples = REDIS_DEFAULT_MAXMEMORY_SAMPLES;
     server.hash_max_ziplist_entries = REDIS_HASH_MAX_ZIPLIST_ENTRIES;
@@ -2359,10 +2356,12 @@ sds genRedisInfoString(char *section) {
         char hmem[64];
         char peak_hmem[64];
         char maxvirt_hmem[64];
+        char rss_hmem[64];
 
         bytesToHuman(hmem,zmalloc_used_memory());
         bytesToHuman(peak_hmem,server.stat_peak_memory);
         bytesToHuman(maxvirt_hmem, g_win64maxvirtualmemory);
+        bytesToHuman(rss_hmem, zmalloc_get_rss());
         if (sections++) info = sdscat(info, "\r\n");
 #ifdef _WIN32
         info = sdscatprintf(info,
@@ -2370,6 +2369,7 @@ sds genRedisInfoString(char *section) {
             "used_memory:%llu\r\n"
             "used_memory_human:%s\r\n"
             "used_memory_rss:%llu\r\n"
+            "used_memory_rss_human:%s\r\n"
             "used_memory_peak:%llu\r\n"
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
@@ -2380,6 +2380,7 @@ sds genRedisInfoString(char *section) {
             (long long)zmalloc_used_memory(),
             hmem,
             (long long)zmalloc_get_rss(),
+            rss_hmem,
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
@@ -2801,7 +2802,7 @@ void monitorCommand(redisClient *c) {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    size_t mem_used, mem_tofree, mem_freed;
+    size_t mem_used, mem_tofreeObject, mem_tofreeVirtual, mem_freed;
     int slaves = listLength(server.slaves);
 
     /* Remove the size of slaves output buffers and AOF buffer from the
@@ -2827,15 +2828,22 @@ int freeMemoryIfNeeded(void) {
     }
 
     /* Check if we are over the memory limit. */
-    if (mem_used <= server.maxmemory) return REDIS_OK;
+    BOOL objectMemoryExceeded = mem_used > server.maxmemory;
+    BOOL virtualMemoryAlmostExceeded = server.maxvirtualmemorytarget ? dlmalloc_footprint() >= server.maxvirtualmemorytarget : 0;
+    
+    if (!objectMemoryExceeded && !virtualMemoryAlmostExceeded) return REDIS_OK;
 
     if (server.maxmemory_policy == REDIS_MAXMEMORY_NO_EVICTION)
         return REDIS_ERR; /* We need to free memory, but policy forbids. */
 
-    /* Compute how much memory we need to free. */
-    mem_tofree = mem_used - (size_t)server.maxmemory;
+    /* Compute how much memory we need to free. */    
+    if (objectMemoryExceeded) {
+        mem_tofreeObject = mem_used - (size_t)server.maxmemory;
+    } else {
+        mem_tofreeObject = virtualMemoryAlmostExceeded ? 1 : 0;
+    }
     mem_freed = 0;
-    while (mem_freed < mem_tofree) {
+    while (mem_freed < mem_tofreeObject) {
         int j, k, keys_freed = 0;
 
         for (j = 0; j < server.dbnum; j++) {
@@ -2939,6 +2947,12 @@ int freeMemoryIfNeeded(void) {
             }
         }
         if (!keys_freed) return REDIS_ERR; /* nothing to free... */
+    }
+    if (virtualMemoryAlmostExceeded)
+    {
+        // Here we are effectively hoping that our fragmentation ratio will remain the same
+        server.maxmemory = mem_used - mem_freed;
+        server.maxvirtualmemorytarget = 0;
     }
     return REDIS_OK;
 }
