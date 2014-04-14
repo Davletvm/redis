@@ -149,8 +149,8 @@ struct QForkControl {
     HANDLE operationComplete;
     HANDLE operationFailed;
     HANDLE terminateForkedProcess;
-	
-	// global data pointers to be passed to the forked process
+    
+    // global data pointers to be passed to the forked process
     QForkBeginInfo globalData;
 };
 
@@ -167,6 +167,7 @@ extern "C"
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
 }
+
 
 
 
@@ -230,7 +231,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 
         // signal parent that we are ready
         SetEvent(g_pQForkControl->forkedProcessReady);
-		
+        
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
 
@@ -238,16 +239,16 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
 
         // execute requiested operation
-		int exitCode;
+        int exitCode;
         if (g_pQForkControl->typeOfOperation == OperationType::otRDB) {
-			exitCode = do_rdbSave(g_pQForkControl->globalData.filename);
+            exitCode = do_rdbSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
-			exitCode = do_aofSave(g_pQForkControl->globalData.filename);
+            exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else {
             throw runtime_error("unexpected operation type");
         }
-		g_SlaveExitCode = exitCode;		
-			
+        g_SlaveExitCode = exitCode;		
+
         // let parent know weare done
         SetEvent(g_pQForkControl->operationComplete);
 
@@ -303,6 +304,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 "QForkMasterInit: MapViewOfFile failed");
         }
 
+    
         // This must be called only once per process! Calling it more times than that will not recreate existing 
         // section, and dlmalloc will ultimately fail with an access violation. Once is good.
         if (dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity) == 0) {
@@ -337,7 +339,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
             g_win64maxmemory = maxPhysicalMapping * 7i64 / 10i64;
         }
         g_pQForkControl->availableBlocksInHeap = (int)(maxPhysicalMapping / cAllocationGranularity);
-		g_win64maxvirtualmemory = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
+        g_win64maxvirtualmemory = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
         if (g_pQForkControl->availableBlocksInHeap <= 0) {
             throw std::runtime_error(
                 "QForkMasterInit: Not enough physical memory to initialize Redis.");
@@ -350,6 +352,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
             L"%s_%d.dat", 
             cMapFileBaseName, 
             GetCurrentProcessId());
+
 
         g_pQForkControl->heapMemoryMapFile = 
             CreateFileW( 
@@ -698,7 +701,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         }
         (*childPID) = pi.dwProcessId;
         g_hForkedProcess = pi.hProcess; // must CloseHandle on this
-		CloseHandle(pi.hThread);
+        CloseHandle(pi.hThread);
 
         // wait for "forked" process to map memory
         if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,100000) != WAIT_OBJECT_0) {
@@ -785,13 +788,12 @@ BOOL EndForkOperation(int * pExitCode) {
                         "EndForkOperation: Killing forked process failed.");
                 }
             }
-			
-			if (pExitCode != NULL)
-			{
-				GetExitCodeProcess(g_hForkedProcess, (DWORD*) pExitCode);
-			}
+            if (pExitCode != NULL)
+            {
+                GetExitCodeProcess(g_hForkedProcess, (DWORD*) pExitCode);
+            }
 
-			CloseHandle(g_hForkedProcess);
+            CloseHandle(g_hForkedProcess);
             g_hForkedProcess = 0;
         }
 
@@ -1131,7 +1133,7 @@ extern "C"
         } else if (status == ssSLAVE_EXIT) {
             // slave is done - clean up and exit
             QForkShutdown();
-			return g_SlaveExitCode;
+            return g_SlaveExitCode;
         } else if (status == ssFAILED) {
             // master or slave failed initialization
             return 1;
