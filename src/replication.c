@@ -863,9 +863,6 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             goto error;
         }
 
-#ifdef WIN32_IOCP
-        aeWinReceiveDone(fd);
-#endif
         if (buf[0] == '-') {
             redisLog(REDIS_WARNING,
                 "MASTER aborted replication with an error: %s",
@@ -876,6 +873,9 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
              * the connection live. So we refresh our last interaction
              * timestamp. */
             server.repl_transfer_lastio = server.unixtime;
+#ifdef WIN32_IOCP
+            aeWinReceiveDone(fd);
+#endif
             return;
         } else if (buf[0] != '$') {
             redisLog(REDIS_WARNING,"Bad protocol from MASTER, the first byte is not '$' (we received '%s'), are you sure the host and port are right?", buf);
@@ -885,6 +885,9 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         redisLog(REDIS_NOTICE,
             "MASTER <-> SLAVE sync: receiving %lld bytes from master",
             (long long) server.repl_transfer_size);
+#ifdef WIN32_IOCP
+        aeWinReceiveDone(fd);
+#endif
         return;
     }
 
