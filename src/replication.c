@@ -745,7 +745,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
                that occurs when the forked process tries to copy the file it produces over the the RDB file being 
                held open by the slave feeding code. */
             sprintf(slave->replFileCopy,"%d_%s",  slave->fd, server.rdb_filename);
-            if(CopyFileA( server.rdb_filename, slave->replFileCopy, FALSE) == FALSE) {
+            if (CreateHardLinkA(slave->replFileCopy, server.rdb_filename, NULL) == FALSE) {
                 freeClient(slave);
                 redisLog(REDIS_WARNING,"Failed to duplicate RDB file. Failing SYNC: %d", GetLastError());
                 continue;
