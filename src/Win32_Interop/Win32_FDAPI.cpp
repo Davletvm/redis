@@ -820,7 +820,11 @@ int redis_isatty_impl(int fd) {
         int posixFD = RFDMap::getInstance().lookupPosixFD(fd);
         if( posixFD != -1) {
             return crt_isatty(posixFD);
-        } else {
+        }
+        else if (fd >= 0 && fd <= 2) {
+            return crt_isatty(fd);
+        }
+        else {
             errno = EBADF;
             return 0;
         }
