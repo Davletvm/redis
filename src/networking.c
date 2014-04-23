@@ -786,8 +786,11 @@ void freeClientsInAsyncFreeQueue(void) {
 
 #ifdef WIN32_IOCP
 void sendReplyBufferDone(aeEventLoop *el, int fd, void *privdata, int written) {
-    aeWinSendReq *req = (aeWinSendReq *)privdata;
-    redisClient *c = (redisClient *)req->client;
+    aeWinSendReq *req;
+    redisClient *c;
+    if (written == -1) return;
+    req = (aeWinSendReq *)privdata;
+    c = (redisClient *)req->client;
     int offset = (int)(req->buf - (char *)req->data + written);
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
@@ -814,7 +817,7 @@ void sendReplyListDone(aeEventLoop *el, int fd, void *privdata, int written) {
     REDIS_NOTUSED(fd);
 
     decrRefCount(o);
-
+    if (written == -1) return;
     if (c->bufpos == 0 && listLength(c->reply) == 0) {
         c->sentlen = 0;
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
@@ -865,7 +868,6 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                 ln = listNext(&li);
                 continue;
             }
-
             /* object ref placed in request, release in sendReplyListDone */
             incrRefCount(o);
             result = aeWinSocketSend(fd, ((char*)o->ptr), objlen, 

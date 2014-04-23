@@ -587,6 +587,7 @@ void sendBulkToSlaveDataDone(aeEventLoop *el, int fd, void *privdata, int nwritt
     REDIS_NOTUSED(fd);
 
     zfree(req->data);
+    if (nwritten == -1) return;
     slave->repldboff += nwritten;
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);

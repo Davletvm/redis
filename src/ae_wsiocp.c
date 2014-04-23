@@ -413,6 +413,8 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                             // check pending writes
                             asendreq *areq = (asendreq *)entry->lpOverlapped;
                             if (removeMatchFromList(&sockstate->wreqlist, areq)) {
+                                if (areq->proc != NULL) 
+                                    areq->proc(areq->eventLoop, rfd, &areq->req, -1);
                                 sockstate->wreqs--;
                                 zfree(areq);
                             }

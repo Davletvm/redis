@@ -276,8 +276,11 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 #ifdef _WIN32
 static void writeHandlerDone(aeEventLoop *el, int fd, void *privdata, int nwritten) {
-    aeWinSendReq *req = (aeWinSendReq *)privdata;
-    client c = (client)req->client;
+    aeWinSendReq *req;
+    client c;
+    if (nwritten == -1) return;
+    req = (aeWinSendReq *)privdata;
+    c = (client)req->client;
 
     c->written += nwritten;
     if (sdslen(c->obuf) == c->written) {
