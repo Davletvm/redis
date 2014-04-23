@@ -435,7 +435,9 @@ void loadServerConfigFromString(char *config) {
             }
         } else if (!strcasecmp(argv[0],"lua-time-limit") && argc == 2) {
             server.lua_time_limit = strtoll(argv[1],NULL,10);
-        } else if (!strcasecmp(argv[0],"slowlog-log-slower-than") &&
+        } else if (!strcasecmp(argv[0], "lua-event-limit") && argc == 2) {
+            server.lua_event_limit = strtoll(argv[1], NULL, 10);
+        } else if (!strcasecmp(argv[0], "slowlog-log-slower-than") &&
                    argc == 2)
         {
             server.slowlog_log_slower_than = strtoll(argv[1],NULL,10);
@@ -483,11 +485,19 @@ void loadServerConfigFromString(char *config) {
             int flags = keyspaceEventsStringToFlags(argv[1]);
 
             if (flags == -1) {
-                err = "Invalid event class character. Use 'g$lshzxeA'.";
+                err = "Invalid event class character. Use 'g$lshzxeAKE'.";
                 goto loaderr;
             }
             server.notify_keyspace_events = flags;
-        } else if (!strcasecmp(argv[0],"sentinel")) {
+        } else if (!strcasecmp(argv[0], "notify-keyspace-scripts") && argc == 2) {
+            int flags = keyspaceEventsStringToFlags(argv[1]);
+
+            if (flags == -1 || (flags & (REDIS_NOTIFY_KEYSPACE | REDIS_NOTIFY_KEYEVENT))) {
+                err = "Invalid event class character. Use 'g$lshzxeA'.";
+                goto loaderr;
+            }
+            server.notify_keyspace_scripts = flags;
+        } else if (!strcasecmp(argv[0], "sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
              * mode ASAP. */
             if (argc != 1) {
@@ -770,7 +780,10 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr,"lua-time-limit")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
         server.lua_time_limit = ll;
-    } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-log-slower-than")) {
+    } else if (!strcasecmp(c->argv[2]->ptr, "lua-event-limit")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.lua_event_limit = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "slowlog-log-slower-than")) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR) goto badfmt;
         server.slowlog_log_slower_than = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"slowlog-max-len")) {
@@ -870,7 +883,12 @@ void configSetCommand(redisClient *c) {
 
         if (flags == -1) goto badfmt;
         server.notify_keyspace_events = flags;
-    } else if (!strcasecmp(c->argv[2]->ptr,"repl-disable-tcp-nodelay")) {
+    } else if (!strcasecmp(c->argv[2]->ptr, "notify-keyspace-scripts")) {
+        int flags = keyspaceEventsStringToFlags(o->ptr);
+
+        if (flags == -1 || (flags & (REDIS_NOTIFY_KEYSPACE | REDIS_NOTIFY_KEYEVENT))) goto badfmt;
+        server.notify_keyspace_scripts = flags;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
 
         if (yn == -1) goto badfmt;
@@ -973,6 +991,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("zset-max-ziplist-value",
             server.zset_max_ziplist_value);
     config_get_numerical_field("lua-time-limit",server.lua_time_limit);
+    config_get_numerical_field("lua-event-limit", server.lua_event_limit);
     config_get_numerical_field("slowlog-log-slower-than",
             server.slowlog_log_slower_than);
     config_get_numerical_field("slowlog-max-len",
@@ -1130,7 +1149,16 @@ void configGetCommand(redisClient *c) {
         decrRefCount(flagsobj);
         matches++;
     }
-    if (stringmatch(pattern,"bind",0)) {
+    if (stringmatch(pattern, "notify-keyspace-scripts", 0)) {
+        robj *flagsobj = createObject(REDIS_STRING,
+            keyspaceEventsFlagsToString(server.notify_keyspace_scripts));
+
+        addReplyBulkCString(c, "notify-keyspace-scripts");
+        addReplyBulk(c, flagsobj);
+        decrRefCount(flagsobj);
+        matches++;
+    }
+    if (stringmatch(pattern, "bind", 0)) {
         sds aux = sdsjoin(server.bindaddr,server.bindaddr_count," ");
 
         addReplyBulkCString(c,"bind");
@@ -1493,17 +1521,16 @@ void rewriteConfigSlaveofOption(struct rewriteConfigState *state) {
 }
 
 /* Rewrite the notify-keyspace-events option. */
-void rewriteConfigNotifykeyspaceeventsOption(struct rewriteConfigState *state) {
-    int force = server.notify_keyspace_events != 0;
-    char *option = "notify-keyspace-events";
+void rewriteConfigNotifykeyspaceeventsOption(struct rewriteConfigState *state, char * option, int intflags) {
+    int force = intflags != 0;
     sds line, flags;
 
-    flags = keyspaceEventsFlagsToString(server.notify_keyspace_events);
+    flags = keyspaceEventsFlagsToString(intflags);
     line = sdsnew(option);
     line = sdscatlen(line, " ", 1);
     line = sdscatrepr(line, flags, sdslen(flags));
     sdsfree(flags);
-    rewriteConfigRewriteLine(state,option,line,force);
+    rewriteConfigRewriteLine(state, option, line, force);
 }
 
 /* Rewrite the client-output-buffer-limit option. */
@@ -1757,10 +1784,12 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"auto-aof-rewrite-percentage",server.aof_rewrite_perc,REDIS_AOF_REWRITE_PERC);
     rewriteConfigBytesOption(state,"auto-aof-rewrite-min-size",server.aof_rewrite_min_size,REDIS_AOF_REWRITE_MIN_SIZE);
     rewriteConfigNumericalOption(state,"lua-time-limit",server.lua_time_limit,REDIS_LUA_TIME_LIMIT);
-    rewriteConfigNumericalOption(state,"slowlog-log-slower-than",server.slowlog_log_slower_than,REDIS_SLOWLOG_LOG_SLOWER_THAN);
+    rewriteConfigNumericalOption(state, "lua-event-limit", server.lua_event_limit, REDIS_LUA_EVENT_LIMIT);
+    rewriteConfigNumericalOption(state, "slowlog-log-slower-than", server.slowlog_log_slower_than, REDIS_SLOWLOG_LOG_SLOWER_THAN);
     rewriteConfigNumericalOption(state,"slowlog-max-len",server.slowlog_max_len,REDIS_SLOWLOG_MAX_LEN);
-    rewriteConfigNotifykeyspaceeventsOption(state);
-    rewriteConfigNumericalOption(state,"hash-max-ziplist-entries",server.hash_max_ziplist_entries,REDIS_HASH_MAX_ZIPLIST_ENTRIES);
+    rewriteConfigNotifykeyspaceeventsOption(state, "notify-keyspace-events", server.notify_keyspace_events);
+    rewriteConfigNotifykeyspaceeventsOption(state, "notify-keyspace-scripts", server.notify_keyspace_scripts);
+    rewriteConfigNumericalOption(state, "hash-max-ziplist-entries", server.hash_max_ziplist_entries, REDIS_HASH_MAX_ZIPLIST_ENTRIES);
     rewriteConfigNumericalOption(state,"hash-max-ziplist-value",server.hash_max_ziplist_value,REDIS_HASH_MAX_ZIPLIST_VALUE);
     rewriteConfigNumericalOption(state,"list-max-ziplist-entries",server.list_max_ziplist_entries,REDIS_LIST_MAX_ZIPLIST_ENTRIES);
     rewriteConfigNumericalOption(state,"list-max-ziplist-value",server.list_max_ziplist_value,REDIS_LIST_MAX_ZIPLIST_VALUE);

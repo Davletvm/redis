@@ -745,6 +745,13 @@ long long getExpire(redisDb *db, robj *key) {
 void propagateExpire(redisDb *db, robj *key) {
     robj *argv[2];
 
+    if (listLength(server.pubsub_script_queue) && !server.propagated_multi_for_queued_script) {
+        /* Need to make sure that the scripts will run atomically to the expire.
+         * This is our last chance to ensure this, as we are about to push the 
+         * delete to slaves/AOF.  So we need to emit multi now. */
+        propagateMultiOrExec(db->id, 1, REDIS_PROPAGATE_AOF | REDIS_PROPAGATE_REPL);
+    }
+
     argv[0] = shared.del;
     argv[1] = key;
     incrRefCount(argv[0]);
@@ -760,11 +767,19 @@ void propagateExpire(redisDb *db, robj *key) {
 
 int expireIfNeeded(redisDb *db, robj *key) {
     long long when = getExpire(db,key);
+    long long now;
 
     if (when < 0) return 0; /* No expire for this key */
 
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
+
+    /* If we are in the context of a Lua script, we claim that time is
+    * blocked to when the Lua script started. This way a key can expire
+    * only the first time it is accessed and not in the middle of the
+    * script execution, making propagation to slaves / AOF consistent.
+    * See issue #1525 on Github for more information. */
+    now = (server.lua_caller || server.lua_inKeyspaceScript) ? server.lua_time_start : mstime();
 
     /* If we are running in the context of a slave, return ASAP:
      * the slave key expiration is controlled by the master that will
@@ -774,18 +789,18 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
     if (server.masterhost != NULL) {
-        return mstime() > when;
+        return now > when;
     }
 
     /* Return when this key has not expired */
-    if (mstime() <= when) return 0;
+    if (now <= when) return 0;
 
     /* Delete the key */
     server.stat_expiredkeys++;
-    propagateExpire(db,key);
     notifyKeyspaceEvent(REDIS_NOTIFY_EXPIRED,
         "expired",key,db->id);
-    return dbDelete(db,key);
+    propagateExpire(db, key);
+    return dbDelete(db, key);
 }
 
 /*-----------------------------------------------------------------------------
@@ -802,6 +817,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
 void expireGenericCommand(redisClient *c, long long basetime, int unit) {
     robj *key = c->argv[1], *param = c->argv[2];
     long long when; /* unix time in milliseconds when the key will expire. */
+    long long now;
 
     if (getLongLongFromObjectOrReply(c, param, &when, NULL) != REDIS_OK)
         return;
@@ -814,6 +830,8 @@ void expireGenericCommand(redisClient *c, long long basetime, int unit) {
         addReply(c,shared.czero);
         return;
     }
+    
+    now = (server.lua_caller || server.lua_inKeyspaceScript) ? server.lua_time_start : mstime();
 
     /* EXPIRE with negative TTL, or EXPIREAT with a timestamp into the past
      * should never be executed as a DEL when load the AOF or in the context
@@ -821,18 +839,17 @@ void expireGenericCommand(redisClient *c, long long basetime, int unit) {
      *
      * Instead we take the other branch of the IF statement setting an expire
      * (possibly in the past) and wait for an explicit DEL from the master. */
-    if (when <= mstime() && !server.loading && !server.masterhost) {
+    if (when <= now && !server.loading && !server.masterhost) {
         robj *aux;
 
         redisAssertWithInfo(c,key,dbDelete(c->db,key));
         server.dirty++;
 
         /* Replicate/AOF this as an explicit DEL. */
-        aux = createStringObject("DEL",3);
-        rewriteClientCommandVector(c,2,aux,key);
-        decrRefCount(aux);
+
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",key,c->db->id);
+        propagateExpire(c->db, key);
         addReply(c, shared.cone);
         return;
     } else {

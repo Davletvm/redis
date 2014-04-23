@@ -270,7 +270,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             goto cleanup;
         } else if (server.masterhost && server.repl_slave_ro &&
                    !server.loading &&
-                   !(server.lua_caller->flags & REDIS_MASTER))
+                   !(!server.lua_caller || server.lua_caller->flags & REDIS_MASTER))
         {
             luaPushError(lua, shared.roslaveerr->ptr);
             goto cleanup;
@@ -450,7 +450,8 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
          * we need to mask the client executing the script from the event loop.
          * If we don't do that the client may disconnect and could no longer be
          * here when the EVAL command will return. */
-         aeDeleteFileEvent(server.el, server.lua_caller->fd, AE_READABLE);
+        if (server.lua_caller)
+            aeDeleteFileEvent(server.el, server.lua_caller->fd, AE_READABLE);
     }
     if (server.lua_timedout)
         aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
@@ -815,6 +816,7 @@ int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body
     return REDIS_OK;
 }
 
+
 void evalGenericCommand(redisClient *c, int evalsha) {
     lua_State *lua = server.lua;
     char funcname[43];
@@ -1056,7 +1058,7 @@ void scriptCommand(redisClient *c) {
         sdsfree(sha);
         forceCommandPropagation(c,REDIS_PROPAGATE_REPL|REDIS_PROPAGATE_AOF);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"kill")) {
-        if (server.lua_caller == NULL) {
+        if (server.lua_caller == NULL && !server.lua_inKeyspaceScript) {
             addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n"));
         } else if (server.lua_write_dirty) {
             addReplySds(c,sdsnew("-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.\r\n"));
@@ -1067,4 +1069,169 @@ void scriptCommand(redisClient *c) {
     } else {
         addReplyError(c, "Unknown SCRIPT subcommand or wrong # of args.");
     }
+}
+
+
+BOOL onNewEventScript(redisClient *c, pubsubScript * script, char * funcname)
+{
+    lua_State *lua = server.lua;
+    int delhook = 0;
+    char buffer[43];
+
+    if (funcname == NULL) funcname = buffer;
+
+    /* We obtain the script SHA1, then check if this function is already
+     * defined into the Lua state */
+    funcname[0] = 'f';
+    funcname[1] = '_';
+    if (!script->scriptSha) {
+        /* Hash the code if this is an EVAL call */
+        sha1hex(funcname + 2, script->script->ptr, sdslen(script->script->ptr));
+        script->scriptSha = createStringObject(funcname+2, 40);
+    }
+    else {
+        int j;
+        char *sha = script->scriptSha->ptr;
+
+        for (j = 0; j < 40; j++)
+            funcname[j + 2] = tolower(sha[j]);
+        funcname[42] = '\0';
+    }
+
+    /* Push the pcall error handler function on the stack. */
+    lua_getglobal(lua, "__redis__err__handler");
+
+    /* Try to lookup the Lua function */
+    lua_getglobal(lua, funcname);
+    if (lua_isnil(lua, -1)) {
+        lua_pop(lua, 1); /* remove the nil from the stack */
+        /* Function not defined... let's define it if we have the
+         * body of the function. If this is an EVALSHA call we can just
+         * return an error. */
+        if (luaCreateFunction(c, lua, funcname, script->script) == REDIS_ERR) {
+            lua_pop(lua, 1); /* remove the error handler from the stack. */
+            /* The error is sent to the client by luaCreateFunction()
+             * itself when it returns REDIS_ERR. */
+            return 0;
+        }
+    }
+    else {
+        lua_pop(lua, 1); /* remove the function object from the stack. */
+    }
+    lua_pop(lua, 1); /* remove the error handler from the stack. */
+    return 1;
+}
+
+
+void queueEventScript(int dbid, robj * event, robj* key, pubsubScript*script)
+{
+
+    pubsubQueuedScript * qs = zcalloc(sizeof(*qs));
+    qs->dbid = dbid;
+    qs->event = event;
+    qs->key = key;
+    qs->script = script;
+
+    incrRefCount(event);
+    incrRefCount(key);
+
+    listAddNodeTail(server.pubsub_script_queue, qs);
+}
+
+
+
+void fireEventScript(int dbid, robj* event, robj* key, pubsubScript* script)
+{
+    lua_State *lua = server.lua;
+    char funcname[43];
+    long long numkeys;
+    int delhook = 0, err;
+
+    /* We want the same PRNG sequence at every call so that our PRNG is
+    * not affected by external state. */
+    redisSrand48(0);
+
+    /* We set this flag to zero to remember that so far no random command
+    * was called. This way we can allow the user to call commands like
+    * SRANDMEMBER or RANDOMKEY from Lua scripts as far as no write command
+    * is called (otherwise the replication and AOF would end with non
+    * deterministic sequences).
+    *
+    * Thanks to this flag we'll raise an error every time a write command
+    * is called after a random command was used. */
+    server.lua_random_dirty = 0;
+    server.lua_write_dirty = 0;
+
+    numkeys = 1;
+
+    if (!onNewEventScript(NULL, script, &funcname))
+        return;
+
+    /* Push the pcall error handler function on the stack. */
+    lua_getglobal(lua, "__redis__err__handler");
+
+    /* Try to lookup the Lua function */
+    lua_getglobal(lua, funcname);
+    redisAssert(!lua_isnil(lua, -1));
+
+
+    /* Populate the argv and keys table accordingly to the arguments that
+    * EVAL received. */
+    luaSetGlobalArray(lua, "KEYS", &key, 1);
+    luaSetGlobalArray(lua, "ARGV", &event, 1);
+
+    /* Select the right DB in the context of the Lua client */
+    selectDb(server.lua_client, dbid);
+
+    /* Set a hook in order to be able to stop the script execution if it
+    * is running for too much time.
+    * We set the hook only if the time limit is enabled as the hook will
+    * make the Lua script execution slower. */
+    server.lua_caller = NULL;
+    server.lua_time_start = ustime() / 1000;
+    server.lua_kill = 0;
+    if (server.lua_time_limit > 0 && server.masterhost == NULL) {
+        lua_sethook(lua, luaMaskCountHook, LUA_MASKCOUNT, 100000);
+        delhook = 1;
+    }
+
+    /* At this point whether this script was never seen before or if it was
+    * already defined, we can call it. We have zero arguments and expect
+    * a single return value. */
+    server.lua_inKeyspaceScript = 1;
+    err = lua_pcall(lua, 0, 1, -2);
+    server.lua_inKeyspaceScript = 0;
+
+    /* Perform some cleanup that we need to do both on error and success. */
+    if (delhook) lua_sethook(lua, luaMaskCountHook, 0, 0); /* Disable hook */
+    if (server.lua_timedout) {
+        server.lua_timedout = 0;
+    }
+    lua_gc(lua, LUA_GCSTEP, 1);
+
+    lua_pop(lua, 2); /* Consume the Lua reply and remove error handler. */
+
+
+    robj *argv[5];
+    if (!replicationScriptCacheExists(script->scriptSha)) {
+        /* This script is not in our script cache, replicate it as
+        * EVAL, then add it into the script cache, as from now on
+        * slaves and AOF know about it. */
+        replicationScriptCacheAdd(script->scriptSha);
+
+        argv[0] = shared.eval;
+        argv[1] = script->script;
+    }
+    else {
+        argv[0] = shared.evalsha;
+        argv[1] = script->scriptSha;
+    }
+
+    argv[2] = shared.one;
+    argv[3] = key;
+    argv[4] = event;
+
+    if (server.aof_state != REDIS_AOF_OFF)
+        feedAppendOnlyFile(server.evalCommand, dbid, argv, 5);
+    replicationFeedSlaves(server.slaves, dbid, argv, 5);
 }

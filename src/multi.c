@@ -104,11 +104,16 @@ void discardCommand(redisClient *c) {
 /* Send a MULTI command to all the slaves and AOF file. Check the execCommand
  * implementation for more information. */
 void execCommandPropagateMulti(redisClient *c) {
-    robj *multistring = createStringObject("MULTI",5);
+    propagateMultiOrExec(c->db->id, 1, REDIS_PROPAGATE_AOF | REDIS_PROPAGATE_REPL);
+}
 
-    propagate(server.multiCommand,c->db->id,&multistring,1,
-              REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
-    decrRefCount(multistring);
+void propagateMultiOrExec(int dbid, int isMulti, int flags)
+{
+    redisAssert(!!server.propagated_multi_for_queued_script == !isMulti);
+    robj * cmdstring = isMulti ? createStringObject("MULTI", 5) : createStringObject("EXEC", 4);
+    propagate(isMulti ? server.multiCommand : server.execCommand, dbid, &cmdstring, 1, flags);
+    decrRefCount(cmdstring);
+    server.propagated_multi_for_queued_script = isMulti;
 }
 
 void execCommand(redisClient *c) {
@@ -142,6 +147,7 @@ void execCommand(redisClient *c) {
     orig_argc = c->argc;
     orig_cmd = c->cmd;
     addReplyMultiBulkLen(c,c->mstate.count);
+    must_propagate = server.propagated_multi_for_queued_script;
     for (j = 0; j < c->mstate.count; j++) {
         c->argc = c->mstate.commands[j].argc;
         c->argv = c->mstate.commands[j].argv;

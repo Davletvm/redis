@@ -883,6 +883,24 @@ int rewriteAppendOnlyFile(char *filename) {
     rioInitWithFile(&aof,fp);
     if (server.aof_rewrite_incremental_fsync)
         rioSetAutoSync(&aof,REDIS_AOF_AUTOSYNC_BYTES);
+
+    if (listLength(server.pubsub_scripts)) {
+        listNode *ln;
+        listIter li;
+        char setksscriptcmd[] = "*4\r\n$11\r\nSETKSSCRIPT\r\n";
+
+        listRewind(server.pubsub_scripts, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            pubsubScript *pat = ln->value;
+
+            if (rioWrite(&aof, setksscriptcmd, sizeof(setksscriptcmd)-1) == 0) goto werr;
+            /* Key and value */
+            if (rioWriteBulkObject(&aof, pat->patternEvent) == 0) goto werr;
+            if (rioWriteBulkObject(&aof, pat->patternKey) == 0) goto werr;
+            if (rioWriteBulkObject(&aof, pat->script) == 0) goto werr;
+        }
+    }
+
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;
@@ -940,6 +958,11 @@ int rewriteAppendOnlyFile(char *filename) {
                 if (rioWrite(&aof,cmd,sizeof(cmd)-1) == 0) goto werr;
                 if (rioWriteBulkObject(&aof,&key) == 0) goto werr;
                 if (rioWriteBulkLongLong(&aof,expiretime) == 0) goto werr;
+            }
+            if (o->protected) {
+                char cmd[] = "*2\r\n$7\r\nPROTECT\r\n";
+                if (rioWrite(&aof, cmd, sizeof(cmd)-1) == 0) goto werr;
+                if (rioWriteBulkObject(&aof, &key) == 0) goto werr;
             }
         }
         dictReleaseIterator(di);

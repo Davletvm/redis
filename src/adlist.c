@@ -55,7 +55,7 @@ list *listCreate(void)
 /* Free the whole list.
  *
  * This function can't fail. */
-void listRelease(list *list)
+void listClearInternal(list *list)
 {
     unsigned long len;
     listNode *current, *next;
@@ -67,7 +67,18 @@ void listRelease(list *list)
         if (list->free) list->free(current->value);
         zfree(current);
         current = next;
-    }
+    }    
+}
+void listClear(list *list)
+{
+    listClearInternal(list);
+    list->head = list->tail = NULL;
+    list->len = 0;
+}
+
+void listRelease(list *list)
+{
+    listClearInternal(list);
     zfree(list);
 }
 
@@ -169,6 +180,19 @@ void listDelNode(list *list, listNode *node)
     if (list->free) list->free(node->value);
     zfree(node);
     list->len--;
+}
+void listDelNodeNoFree(list *lst, listNode *node, void ** freeSpace)
+{
+    if (node->prev)
+        node->prev->next = node->next;
+    else
+        lst->head = node->next;
+    if (node->next)
+        node->next->prev = node->prev;
+    else
+        lst->tail = node->prev;
+    *freeSpace = node;
+    lst->len--;
 }
 
 /* Returns a list iterator 'iter'. After the initialization every

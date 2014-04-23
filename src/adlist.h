@@ -71,11 +71,13 @@ typedef struct list {
 
 /* Prototypes */
 list *listCreate(void);
+void listClear(list * list);
 void listRelease(list *list);
 list *listAddNodeHead(list *list, void *value);
 list *listAddNodeTail(list *list, void *value);
 list *listInsertNode(list *list, listNode *old_node, void *value, int after);
 void listDelNode(list *list, listNode *node);
+void listDelNodeNoFree(list *lst, listNode *node, void **freeSpace);
 listIter *listGetIterator(list *list, int direction);
 listNode *listNext(listIter *iter);
 void listReleaseIterator(listIter *iter);

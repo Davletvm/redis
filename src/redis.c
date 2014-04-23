@@ -249,7 +249,11 @@ struct redisCommand redisCommandTable[] = {
     {"punsubscribe",punsubscribeCommand,-1,"rpslt",0,NULL,0,0,0,0,0},
     {"publish",publishCommand,3,"pltr",0,NULL,0,0,0,0,0},
     {"pubsub",pubsubCommand,-2,"pltrR",0,NULL,0,0,0,0,0},
-    {"watch",watchCommand,-2,"rs",0,noPreloadGetKeys,1,-1,1,0,0},
+    {"setksscript",setkeyspacescriptCommand,4,"rpslt",0,NULL,0,0,0,0,0},
+    {"protect", protectkeyCommand, -2, "w",0,noPreloadGetKeys, 1, -1, 1, 0, 0 },
+    {"unprotect", unprotectkeyCommand, -2, "w", 0, noPreloadGetKeys, 1, -1, 1, 0, 0 },
+    {"isprotect", isprotectkeyCommand, 2, "r", 0, NULL, 1, 1, 1, 0, 0 },
+    { "watch", watchCommand, -2, "rs", 0, noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"unwatch",unwatchCommand,1,"rs",0,NULL,0,0,0,0,0},
     {"restore",restoreCommand,4,"awm",0,NULL,1,1,1,0,0},
     {"migrate",migrateCommand,6,"aw",0,NULL,0,0,0,0,0},
@@ -657,10 +661,10 @@ int activeExpireCycleTryExpire(redisDb *db, struct dictEntry *de, long long now)
         sds key = dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
 
-        propagateExpire(db,keyobj);
         dbDelete(db,keyobj);
         notifyKeyspaceEvent(REDIS_NOTIFY_EXPIRED,
             "expired",keyobj,db->id);
+        propagateExpire(db, keyobj);
         decrRefCount(keyobj);
         server.stat_expiredkeys++;
         return 1;
@@ -805,6 +809,9 @@ void activeExpireCycle(int type) {
             /* We don't repeat the cycle if there are less than 25% of keys
              * found expired in the current DB. */
         } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
+    }
+    if (listLength(server.pubsub_script_queue)) {        
+        runQueuedEventScripts();
     }
 }
 
@@ -1275,6 +1282,11 @@ void createSharedObjects(void) {
     shared.rpop = createStringObject("RPOP",4);
     shared.lpop = createStringObject("LPOP",4);
     shared.lpush = createStringObject("LPUSH",5);
+    shared.setksscript = createStringObject("SETKSSCRIPT", 11);
+    shared.evalsha = createStringObject("EVALSHA", 7);
+    shared.eval = createStringObject("EVAL", 4);
+    shared.one = createStringObject("1", 1);
+    shared.protect = createStringObject("PROTECT", 7);
     for (j = 0; j < REDIS_SHARED_INTEGERS; j++) {
         shared.integers[j] = createObject(REDIS_STRING,(void*)(long)j);
         shared.integers[j]->encoding = REDIS_ENCODING_INT;
@@ -1347,6 +1359,8 @@ void initServerConfig() {
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
     server.activerehashing = REDIS_DEFAULT_ACTIVE_REHASHING;
     server.notify_keyspace_events = 0;
+    server.notify_keyspace_scripts = 0;
+    server.propagated_multi_for_queued_script = 0;
     server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
     server.maxmemory = g_win64maxmemory;
@@ -1367,7 +1381,9 @@ void initServerConfig() {
     server.repl_min_slaves_max_lag = REDIS_DEFAULT_MIN_SLAVES_MAX_LAG;
     server.lua_caller = NULL;
     server.lua_time_limit = REDIS_LUA_TIME_LIMIT;
+    server.lua_event_limit = REDIS_LUA_EVENT_LIMIT;
     server.lua_client = NULL;
+    server.lua_inKeyspaceScript = 0;
     server.lua_timedout = 0;
     server.loading_process_events_interval_bytes = (1024*1024*2);
 
@@ -1423,7 +1439,11 @@ void initServerConfig() {
     server.lpushCommand = lookupCommandByCString("lpush");
     server.lpopCommand = lookupCommandByCString("lpop");
     server.rpopCommand = lookupCommandByCString("rpop");
-    
+    server.setkeyspacescriptCommand = lookupCommandByCString("setksscript");
+    server.evalShaCommand = lookupCommandByCString("evalsha");
+    server.evalCommand = lookupCommandByCString("eval");
+    server.execCommand = lookupCommandByCString("exec");
+
     /* Slow log */
     server.slowlog_log_slower_than = REDIS_SLOWLOG_LOG_SLOWER_THAN;
     server.slowlog_max_len = REDIS_SLOWLOG_MAX_LEN;
@@ -1616,8 +1636,13 @@ void initServer() {
     }
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();
+    server.pubsub_scripts = listCreate();
+    server.pubsub_script_queue = listCreate();
     listSetFreeMethod(server.pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(server.pubsub_patterns,listMatchPubsubPattern);
+    listSetFreeMethod(server.pubsub_scripts, freePubsubScript);
+    listSetMatchMethod(server.pubsub_scripts, listMatchPubsubScript);
+    listSetFreeMethod(server.pubsub_script_queue, freePubsubQueuedScript);
     server.cronloops = 0;
     server.rdb_child_pid = -1;
     server.aof_child_pid = -1;
@@ -1904,8 +1929,17 @@ void call(redisClient *c, int flags) {
         if (c->flags & REDIS_FORCE_AOF) flags |= REDIS_PROPAGATE_AOF;
         if (dirty)
             flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
-        if (flags != REDIS_PROPAGATE_NONE)
-            propagate(c->cmd,c->db->id,c->argv,c->argc,flags);
+        if (flags != REDIS_PROPAGATE_NONE) {
+            if (c->cmd == server.execCommand) {
+                if (listLength(server.pubsub_script_queue)) {
+                    runQueuedEventScripts();
+                } else propagateMultiOrExec(c->db->id, 0, flags);
+            } else {
+                if (listLength(server.pubsub_script_queue) && !server.propagated_multi_for_queued_script)
+                    propagateMultiOrExec(c->db->id, 1, flags);
+                propagate(c->cmd, c->db->id, c->argv, c->argc, flags);
+            }
+        }
     }
 
     /* Restore the old FORCE_AOF/REPL flags, since call can be executed
@@ -1981,6 +2015,7 @@ int processCommand(redisClient *c) {
         if ((c->cmd->flags & REDIS_CMD_DENYOOM) && retval == REDIS_ERR) {
             flagTransaction(c);
             addReply(c, shared.oomerr);
+            runQueuedEventScripts();
             return REDIS_OK;
         }
     }
@@ -2075,6 +2110,8 @@ int processCommand(redisClient *c) {
         addReply(c,shared.queued);
     } else {
         call(c,REDIS_CALL_FULL);
+        if (listLength(server.pubsub_script_queue))
+            runQueuedEventScripts();
         if (listLength(server.ready_keys))
             handleClientsBlockedOnLists();
     }
@@ -2802,7 +2839,7 @@ void monitorCommand(redisClient *c) {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    size_t mem_used, mem_tofreeObject, mem_tofreeVirtual, mem_freed;
+    size_t mem_used, mem_tofreeObject, mem_freed;
     int slaves = listLength(server.slaves);
 
     /* Remove the size of slaves output buffers and AOF buffer from the
@@ -2845,6 +2882,7 @@ int freeMemoryIfNeeded(void) {
     mem_freed = 0;
     while (mem_freed < mem_tofreeObject) {
         int j, k, keys_freed = 0;
+        robj *o;
 
         for (j = 0; j < server.dbnum; j++) {
             long bestval = 0; /* just to prevent warning */
@@ -2866,10 +2904,17 @@ int freeMemoryIfNeeded(void) {
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM)
             {
-                de = dictGetRandomKey(dict);
-                bestkey = dictGetKey(de);
+                for (k = 0; k < server.maxmemory_samples; k++) {
+                    de = dictGetRandomKey(dict);
+                    if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM) {
+                        de = dictFind(db->dict, dictGetKey(de));
+                        if ((o = dictGetVal(de))->protected) {
+                            continue;
+                        }
+                    }
+                    bestkey = dictGetKey(de);
+                }
             }
-
             /* volatile-lru and allkeys-lru policy */
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
@@ -2886,6 +2931,9 @@ int freeMemoryIfNeeded(void) {
                     if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
                         de = dictFind(db->dict, thiskey);
                     o = dictGetVal(de);
+                    if (o->protected) {
+                        continue;
+                    }
                     thisval = estimateObjectIdleTime(o);
 
                     /* Higher idle time is better candidate for deletion */
@@ -2903,6 +2951,10 @@ int freeMemoryIfNeeded(void) {
                     long thisval;
 
                     de = dictGetRandomKey(dict);
+                    struct dictEntry * de2 = dictFind(db->dict, dictGetKey(de));
+                    if ((o = dictGetVal(de2))->protected) {
+                        continue;
+                    }
                     thiskey = dictGetKey(de);
                     thisval = (long) dictGetVal(de);
 
@@ -2920,7 +2972,6 @@ int freeMemoryIfNeeded(void) {
                 long long delta;
 
                 robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-                propagateExpire(db,keyobj);
                 /* We compute the amount of memory freed by dbDelete() alone.
                  * It is possible that actually the memory needed to propagate
                  * the DEL in AOF and replication link is greater than the one
@@ -2936,6 +2987,7 @@ int freeMemoryIfNeeded(void) {
                 server.stat_evictedkeys++;
                 notifyKeyspaceEvent(REDIS_NOTIFY_EVICTED, "evicted",
                     keyobj, db->id);
+                propagateExpire(db, keyobj);
                 decrRefCount(keyobj);
                 keys_freed++;
 
@@ -2955,6 +3007,46 @@ int freeMemoryIfNeeded(void) {
         server.maxvirtualmemorytarget = 0;
     }
     return REDIS_OK;
+}
+
+
+void protectkeyCommand(redisClient *c) {
+    int protected = 0, j;
+
+    for (j = 1; j < c->argc; j++) {
+        robj *val = lookupKeyRead(c->db, c->argv[j]);
+        if (val != NULL && !val->protected){
+            server.dirty++;
+            val->protected = 1;
+            protected++;
+        }
+        
+    }
+    addReplyLongLong(c,protected);
+}
+
+void unprotectkeyCommand(redisClient *c) {
+    int protected = 0, j;
+
+    for (j = 1; j < c->argc; j++) {
+        robj *val = lookupKeyRead(c->db, c->argv[j]);
+        if (val != NULL && val->protected){
+            server.dirty++;
+            val->protected = 0;
+            protected++;
+        }
+
+    }
+    addReplyLongLong(c,protected);
+}
+
+void isprotectkeyCommand(redisClient *c)
+{
+    int protected = 0;
+    robj *val = lookupKeyRead(c->db, c->argv[1]);
+    if (val == NULL) protected = -2;
+    else protected = val->protected ? 1 : 0;
+    addReplyLongLong(c, protected);
 }
 
 /* =================================== Main! ================================ */

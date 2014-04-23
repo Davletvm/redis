@@ -338,6 +338,7 @@
 
 /* Scripting */
 #define REDIS_LUA_TIME_LIMIT 5000 /* milliseconds */
+#define REDIS_LUA_EVENT_LIMIT 100 /* default max size of script event queue */
 
 /* Units */
 #define UNIT_SECONDS 0
@@ -398,7 +399,8 @@ typedef struct redisObject {
     unsigned notused:2;     /* Not used */
     unsigned encoding:4;
     unsigned lru:22;        /* lru time (relative to server.lruclock) */
-    int refcount;
+    int refcount:31;
+    int protected:1;
     void *ptr;
 } robj;
 
@@ -526,6 +528,7 @@ struct sharedObjectsStruct {
     *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *rpop, *lpop,
     *lpush, *emptyscan,
+    *setksscript, *evalsha,*one,*eval, *protect,
     *select[REDIS_SHARED_SELECT_CMDS],
     *integers[REDIS_SHARED_INTEGERS],
     *mbulkhdr[REDIS_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -625,18 +628,13 @@ struct redisServer {
     char neterr[ANET_ERR_LEN];  /* Error buffer for anet.c */
     /* RDB / AOF loading information */
     int loading;                /* We are loading data from disk if true */
-#ifdef _WIN32
-    long long loading_total_bytes;
-    long long loading_loaded_bytes;
-#else
     off_t loading_total_bytes;
     off_t loading_loaded_bytes;
-#endif
     time_t loading_start_time;
     off_t loading_process_events_interval_bytes;
     /* Fast pointers to often looked up command */
     struct redisCommand *delCommand, *multiCommand, *lpushCommand, *lpopCommand,
-                        *rpopCommand;
+        *rpopCommand, *setkeyspacescriptCommand, *evalShaCommand, *evalCommand, *execCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -793,14 +791,20 @@ struct redisServer {
     /* Pubsub */
     dict *pubsub_channels;  /* Map channels to list of subscribed clients */
     list *pubsub_patterns;  /* A list of pubsub_patterns */
+    list *pubsub_scripts;   /* A list of registered event scripts */
+    list *pubsub_script_queue;  /* A queue of scripts already fired but not executed */
+    int propagated_multi_for_queued_script; 
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of REDIS_NOTIFY... flags. */
+    int notify_keyspace_scripts; 
     /* Scripting */
     lua_State *lua; /* The Lua interpreter. We use just one for all clients */
     redisClient *lua_client;   /* The "fake client" to query Redis from Lua */
     redisClient *lua_caller;   /* The client running EVAL right now, or NULL */
+    int lua_inKeyspaceScript;
     dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
     long long lua_time_limit;  /* Script timeout in seconds */
+    long long lua_event_limit;
     long long lua_time_start;  /* Start time of script */
     int lua_write_dirty;  /* True if a write command was called during the
                              execution of the current script. */
@@ -821,6 +825,20 @@ typedef struct pubsubPattern {
     redisClient *client;
     robj *pattern;
 } pubsubPattern;
+
+typedef struct pubsubScript {
+    robj *script;
+    robj *scriptSha;
+    robj *patternEvent;
+    robj *patternKey;
+} pubsubScript;
+
+typedef struct pubsubQueuedScript {
+    pubsubScript * script;
+    robj *event;
+    robj *key;
+    int dbid;
+} pubsubQueuedScript;
 
 typedef void redisCommandProc(redisClient *c);
 typedef int *redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, int *numkeys, int flags);
@@ -1183,12 +1201,22 @@ int pubsubUnsubscribeAllChannels(redisClient *c, int notify);
 int pubsubUnsubscribeAllPatterns(redisClient *c, int notify);
 void freePubsubPattern(void *p);
 int listMatchPubsubPattern(void *a, void *b);
+void freePubsubScript(void *p);
+int listMatchPubsubScript(void *a, void *b);
+void freePubsubQueuedScript(void *p);
 int pubsubPublishMessage(robj *channel, robj *message);
 
 /* Keyspace events notification */
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid);
 int keyspaceEventsStringToFlags(char *classes);
 sds keyspaceEventsFlagsToString(int flags);
+void queueEventScripts(int dbid, robj *channel1, robj* event, robj* channel2, robj* key);
+void fireEventScript(int dbid, robj* event, robj* key, pubsubScript *script);
+BOOL onNewEventScript(redisClient *c, pubsubScript *script, char *);
+pubsubScript* addEventScript(robj* event, robj* key, robj* script, robj* sha);
+void runQueuedEventScripts();
+void queueEventScript(int dbid, robj * event, robj* key, pubsubScript*script);
+void propagateMultiOrExec(int dbid, int isMulti, int flags);
 
 /* Configuration */
 void loadServerConfig(char *filename, char *options);
@@ -1377,6 +1405,10 @@ void psubscribeCommand(redisClient *c);
 void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void pubsubCommand(redisClient *c);
+void setkeyspacescriptCommand(redisClient *c);
+void protectkeyCommand(redisClient *c);
+void unprotectkeyCommand(redisClient *c);
+void isprotectkeyCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
 void restoreCommand(redisClient *c);

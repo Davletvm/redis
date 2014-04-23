@@ -68,6 +68,31 @@ static pthread_t bio_threads[REDIS_BIO_NUM_OPS];
 static pthread_mutex_t bio_mutex[REDIS_BIO_NUM_OPS];
 static pthread_cond_t bio_condvar[REDIS_BIO_NUM_OPS];
 static list *bio_jobs[REDIS_BIO_NUM_OPS];
+#define REDIS_MAX_BIO_FREESLOTS 4
+static volatile DWORD countOccupied;
+static void *freeSlots[REDIS_MAX_BIO_FREESLOTS];
+
+void** findFreeSlot()
+{
+    InterlockedIncrement(&countOccupied);
+    for (int x = 0; x < REDIS_MAX_BIO_FREESLOTS; x++) {
+        if (!freeSlots[x]) return &(freeSlots[x]);
+    }
+    redisLog(REDIS_WARNING, "Fatal: Out of BIO free slots.");
+    exit(1);
+}
+void releaseFreeSlots()
+{
+    if (!countOccupied) return;
+    for (int x = 0; x < REDIS_MAX_BIO_FREESLOTS; x++) {
+        if (freeSlots[x]) {
+            zfree(freeSlots[x]);
+            freeSlots[x] = NULL;
+            if (!InterlockedDecrement(&countOccupied)) break;
+        }
+    }
+}
+
 /* The following array is used to hold the number of pending jobs for every
  * OP type. This allows us to export the bioPendingJobsOfType() API that is
  * useful when the main thread wants to perform some operation that may involve
@@ -105,7 +130,7 @@ void bioInit(void) {
         bio_jobs[j] = listCreate();
         bio_pending[j] = 0;
     }
-
+    memset(freeSlots, 0, sizeof(freeSlots));
     /* Set the stack size as by default it may be small in some system */
     pthread_attr_init(&attr);
     pthread_attr_getstacksize(&attr,&stacksize);
@@ -136,6 +161,7 @@ void bioCreateBackgroundJob(int type, void *arg1, void *arg2, void *arg3) {
     pthread_mutex_lock(&bio_mutex[type]);
     listAddNodeTail(bio_jobs[type],job);
     bio_pending[type]++;
+    releaseFreeSlots();
     pthread_cond_signal(&bio_condvar[type]);
     pthread_mutex_unlock(&bio_mutex[type]);
 }
@@ -191,12 +217,12 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             redisPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        zfree(job);
+        *(findFreeSlot()) = job;
 
         /* Lock again before reiterating the loop, if there are no longer
          * jobs to process we'll block again in pthread_cond_wait(). */
         pthread_mutex_lock(&bio_mutex[type]);
-        listDelNode(bio_jobs[type],ln);
+        listDelNodeNoFree(bio_jobs[type],ln, findFreeSlot());
         bio_pending[type]--;
     }
 }
@@ -205,6 +231,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 unsigned long long bioPendingJobsOfType(int type) {
     unsigned long long val;
     pthread_mutex_lock(&bio_mutex[type]);
+    releaseFreeSlots();
     val = bio_pending[type];
     pthread_mutex_unlock(&bio_mutex[type]);
     return val;
