@@ -74,3 +74,5 @@ msvs/RedisWAInst/src/RedisServer/obj/
 *.tlog
 *.idb
 *.dat
+*.rdb
+ms1.bat

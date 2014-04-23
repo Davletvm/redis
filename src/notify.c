@@ -94,37 +94,52 @@ sds keyspaceEventsFlagsToString(int flags) {
  * 'dbid' is the database ID where the key lives.  */
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     sds chan;
-    robj *chanobj, *eventobj;
+    robj *chanobj = NULL, *eventobj = NULL, *chanobj2 = NULL;
     int len = -1;
     char buf[24];
 
+    int haveScripts = listLength(server.pubsub_scripts) && !server.loading && !server.masterhost ? -1 : 0;
+
+    haveScripts = haveScripts & type & server.notify_keyspace_scripts;
+    type = (type & server.notify_keyspace_events) | haveScripts;
+
     /* If notifications for this class of events are off, return ASAP. */
-    if (!(server.notify_keyspace_events & type)) return;
+    if (!type) return;
+    type = server.notify_keyspace_events;
 
     eventobj = createStringObject(event,strlen(event));
 
     /* __keyspace@<db>__:<key> <event> notifications. */
-    if (server.notify_keyspace_events & REDIS_NOTIFY_KEYSPACE) {
+    if (type & REDIS_NOTIFY_KEYSPACE || haveScripts) {
         chan = sdsnewlen("__keyspace@",11);
         len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, key->ptr);
         chanobj = createObject(REDIS_STRING, chan);
-        pubsubPublishMessage(chanobj, eventobj);
-        decrRefCount(chanobj);
+        if (type & REDIS_NOTIFY_KEYSPACE) {
+            pubsubPublishMessage(chanobj, eventobj);
+        }
     }
 
     /* __keyevente@<db>__:<event> <key> notifications. */
-    if (server.notify_keyspace_events & REDIS_NOTIFY_KEYEVENT) {
+    if (type & REDIS_NOTIFY_KEYEVENT || haveScripts) {
         chan = sdsnewlen("__keyevent@",11);
         if (len == -1) len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, eventobj->ptr);
-        chanobj = createObject(REDIS_STRING, chan);
-        pubsubPublishMessage(chanobj, key);
-        decrRefCount(chanobj);
+        chanobj2 = createObject(REDIS_STRING, chan);
+        if (type & REDIS_NOTIFY_KEYEVENT) {
+            pubsubPublishMessage(chanobj2, key);
+        }
     }
-    decrRefCount(eventobj);
+
+    if (haveScripts) {
+        queueEventScripts(dbid, chanobj, eventobj, chanobj2, key);
+    }
+
+    if (chanobj) decrRefCount(chanobj);
+    if (chanobj2) decrRefCount(chanobj2);
+    if (eventobj) decrRefCount(eventobj);
 }

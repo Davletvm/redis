@@ -646,6 +646,9 @@ off_t rdbSavedObjectLen(robj *o) {
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val,
                         long long expiretime, long long now)
 {
+    if (val->protected) {
+        if (rdbSaveType(rdb, REDIS_RDB_OPCODE_PROTECT) == -1) return -1;
+    }
     /* Save the expire time */
     if (expiretime != -1) {
         /* If this key is already expired skip it */
@@ -688,7 +691,7 @@ int rdbSave(char *filename) {
     rioInitWithFile(&rdb,fp);
     if (server.rdb_checksum)
         rdb.update_cksum = rioGenericUpdateChecksum;
-    snprintf(magic,sizeof(magic),"REDIS%04d",REDIS_RDB_VERSION);
+    snprintf(magic, sizeof(magic), "REDIS%04d", listLength(server.pubsub_scripts) ? REDIS_MSRDB_VERSION : REDIS_RDB_VERSION);
     if (rdbWriteRaw(&rdb,magic,9) == -1) goto werr;
 
     for (j = 0; j < server.dbnum; j++) {
@@ -722,6 +725,24 @@ int rdbSave(char *filename) {
     /* EOF opcode */
     if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EOF) == -1) goto werr;
 
+    if (listLength(server.pubsub_scripts)) {
+        if (rdbSaveLen(&rdb,listLength(server.pubsub_scripts)) == -1) goto werr;
+
+        if (listLength(server.pubsub_scripts)) {
+            listNode *ln;
+            listIter li;
+
+            listRewind(server.pubsub_scripts, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                pubsubScript *pat = ln->value;
+                if (rdbSaveObject(&rdb, pat->patternEvent) == 0) goto werr;
+                if (rdbSaveObject(&rdb, pat->patternKey) == 0) goto werr;
+                if (rdbSaveObject(&rdb, pat->script) == 0) goto werr;
+                if (rdbSaveObject(&rdb, pat->scriptSha) == 0) goto werr;
+            }
+        }
+    }
+    
     /* CRC64 checksum. It will be zero if checksum computation is disabled, the
      * loading code skips the check in this case. */
     cksum = rdb.cksum;
@@ -1145,7 +1166,7 @@ int rdbLoad(char *filename) {
         return REDIS_ERR;
     }
     rdbver = atoi(buf+5);
-    if (rdbver < 1 || rdbver > REDIS_RDB_VERSION) {
+    if (rdbver < 1 || (rdbver > REDIS_RDB_VERSION && rdbver != REDIS_MSRDB_VERSION)) {
         fclose(fp);
         redisLog(REDIS_WARNING,"Can't handle RDB format version %d",rdbver);
         errno = EINVAL;
@@ -1156,7 +1177,8 @@ int rdbLoad(char *filename) {
     while(1) {
         robj *key, *val;
         expiretime = -1;
-
+        int protected = 0;
+readagain:
         /* Read type. */
         if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
         if (type == REDIS_RDB_OPCODE_EXPIRETIME) {
@@ -1172,6 +1194,10 @@ int rdbLoad(char *filename) {
             if ((expiretime = rdbLoadMillisecondTime(&rdb)) == -1) goto eoferr;
             /* We read the time so we need to read the object type again. */
             if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
+        } else if (type == REDIS_RDB_OPCODE_PROTECT) {
+            if (protected) goto eoferr;
+            protected = 1;
+            goto readagain;
         }
 
         if (type == REDIS_RDB_OPCODE_EOF)
@@ -1202,6 +1228,7 @@ int rdbLoad(char *filename) {
             decrRefCount(val);
             continue;
         }
+        if (protected) val->protected = 1;
         /* Add the new object in the hash table */
         dbAdd(db,key,val);
 
@@ -1210,6 +1237,20 @@ int rdbLoad(char *filename) {
 
         decrRefCount(key);
     }
+    if (rdbver == REDIS_MSRDB_VERSION) {
+        uint32_t numKeyScripts = rdbLoadLen(&rdb, NULL);
+        if (numKeyScripts == REDIS_RDB_LENERR) goto eoferr;
+        for (uint32_t c = 0; c < numKeyScripts; c++) {
+            robj * event, *key, *script, *sha;
+            if ((event = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if ((key = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if ((script = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            if ((sha = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            addKeyspaceScript(event, key, script, sha);
+        }
+    }
+
+
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5 && server.rdb_checksum) {
         uint64_t cksum, expected = rdb.cksum;

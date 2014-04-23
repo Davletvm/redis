@@ -40,11 +40,36 @@ void freePubsubPattern(void *p) {
     zfree(pat);
 }
 
+void freePubsubScript(void *p) {
+    pubsubScript *pat = p;
+
+    decrRefCount(pat->patternEvent);
+    decrRefCount(pat->patternKey);
+    decrRefCount(pat->script);
+    decrRefCount(pat->scriptSha);
+    zfree(pat);
+}
+
+void freePubsubQueuedScript(void *p) {
+    pubsubQueuedScript *pat = p;
+
+    decrRefCount(pat->event);
+    decrRefCount(pat->key);
+    zfree(pat);
+}
+
 int listMatchPubsubPattern(void *a, void *b) {
     pubsubPattern *pa = a, *pb = b;
 
     return (pa->client == pb->client) &&
            (equalStringObjects(pa->pattern,pb->pattern));
+}
+
+
+int listMatchPubsubScript(void *a, void *b) {
+    pubsubScript *pa = a, *pb = b;
+
+    return equalStringObjects(pa->patternKey, pb->patternKey) && equalStringObjects(pa->patternEvent, pb->patternEvent);
 }
 
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
@@ -356,3 +381,113 @@ void pubsubCommand(redisClient *c) {
             (char*)c->argv[1]->ptr);
     }
 }
+
+pubsubScript* addKeyspaceScript(robj* event, robj* key, robj* script, robj* sha)
+{
+    pubsubScript* scr = zmalloc(sizeof(pubsubScript));
+    scr->patternEvent = getDecodedObject(event);
+    scr->patternKey = getDecodedObject(key);
+    scr->script = getDecodedObject(script);
+    scr->scriptSha = sha;
+
+    listAddNodeTail(server.pubsub_scripts, scr);
+
+    return scr;
+}
+
+
+void setkeyspacescriptCommand(redisClient *c)
+{
+    robj * patternEvent = c->argv[1];
+    robj * patternKey = c->argv[2];
+    robj * script = c->argv[3];
+
+    pubsubScript pub;
+    pub.patternEvent = patternEvent;
+    pub.patternKey = patternKey;
+    pub.script = script;
+    pub.scriptSha = NULL;
+
+    if (!onNewEventScript(c, &pub, NULL))
+    {
+        return;
+    }
+
+    int retval = 0;
+    listNode * ln = listSearchKey(server.pubsub_scripts, &pub);
+    if (ln != NULL) {
+        listDelNode(server.pubsub_scripts, ln);
+        retval = -1;
+    }
+    addKeyspaceScript(patternEvent, patternKey, script, pub.scriptSha);
+    server.dirty++;
+
+    addReplyLongLong(c, retval);
+}
+
+void queueEventScripts(int dbid, robj *channel1, robj* event, robj* channel2, robj* key)
+{
+    listNode *ln;
+    listIter li;
+
+    if (listLength(server.pubsub_scripts)) {
+        listRewind(server.pubsub_scripts, &li);
+        channel1 = getDecodedObject(channel1);
+        event = getDecodedObject(event);
+        channel2 = getDecodedObject(channel2);
+        key = getDecodedObject(key);
+        while ((ln = listNext(&li)) != NULL) {
+            pubsubScript *pat = ln->value;
+
+            if (stringmatchlen((char*)pat->patternEvent->ptr,
+                (int)sdslen(pat->patternEvent->ptr),
+                (char*)channel1->ptr,
+                (int)sdslen(channel1->ptr), 0) &&
+                stringmatchlen((char*)pat->patternKey->ptr,
+                (int)sdslen(pat->patternKey->ptr),
+                (char*)channel2->ptr,
+                (int)sdslen(channel2->ptr), 0))
+            {
+                queueEventScript(dbid, event, key, pat);
+            }
+        }
+        decrRefCount(channel1);
+        decrRefCount(channel2);
+        decrRefCount(event);
+        decrRefCount(key);
+    }
+}
+
+
+void runQueuedEventScripts()
+{
+
+    listNode *ln;
+
+    if (!server.pubsub_script_queue || server.lua_inKeyspaceScript || server.lua_caller || !listLength(server.pubsub_script_queue)) return;
+
+    if (!server.propagated_multi_for_queued_script) {
+        propagateMultiOrExec(-1, 1, REDIS_PROPAGATE_AOF | REDIS_PROPAGATE_REPL);
+    }
+
+    for (ln = listFirst(server.pubsub_script_queue); ln; ln = listNextNode(ln)) {
+
+        pubsubQueuedScript *pat = ln->value;
+        fireEventScript(pat->dbid, pat->event, pat->key, pat->script);
+
+        if (listLength(server.pubsub_script_queue) > server.lua_event_limit) {
+            redisLog(REDIS_WARNING, "Limit of queued script events exceeded.  Stopping event scripts for duration of session.");
+            server.notify_keyspace_scripts = 0;
+            listClear(server.pubsub_script_queue);
+            break;
+        }
+    }
+    listClear(server.pubsub_script_queue);
+
+    if (server.propagated_multi_for_queued_script) {
+        propagateMultiOrExec(-1, 0, REDIS_PROPAGATE_AOF | REDIS_PROPAGATE_REPL);
+    }
+
+
+}
+

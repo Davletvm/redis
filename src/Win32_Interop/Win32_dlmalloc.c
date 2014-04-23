@@ -542,6 +542,13 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
   improvement at the expense of carrying around more memory.
 */
 
+
+//#define DEBUG 1
+
+#if DEBUG
+#define FOOTERS 1
+#endif
+
 /* Version identifier to allow people to support multiple versions */
 #ifndef DLMALLOC_VERSION
 #define DLMALLOC_VERSION 20806
@@ -2803,7 +2810,16 @@ static int has_segment_link(mstate m, msegmentptr ss) {
 #define PREACTION(M)  ((use_lock(M))? ACQUIRE_LOCK(&(M)->mutex) : 0)
 #define POSTACTION(M) { if (use_lock(M)) RELEASE_LOCK(&(M)->mutex); }
 #else /* USE_LOCKS */
+#if DEBUG 
+static DWORD threadCount;
+#ifndef PREACTION
+#define PREACTION(M) (InterlockedIncrement(&threadCount) == 1 ? (check_malloc_state(gm), 0) : (abort(),0))
+#endif  /* PREACTION */
 
+#ifndef POSTACTION
+#define POSTACTION(M) { if(InterlockedDecrement(&threadCount)!=0) { abort(); }; }
+#endif  /* POSTACTION */
+#else // DEBUG
 #ifndef PREACTION
 #define PREACTION(M) (0)
 #endif  /* PREACTION */
@@ -2811,7 +2827,7 @@ static int has_segment_link(mstate m, msegmentptr ss) {
 #ifndef POSTACTION
 #define POSTACTION(M)
 #endif  /* POSTACTION */
-
+#endif // DEBUG
 #endif /* USE_LOCKS */
 
 /*
