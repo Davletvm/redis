@@ -1160,7 +1160,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
             replicationSendNewlineToMaster();
         loadingProgress(r->processed_bytes);
         if (!server.repl_inMemoryReceive) 
-            aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT, -1);
+            processEventsWhileBlocked();
     }
 }
 

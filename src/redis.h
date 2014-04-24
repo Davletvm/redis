@@ -1083,6 +1083,7 @@ int getClientLimitClassByName(char *name);
 char *getClientLimitClassName(int cl);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
+int processEventsWhileBlocked(void);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(redisClient *c, const char *fmt, ...)

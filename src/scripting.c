@@ -453,8 +453,9 @@ void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
         if (server.lua_caller)
             aeDeleteFileEvent(server.el, server.lua_caller->fd, AE_READABLE);
     }
-    if (server.lua_timedout)
-        aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT, -1);
+
+    if (server.lua_timedout) 
+        processEventsWhileBlocked();
     if (server.lua_kill) {
         redisLog(REDIS_WARNING,"Lua script killed by user with SCRIPT KILL.");
         lua_pushstring(lua,"Script killed by user with SCRIPT KILL...");
