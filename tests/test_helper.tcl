@@ -11,13 +11,14 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
-set ::all_tests_1 {
-    unit/limits
+set ::all_tests {
+    unit/eventscripts
 }
 
 
-set ::all_tests {
+set ::all_tests_1 {
     unit/printver
+    unit/eventscripts
     unit/auth
     unit/protocol
     unit/basic
