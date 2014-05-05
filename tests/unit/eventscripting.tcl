@@ -68,6 +68,7 @@ start_server {tags {"event script"}} {
     start_server {} {
         test {Set the scripts} {
             r select 0
+            r -1 select 0
             r config set notify-keyspace-scripts A
             r setksscript  __keyspace@0__:foo __keyevent@0__:set {redis.call('set', 'ans', KEYS[1]) }
             r setksscript  __keyspace@0__:foo2 __keyevent@0__:set {redis.call('set', 'ans2', ARGV[1]) }
@@ -93,9 +94,10 @@ start_server {tags {"event script"}} {
 
         test {check replication} {
             wait_for_condition 50 100 {
+                
                 [r -1 get ans] eq {foo} && [r -1 get ans2] eq {set}
             } else {
-                fail "Mismatch of values: '[r get ans]' '[r -1 get ans]'"
+                fail "Mismatch of values: '[r -1 get ans]' '[r -1 get ans2]'"
             }
         }
     }
