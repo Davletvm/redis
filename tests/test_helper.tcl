@@ -11,14 +11,13 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
-set ::all_tests {
+set ::all_tests_1 {
     unit/eventscripting
 }
 
 
-set ::all_tests_1 {
+set ::all_tests {
     unit/printver
-    unit/eventscripting
     unit/auth
     unit/protocol
     unit/basic
@@ -46,6 +45,7 @@ set ::all_tests_1 {
     unit/pubsub
     unit/slowlog
     unit/scripting
+    unit/eventscripting
     unit/maxmemory
     unit/introspection
     unit/limits
