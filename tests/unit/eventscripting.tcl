@@ -1,80 +1,110 @@
 start_server {tags {"scripting"}} {
-    test {EVAL - Does Lua interpreter replies to our requests?} {
-        r eval {return 'hello'} 0
-    } {hello}
+    test {SETKSSCRIPT - Add script} {
+        r setksscript
+    } {0}
 
-    test {EVAL - Lua integer -> Redis protocol type conversion} {
-        r eval {return 100.5} 0
-    } {100}
+    test {SETKSSCRIPT - set a script} {
+        r setksscript * * {local x}
+    } {0}
 
-    test {EVAL - Lua string -> Redis protocol type conversion} {
-        r eval {return 'hello world'} 0
-    } {hello world}
-
-    test {EVAL - Lua true boolean -> Redis protocol type conversion} {
-        r eval {return true} 0
+    test {SETKSSCRIPT - set script with same patterns} {
+        r setksscript * * {local y}
     } {1}
 
-    test {EVAL - Lua false boolean -> Redis protocol type conversion} {
-        r eval {return false} 0
-    } {}
+    test {SETKSSCRIPT - set script with different patterns} {
+        r setksscript * a {local z}
+    } {0}
 
-    test {EVAL - Lua status code reply -> Redis protocol type conversion} {
-        r eval {return {ok='fine'}} 0
-    } {fine}
+    test {SETKSSCRIPT - count of scripts } {
+        r setksscript
+    } {2}
 
-    test {EVAL - Lua error reply -> Redis protocol type conversion} {
-        catch {
-            r eval {return {err='this is an error'}} 0
-        } e
-        set _ $e
-    } {this is an error}
+    test {SETKSSCRIPT - list of scripts} {
+        r setksscript * *
+    } {* * {local y}}
 
-    test {EVAL - Lua table -> Redis protocol type conversion} {
-        r eval {return {1,2,3,'ciao',{1,2}}} 0
-    } {1 2 3 ciao {1 2}}
+    test {SETKSSCRIPT - list of scripts2 } {
+        r setksscript * a
+    } {* * {local y} * a {local z}}
 
-    test {EVAL - Are the KEYS and ARGV arrays populated correctly?} {
-        r eval {return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}} 2 a b c d
-    } {a b c d}
+    test {SETKSSCRIPT - list of scripts3 } {
+        r setksscript * b 
+    } {* *{local y}}
 
-    test {EVAL - is Lua able to call Redis API?} {
-        r set mykey myval
-        r eval {return redis.call('get','mykey')} 0
-    } {myval}
+    test {SETKSSCRIPT - delete scripts 1} {
+        r setksscript * b {}
+        r setksscript
+    } {2}
 
-    test {EVALSHA - Can we call a SHA1 if already defined?} {
-        r evalsha 9bd632c7d33e571e9f24556ebed26c3479a87129 0
-    } {myval}
+    test {SETKSSCRIPT - delete scripts 2} {
+        r setksscript * * {}
+        r setksscript
+    } {1}
 
-    test {EVALSHA - Can we call a SHA1 in uppercase?} {
-        r evalsha 9BD632C7D33E571E9F24556EBED26C3479A87129 0
-    } {myval}
+    test {SETKSSCRIPT - delete scripts 3} {
+        r setksscript * a {}
+        r setksscript
+    } {0}
 
-    test {EVALSHA - Do we get an error on invalid SHA1?} {
-        catch {r evalsha NotValidShaSUM 0} e
-        set _ $e
-    } {NOSCRIPT*}
+    test {SETKSSCRIPT - ARGV ok} {
+        r select 0
+        r config set notify-keyspace-scripts A
+        r setksscript  __keyspace@0__:foo __keyevent@0__:set {redis.call('set', 'ans', ARGV[1]) }
+        r set foo bar
+        r get ans
+    } {set}
 
-    test {EVALSHA - Do we get an error on non defined SHA1?} {
-        catch {r evalsha ffd632c7d33e571e9f24556ebed26c3479a87130 0} e
-        set _ $e
-    } {NOSCRIPT*}
+    test {SETKSSCRIPT - KEYS ok} {
+        r select 0
+        r config set notify-keyspace-scripts A
+        r setksscript  __keyspace@0__:foo __keyevent@0__:set {redis.call('set', 'ans', KEYS[1]) }
+        r set foo bar
+        r get ans
+    } {foo}
 
-    test {EVAL - Redis integer -> Lua type conversion} {
-        r eval {
-            local foo = redis.pcall('incr','x')
-            return {type(foo),foo}
-        } 0
-    } {number 1}
 
-    test {EVAL - Redis bulk -> Lua type conversion} {
-        r set mykey myval
-        r eval {
-            local foo = redis.pcall('get','mykey')
-            return {type(foo),foo}
-        } 0
-    } {string myval}
+    
+start_server {tags {"event script"}} {
+    start_server {} {
+        test {Set the scripts} {
+            r select 0
+            r config set notify-keyspace-scripts A
+            r setksscript  __keyspace@0__:foo __keyevent@0__:set {redis.call('set', 'ans', KEYS[1]) }
+            r setksscript  __keyspace@0__:foo2 __keyevent@0__:set {redis.call('set', 'ans2', ARGV[1]) }
+        } {0}
+
+        test {Connect a slave to the main instance} {
+            r -1 slaveof [srv 0 host] [srv 0 port]
+            wait_for_condition 50 100 {
+                [s -1 role] eq {slave} &&
+                [string match {*master_link_status:up*} [r -1 info replication]]
+            } else {
+                fail "Can't turn the instance into a slave"
+            }
+        }
+
+        test {now trigger the scripts} {
+            # The server should replicate successful and unsuccessful
+            # commands as EVAL instead of EVALSHA.
+            r set foo newvalue
+            r set foo2 newvalue2
+            r get foo
+        } {newvalue}
+
+        test {check replication} {
+            wait_for_condition 50 100 {
+                [r -1 get ans] eq {foo} && [r -1 get ans2] eq {set}
+            } else {
+                fail "Mismatch of values: '[r get ans]' '[r -1 get ans]'"
+            }
+        }
+    }
+}
+
+
+
+
+if 0 {
 
     test {EVAL - Redis multi bulk -> Lua type conversion} {
         r del mylist
@@ -180,15 +210,6 @@ start_server {tags {"scripting"}} {
         set e
     } {*against a key*}
 
-    test {SCRIPTING FLUSH - is able to clear the scripts cache?} {
-        r set mykey myval
-        set v [r evalsha 9bd632c7d33e571e9f24556ebed26c3479a87129 0]
-        assert_equal $v myval
-        set e ""
-        r script flush
-        catch {r evalsha 9bd632c7d33e571e9f24556ebed26c3479a87129 0} e
-        set e
-    } {NOSCRIPT*}
 
     test {SCRIPT EXISTS - can detect already defined scripts?} {
         r eval "return 1+1" 0
@@ -315,6 +336,7 @@ start_server {tags {"scripting"}} {
     } {102}
 }
 
+if 0 {
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
 start_server {tags {"scripting"}} {
@@ -418,4 +440,6 @@ start_server {tags {"scripting repl"}} {
             set res
         } {a 1}
     }
+}
+}
 }
