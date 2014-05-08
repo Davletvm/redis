@@ -396,7 +396,7 @@ pubsubScript* addKeyspaceScript(robj* event, robj* key, robj* script, robj* sha)
 }
 
 
-void setkeyspacescriptCommand(redisClient *c)
+void setkeyspacescriptNewScript(redisClient *c)
 {
     robj * patternEvent = c->argv[1];
     robj * patternKey = c->argv[2];
@@ -408,7 +408,7 @@ void setkeyspacescriptCommand(redisClient *c)
     pub.script = script;
     pub.scriptSha = NULL;
 
-    if (!onNewEventScript(c, &pub, NULL))
+    if (sdslen(script->ptr) != 0 && !onNewEventScript(c, &pub, NULL))
     {
         return;
     }
@@ -417,12 +417,107 @@ void setkeyspacescriptCommand(redisClient *c)
     listNode * ln = listSearchKey(server.pubsub_scripts, &pub);
     if (ln != NULL) {
         listDelNode(server.pubsub_scripts, ln);
-        retval = -1;
+        retval = 1;
+        server.dirty++;
     }
-    addKeyspaceScript(patternEvent, patternKey, script, pub.scriptSha);
-    server.dirty++;
-
+    if (sdslen(script->ptr) != 0) {
+        addKeyspaceScript(patternEvent, patternKey, script, pub.scriptSha);
+        server.dirty++;
+    }
     addReplyLongLong(c, retval);
+}
+
+
+void setkeyspacescriptListScripts(redisClient * c, list * scripts)
+{
+    listNode *ln;
+    listIter li;
+
+    addReplyMultiBulkLen(c, listLength(scripts) * 3);
+    if (listLength(scripts)) {
+        listRewind(scripts, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            pubsubScript *pat = ln->value;
+            addReplyBulkCString(c, pat->patternEvent->ptr);
+            addReplyBulkCString(c, pat->patternKey->ptr);
+            addReplyBulkCString(c, pat->script->ptr);
+        }
+    }
+}
+
+void getMatchingScripts(robj *patternEvent, robj* patternKey, list ** matches)
+{
+    listNode *ln;
+    listIter li;
+
+    if (listLength(server.pubsub_scripts)) {
+        listRewind(server.pubsub_scripts, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            pubsubScript *pat = ln->value;
+
+            if (stringmatchlen((char*)pat->patternEvent->ptr,
+                (int)sdslen(pat->patternEvent->ptr),
+                (char*)patternEvent->ptr,
+                (int)sdslen(patternEvent->ptr), 0) &&
+                stringmatchlen((char*)pat->patternKey->ptr,
+                (int)sdslen(pat->patternKey->ptr),
+                (char*)patternKey->ptr,
+                (int)sdslen(patternKey->ptr), 0)) {
+                if (*matches == NULL) *matches = listCreate();
+                listAddNodeTail(*matches, pat);
+            }
+        }
+    }
+}
+
+
+
+void setkeyspacescriptListMatchingScripts(redisClient *c)
+{
+    listNode *ln;
+    listIter li;
+
+    list * answers = listCreate();
+
+    robj * patternEvent = c->argv[1];
+    robj * patternKey = c->argv[2];
+
+    getMatchingScripts(patternEvent, patternKey, &answers);
+
+    setkeyspacescriptListScripts(c, answers);
+    listRelease(answers);
+}
+
+void setkeyspacescriptClear(redisClient *c)
+{
+    int len = listLength(server.pubsub_scripts);
+    listClear(server.pubsub_scripts);
+    addReplyLongLong(c, len);
+}
+
+
+void setkeyspacescriptCommand(redisClient *c)
+{
+    if (c->argc == 4) {
+        setkeyspacescriptNewScript(c);
+    } else if (c->argc == 3) {
+        setkeyspacescriptListMatchingScripts(c);
+    } else if (c->argc == 2) {
+        if (!strcasecmp(c->argv[1]->ptr, "clear")) {
+            setkeyspacescriptClear(c);
+        } else if (!strcasecmp(c->argv[1]->ptr, "list")) {
+            setkeyspacescriptListScripts(c, server.pubsub_scripts);
+        } else {
+            addReplyErrorFormat(c,
+                "Invalid SETKSSCRIPT command or wrong number of arguments for '%s'",
+                (char*)c->argv[1]->ptr);
+        }
+    } else if (c->argc == 1) {
+        addReplyLongLong(c, listLength(server.pubsub_scripts));
+    } else {
+        addReplyErrorFormat(c,
+            "Invalid SETKSSCRIPT command or wrong number of arguments");
+    }
 }
 
 void queueEventScripts(int dbid, robj *channel1, robj* event, robj* channel2, robj* key)
@@ -431,26 +526,25 @@ void queueEventScripts(int dbid, robj *channel1, robj* event, robj* channel2, ro
     listIter li;
 
     if (listLength(server.pubsub_scripts)) {
-        listRewind(server.pubsub_scripts, &li);
+
+
         channel1 = getDecodedObject(channel1);
         event = getDecodedObject(event);
         channel2 = getDecodedObject(channel2);
         key = getDecodedObject(key);
-        while ((ln = listNext(&li)) != NULL) {
-            pubsubScript *pat = ln->value;
 
-            if (stringmatchlen((char*)pat->patternEvent->ptr,
-                (int)sdslen(pat->patternEvent->ptr),
-                (char*)channel1->ptr,
-                (int)sdslen(channel1->ptr), 0) &&
-                stringmatchlen((char*)pat->patternKey->ptr,
-                (int)sdslen(pat->patternKey->ptr),
-                (char*)channel2->ptr,
-                (int)sdslen(channel2->ptr), 0))
-            {
+        list * scripts = NULL;
+        getMatchingScripts(channel1, channel2, &scripts);
+
+        if (scripts) {
+            listRewind(scripts, &li);
+            while ((ln = listNext(&li)) != NULL) {
+                pubsubScript *pat = ln->value;
                 queueEventScript(dbid, event, key, pat);
+
             }
-        }
+            listRelease(scripts);
+        }        
         decrRefCount(channel1);
         decrRefCount(channel2);
         decrRefCount(event);
