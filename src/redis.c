@@ -2886,6 +2886,7 @@ int freeMemoryIfNeeded(void) {
     }
     mem_freed = 0;
     long long now = mstime();
+    long long when;
 
     while (mem_freed < mem_tofreeObject) {
         int j, k, keys_freed = 0;
@@ -2911,16 +2912,20 @@ int freeMemoryIfNeeded(void) {
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM)
             {
-                for (k = 0; k < server.maxmemory_samples; k++) {
+                int continues = 0;
+                for (k = 0; k <= continues; k++) {
                     deV = deE = dictGetRandomKey(dict);
                     if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM) 
                         deV = dictFind(db->dict, dictGetKey(deE));
                     if ((o = dictGetVal(deV))->protected) {
                         if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM) 
                             deE = dictFind(db->expires, dictGetKey(deV));
-                        long long when = dictGetSignedIntegerVal(deE);
-                        if (when < 0 || when > now) 
+                        if (deE) when = dictGetSignedIntegerVal(deE); else when = -1;
+                        if (when < 0 || when > now) {
+                            if (continues < server.maxmemory_samples) continues++;
+                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
+                        }
                     }
                     bestkey = dictGetKey(deV);
                 }
@@ -2929,7 +2934,8 @@ int freeMemoryIfNeeded(void) {
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
             {
-                for (k = 0; k < server.maxmemory_samples; k++) {
+                int continues = 0;
+                for (k = 0; k < server.maxmemory_samples + continues; k++) {
                     sds thiskey;
                     long thisval;
                     robj *o;
@@ -2943,9 +2949,12 @@ int freeMemoryIfNeeded(void) {
                     if ((o = dictGetVal(deV))->protected) {
                         if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU)
                             deE = dictFind(db->expires, dictGetKey(deV));
-                        long long when = dictGetSignedIntegerVal(deE);
-                        if (when < 0 || when > now)
+                        if (deE) when = dictGetSignedIntegerVal(deE); else when = -1;
+                        if (when < 0 || when > now) {
+                            if (continues < server.maxmemory_samples) continues++;
+                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
+                        }
                     }
                     thisval = estimateObjectIdleTime(o);
 
@@ -2959,7 +2968,8 @@ int freeMemoryIfNeeded(void) {
 
             /* volatile-ttl */
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_TTL) {
-                for (k = 0; k < server.maxmemory_samples; k++) {
+                int continues = 0;
+                for (k = 0; k < server.maxmemory_samples + continues; k++) {
                     sds thiskey;
                     long thisval;
 
@@ -2967,8 +2977,11 @@ int freeMemoryIfNeeded(void) {
                     deV = dictFind(db->dict, dictGetKey(deE));
                     if ((o = dictGetVal(deV))->protected) {
                         long long when = dictGetSignedIntegerVal(deE);
-                        if (when < 0 || when > now)
+                        if (when < 0 || when > now) {
+                            if (continues < server.maxmemory_samples) continues++;
+                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
+                        }
                     }
                     thiskey = dictGetKey(deE);
                     thisval = (long) dictGetVal(deE);

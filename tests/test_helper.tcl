@@ -12,7 +12,7 @@ source tests/support/test.tcl
 source tests/support/util.tcl
 
 set ::all_tests_1 {
-    unit/eventscripting
+    integration/replication-psync
 }
 
 
@@ -47,6 +47,7 @@ set ::all_tests {
     unit/scripting
     unit/eventscripting
     unit/maxmemory
+    unit/protect
     unit/introspection
     unit/limits
     unit/obuf-limits
