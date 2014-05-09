@@ -100,6 +100,8 @@ redisClient *createClient(int fd) {
     c->slave_listening_port = 0;
     c->reply = listCreate();
     c->reply_bytes = 0;
+    c->outstanding_writes = 0;
+    c->sent_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply,decrRefCountVoid);
     listSetDupMethod(c->reply,dupClientReplyValue);
@@ -698,6 +700,8 @@ void freeClient(redisClient *c) {
         close(c->fd);
     }
     listRelease(c->reply);
+    server.orphaned_outstanding_writes += c->outstanding_writes;
+    server.orphaned_sent_bytes += c->sent_bytes;
     freeClientArgv(c);
 #ifdef WIN32_IOCP
     aeWinCloseSocket(c->fd);
@@ -788,13 +792,17 @@ void freeClientsInAsyncFreeQueue(void) {
 void sendReplyBufferDone(aeEventLoop *el, int fd, void *privdata, int written) {
     aeWinSendReq *req;
     redisClient *c;
-    if (written == -1) return;
+    if (written == -1) {
+        server.orphaned_outstanding_writes--;
+        return;
+    }
     req = (aeWinSendReq *)privdata;
     c = (redisClient *)req->client;
     int offset = (int)(req->buf - (char *)req->data + written);
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
+    c->outstanding_writes--;
     if (c->bufpos == offset) {
         c->bufpos = 0;
         c->sentlen = 0;
@@ -816,8 +824,18 @@ void sendReplyListDone(aeEventLoop *el, int fd, void *privdata, int written) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
+    size_t objmem = zmalloc_size_sds(o->ptr);
     decrRefCount(o);
-    if (written == -1) return;
+    
+    if (written == -1) {
+        server.orphaned_outstanding_writes--;
+        server.orphaned_sent_bytes -= objmem;
+        return;
+    }
+
+    c->sent_bytes -= objmem;
+    c->outstanding_writes--;
+
     if (c->bufpos == 0 && listLength(c->reply) == 0) {
         c->sentlen = 0;
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
@@ -855,6 +873,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                 freeClient(c);
                 return;
             }
+            c->outstanding_writes++;
             c->sentlen += nwritten;
             totwritten += nwritten;
 
@@ -882,7 +901,9 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             totwritten += objlen;
             /* remove from list - object kept alive due to incrRefCount */
             listDelNode(c->reply,listFirst(c->reply));
+            c->outstanding_writes++;
             c->reply_bytes -= (unsigned long)objmem;
+            c->sent_bytes += (unsigned long)objmem;
             ln = listNext(&li);
         }
         /* Note that we avoid to send more than REDIS_MAX_WRITE_PER_EVENT
@@ -1318,11 +1339,13 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 void getClientsMaxBuffers(unsigned long *longest_output_list,
-                          unsigned long *biggest_input_buffer) {
+                          unsigned long *biggest_input_buffer,
+                          unsigned long *writes_outstanding,
+                          unsigned long *total_sent_bytes) {
     redisClient *c;
     listNode *ln;
     listIter li;
-    unsigned long lol = 0, bib = 0;
+    unsigned long lol = 0, bib = 0, wo = 0, tsb = 0;
 
     listRewind(server.clients,&li);
     while ((ln = listNext(&li)) != NULL) {
@@ -1330,9 +1353,13 @@ void getClientsMaxBuffers(unsigned long *longest_output_list,
 
         if (listLength(c->reply) > lol) lol = listLength(c->reply);
         if (sdslen(c->querybuf) > bib) bib = (unsigned long)sdslen(c->querybuf);
+        tsb += c->sent_bytes;
+        wo += c->outstanding_writes;
     }
     *longest_output_list = lol;
     *biggest_input_buffer = bib;
+    *writes_outstanding = wo;
+    *total_sent_bytes = tsb;
 }
 
 /* This is a helper function for getClientPeerId().
@@ -1410,7 +1437,7 @@ sds getClientInfoString(redisClient *client) {
     if (emask & AE_WRITABLE) *p++ = 'w';
     *p = '\0';
     return sdscatprintf(sdsempty(),
-        "addr=%s fd=%d name=%s age=%ld idle=%ld flags=%s db=%d sub=%d psub=%d multi=%d qbuf=%lu qbuf-free=%lu obl=%lu oll=%lu omem=%lu events=%s cmd=%s",
+        "addr=%s fd=%d name=%s age=%ld idle=%ld flags=%s db=%d sub=%d psub=%d multi=%d qbuf=%lu qbuf-free=%lu obl=%lu oll=%lu omem=%lu ow=%lu owmem=%lu events=%s cmd=%s",
         peerid,
         client->fd,
         client->name ? (char*)client->name->ptr : "",
@@ -1426,6 +1453,8 @@ sds getClientInfoString(redisClient *client) {
         (unsigned long) client->bufpos,
         (unsigned long) listLength(client->reply),
         getClientOutputBufferMemoryUsage(client),
+        (unsigned long) client->outstanding_writes,
+        client->sent_bytes,
         events,
         client->lastcmd ? client->lastcmd->name : "NULL");
 }
@@ -1579,7 +1608,7 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
 unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
     unsigned long list_item_size = sizeof(listNode)+sizeof(robj);
 
-    return c->reply_bytes + (list_item_size*listLength(c->reply));
+    return c->reply_bytes + c->sent_bytes + (list_item_size*listLength(c->reply));
 }
 
 /* Get the class of a client, used in order to enforce limits to different

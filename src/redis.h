@@ -481,6 +481,8 @@ typedef struct redisClient {
     long bulklen;           /* length of bulk argument in multi bulk request */
     list *reply;
     unsigned long reply_bytes; /* Tot bytes of objects in reply list */
+    unsigned long sent_bytes; /* Tot bytes of objects which are buffers given to socket */
+    unsigned long outstanding_writes; /* Number of socket callbacks expected */
     int sentlen;            /* Amount of bytes already sent in the current
                                buffer or object being sent. */
     time_t ctime;           /* Client creation time */
@@ -636,6 +638,8 @@ struct redisServer {
     struct redisCommand *delCommand, *multiCommand, *lpushCommand, *lpopCommand,
         *rpopCommand, *setkeyspacescriptCommand, *evalShaCommand, *evalCommand, *execCommand;
     /* Fields used only for stats */
+    unsigned long orphaned_sent_bytes; /* Tot bytes of objects which are buffers given to socket */
+    unsigned long orphaned_outstanding_writes; /* Number of socket callbacks expected */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
     long long stat_numconnections;  /* Number of connections received */
@@ -674,15 +678,9 @@ struct redisServer {
     char *aof_filename;             /* Name of the AOF file */
     int aof_no_fsync_on_rewrite;    /* Don't fsync if a rewrite is in prog. */
     int aof_rewrite_perc;           /* Rewrite AOF if % growth is > M and... */
-#ifdef _WIN32
-    long long aof_rewrite_min_size;     /* the AOF file is at least N bytes. */
-    long long aof_rewrite_base_size;    /* AOF size on latest startup or rewrite. */
-    long long aof_current_size;         /* AOF current size. */
-#else
     off_t aof_rewrite_min_size;     /* the AOF file is at least N bytes. */
     off_t aof_rewrite_base_size;    /* AOF size on latest startup or rewrite. */
     off_t aof_current_size;         /* AOF current size. */
-#endif
     int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates. */
     pid_t aof_child_pid;            /* PID if rewriting process */
     list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite. */
@@ -768,6 +766,7 @@ struct redisServer {
     unsigned long long maxvirtualmemorytarget;
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
+    int protects_used;              /* Whether any objects are protected */
     /* Blocked clients */
     unsigned int bpop_blocked_clients; /* Number of clients blocked by lists */
     list *unblocked_clients; /* list of clients to unblock before next loop */
@@ -977,7 +976,9 @@ void addReplyMultiBulkLen(redisClient *c, long length);
 void copyClientOutputBuffer(redisClient *dst, redisClient *src);
 void *dupClientReplyValue(void *o);
 void getClientsMaxBuffers(unsigned long *longest_output_list,
-                          unsigned long *biggest_input_buffer);
+                          unsigned long *biggest_input_buffer,
+                          unsigned long *writes_outstanding,
+                          unsigned long *total_sent_bytes);
 void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port);
 int getClientPeerId(redisClient *client, char *peerid, size_t peerid_len);
 sds getClientInfoString(redisClient *client);
@@ -1217,6 +1218,7 @@ pubsubScript* addEventScript(robj* event, robj* key, robj* script, robj* sha);
 void runQueuedEventScripts();
 void queueEventScript(int dbid, robj * event, robj* key, pubsubScript*script);
 void propagateMultiOrExec(int dbid, int isMulti, int flags);
+pubsubScript* addKeyspaceScript(robj* event, robj* key, robj* script, robj* sha);
 
 /* Configuration */
 void loadServerConfig(char *filename, char *options);

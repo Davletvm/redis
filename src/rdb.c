@@ -691,7 +691,7 @@ int rdbSave(char *filename) {
     rioInitWithFile(&rdb,fp);
     if (server.rdb_checksum)
         rdb.update_cksum = rioGenericUpdateChecksum;
-    snprintf(magic, sizeof(magic), "REDIS%04d", listLength(server.pubsub_scripts) ? REDIS_MSRDB_VERSION : REDIS_RDB_VERSION);
+    snprintf(magic, sizeof(magic), "REDIS%04d", listLength(server.pubsub_scripts) || server.protects_used ? REDIS_MSRDB_VERSION : REDIS_RDB_VERSION);
     if (rdbWriteRaw(&rdb,magic,9) == -1) goto werr;
 
     for (j = 0; j < server.dbnum; j++) {
@@ -1228,7 +1228,10 @@ readagain:
             decrRefCount(val);
             continue;
         }
-        if (protected) val->protected = 1;
+        if (protected) {
+            val->protected = 1;
+            server.protects_used = 1;
+        }
         /* Add the new object in the hash table */
         dbAdd(db,key,val);
 

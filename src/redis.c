@@ -1356,6 +1356,7 @@ void initServerConfig() {
     server.requirepass2 = NULL;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
+    server.protects_used = 0;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
     server.activerehashing = REDIS_DEFAULT_ACTIVE_REHASHING;
     server.notify_keyspace_events = 0;
@@ -1419,6 +1420,8 @@ void initServerConfig() {
     server.repl_no_slaves_since = time(NULL);
 
     /* Client output buffer limits */
+    server.orphaned_outstanding_writes = 0;
+    server.orphaned_sent_bytes = 0;
     for (j = 0; j < REDIS_CLIENT_LIMIT_NUM_CLASSES; j++)
         server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
@@ -2295,7 +2298,7 @@ sds genRedisInfoString(char *section) {
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
     struct rusage self_ru, c_ru;
-    unsigned long lol, bib;
+    unsigned long lol, bib, two, tsb;
     int allsections = 0, defsections = 0;
     int sections = 0;
 
@@ -2306,7 +2309,7 @@ sds genRedisInfoString(char *section) {
 
     getrusage(RUSAGE_SELF, &self_ru);
     getrusage(RUSAGE_CHILDREN, &c_ru);
-    getClientsMaxBuffers(&lol,&bib);
+    getClientsMaxBuffers(&lol,&bib, &two, &tsb);
 
     /* Server */
     if (allsections || defsections || !strcasecmp(section,"server")) {
@@ -2382,9 +2385,11 @@ sds genRedisInfoString(char *section) {
             "connected_clients:%lu\r\n"
             "client_longest_output_list:%lu\r\n"
             "client_biggest_input_buf:%lu\r\n"
+            "client_total_writes_outstanding:%lu\r\n"
+            "client_total_sent_bytes_outstanding:%lu\r\n"
             "blocked_clients:%d\r\n",
-            listLength(server.clients)-listLength(server.slaves),
-            lol, bib,
+            listLength(server.clients) - listLength(server.slaves),
+            lol, bib, two, tsb,
             server.bpop_blocked_clients);
     }
 
@@ -2880,6 +2885,8 @@ int freeMemoryIfNeeded(void) {
         mem_tofreeObject = virtualMemoryAlmostExceeded ? 1 : 0;
     }
     mem_freed = 0;
+    long long now = mstime();
+
     while (mem_freed < mem_tofreeObject) {
         int j, k, keys_freed = 0;
         robj *o;
@@ -2887,7 +2894,7 @@ int freeMemoryIfNeeded(void) {
         for (j = 0; j < server.dbnum; j++) {
             long bestval = 0; /* just to prevent warning */
             sds bestkey = NULL;
-            struct dictEntry *de;
+            struct dictEntry *deE, *deV;
             redisDb *db = server.db+j;
             dict *dict;
 
@@ -2905,14 +2912,17 @@ int freeMemoryIfNeeded(void) {
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM)
             {
                 for (k = 0; k < server.maxmemory_samples; k++) {
-                    de = dictGetRandomKey(dict);
-                    if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM) {
-                        de = dictFind(db->dict, dictGetKey(de));
-                        if ((o = dictGetVal(de))->protected) {
+                    deV = deE = dictGetRandomKey(dict);
+                    if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM) 
+                        deV = dictFind(db->dict, dictGetKey(deE));
+                    if ((o = dictGetVal(deV))->protected) {
+                        if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM) 
+                            deE = dictFind(db->expires, dictGetKey(deV));
+                        long long when = dictGetSignedIntegerVal(deE);
+                        if (when < 0 || when > now) 
                             continue;
-                        }
                     }
-                    bestkey = dictGetKey(de);
+                    bestkey = dictGetKey(deV);
                 }
             }
             /* volatile-lru and allkeys-lru policy */
@@ -2924,15 +2934,18 @@ int freeMemoryIfNeeded(void) {
                     long thisval;
                     robj *o;
 
-                    de = dictGetRandomKey(dict);
-                    thiskey = dictGetKey(de);
+                    deE = deV = dictGetRandomKey(dict);
+                    thiskey = dictGetKey(deV);
                     /* When policy is volatile-lru we need an additional lookup
                      * to locate the real key, as dict is set to db->expires. */
                     if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
-                        de = dictFind(db->dict, thiskey);
-                    o = dictGetVal(de);
-                    if (o->protected) {
-                        continue;
+                        deV = dictFind(db->dict, thiskey);
+                    if ((o = dictGetVal(deV))->protected) {
+                        if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU)
+                            deE = dictFind(db->expires, dictGetKey(deV));
+                        long long when = dictGetSignedIntegerVal(deE);
+                        if (when < 0 || when > now)
+                            continue;
                     }
                     thisval = estimateObjectIdleTime(o);
 
@@ -2950,13 +2963,15 @@ int freeMemoryIfNeeded(void) {
                     sds thiskey;
                     long thisval;
 
-                    de = dictGetRandomKey(dict);
-                    struct dictEntry * de2 = dictFind(db->dict, dictGetKey(de));
-                    if ((o = dictGetVal(de2))->protected) {
-                        continue;
+                    deE = dictGetRandomKey(dict);
+                    deV = dictFind(db->dict, dictGetKey(deE));
+                    if ((o = dictGetVal(deV))->protected) {
+                        long long when = dictGetSignedIntegerVal(deE);
+                        if (when < 0 || when > now)
+                            continue;
                     }
-                    thiskey = dictGetKey(de);
-                    thisval = (long) dictGetVal(de);
+                    thiskey = dictGetKey(deE);
+                    thisval = (long) dictGetVal(deE);
 
                     /* Expire sooner (minor expire unix timestamp) is better
                      * candidate for deletion */
@@ -3018,6 +3033,7 @@ void protectkeyCommand(redisClient *c) {
         if (val != NULL && !val->protected){
             server.dirty++;
             val->protected = 1;
+            server.protects_used = 1;
             protected++;
         }
         

@@ -175,6 +175,7 @@ long long emptyDb(void(callback)(void*)) {
         dictEmpty(server.db[j].dict,callback);
         dictEmpty(server.db[j].expires,callback);
     }
+    server.protects_used = 0;
     return removed;
 }
 

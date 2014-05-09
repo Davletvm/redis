@@ -371,11 +371,6 @@ void debugCommand(redisClient *c) {
     {
         server.active_expire_enabled = atoi(c->argv[2]->ptr);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"set-active-expire") &&
-               c->argc == 3)
-    {
-        server.active_expire_enabled = atoi(c->argv[2]->ptr);
-        addReply(c,shared.ok);
 #ifdef _WIN32
     } else if (!strcasecmp(c->argv[1]->ptr,"flushload")) {
         emptyDb(NULL);
@@ -385,6 +380,11 @@ void debugCommand(redisClient *c) {
         }
         redisLog(REDIS_WARNING,"DB reloaded by DEBUG flushload");
         addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "orphan")) {
+        addReplyStatusFormat(c,
+            "ow:%ld, osb:%ld",
+            server.orphaned_outstanding_writes,
+            server.orphaned_sent_bytes);
 #endif
     } else {
         addReplyErrorFormat(c, "Unknown DEBUG subcommand or wrong number of arguments for '%s'",

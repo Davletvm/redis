@@ -467,6 +467,8 @@ struct redisClient *createFakeClient(void) {
     c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
     c->reply = listCreate();
     c->reply_bytes = 0;
+    c->sent_bytes = 0;
+    c->outstanding_writes = 0;
     c->obuf_soft_limit_reached_time = 0;
     c->watched_keys = listCreate();
     listSetFreeMethod(c->reply,decrRefCountVoid);
