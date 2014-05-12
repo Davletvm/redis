@@ -414,7 +414,7 @@ int rdbSaveDoubleValue(rio *rdb, double val) {
 
 /* For information about double serialization check rdbSaveDoubleValue() */
 int rdbLoadDoubleValue(rio *rdb, double *val) {
-    char buf[128];
+    char buf[256];
     unsigned char len;
 #ifdef _WIN32
     double scannedVal = 0;
