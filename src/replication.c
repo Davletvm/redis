@@ -794,7 +794,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
 
 /* ----------------------------------- SLAVE -------------------------------- */
 
-void clearInMemoryReplBuffers()
+void clearInMemoryReplBuffersSlave()
 {
     if (server.repl_inMemory)
     {
@@ -805,7 +805,7 @@ void clearInMemoryReplBuffers()
     }
 }
 
-void initInMemoryBuffers()
+void initInMemoryBuffersSlave()
 {
     if (!server.repl_inMemory) {
         server.repl_inMemory = zcalloc(sizeof(redisInMemoryRepl));
@@ -815,12 +815,31 @@ void initInMemoryBuffers()
     }
 }
 
+void initInMemoryBuffersMaster(void* buf1, void* buf2, ssize_t size)
+{
+    if (!server.repl_inMemory) {
+        server.repl_inMemory = zcalloc(sizeof(redisInMemoryRepl));
+        server.repl_inMemory->buffer[0] = buf1;
+        server.repl_inMemory->buffer[1] = buf2;
+        server.repl_inMemory->bufferSize = size;
+    }
+}
+
+void clearInMemoryBufferMaster()
+{
+    if (server.repl_inMemory)
+    {
+        zfree(server.repl_inMemory);
+        server.repl_inMemory = NULL;
+    }
+}
+
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master */
 void replicationAbortSyncTransfer(void) {
     redisAssert(server.repl_state == REDIS_REPL_TRANSFER);
 
-    clearInMemoryReplBuffers();
+    clearInMemoryReplBuffersSlave();
     aeDeleteFileEvent(server.el,server.repl_transfer_s,AE_READABLE);
 #ifdef WIN32_IOCP
     aeWinCloseSocket(server.repl_transfer_s);
@@ -896,7 +915,7 @@ int finishedReadingBulkPayload()
             return REDIS_ERR;
         }
     } else {
-        clearInMemoryReplBuffers();
+        clearInMemoryReplBuffersSlave();
     }
     /* Final setup of the connected slave <- master link */
     zfree(server.repl_transfer_tmpfile);
@@ -944,7 +963,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     off_t left;
     char * buf;
 
-    initInMemoryBuffers();
+    initInMemoryBuffersSlave();
     if (server.repl_inMemory->shortcutBuffer) {
         readlen = server.repl_inMemory->shortcutBufferSize;
         buf = server.repl_inMemory->shortcutBuffer;

@@ -22,6 +22,7 @@
 
 #include "..\redis.h"
 #include "..\rdb.h"
+#include "Win32_QFork_impl.h"
 
 void SetupGlobals(LPVOID globalData, size_t globalDataSize, uint32_t dictHashSeed)
 {
@@ -57,4 +58,19 @@ int do_aofSave(char* filename)
 
     return REDIS_OK;
 }
+
+int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2])
+{
+#ifndef NO_QFORKIMPL
+    server.rdb_child_pid = GetCurrentProcessId();
+    if (rdbSave(NULL) != REDIS_OK) {
+        redisLog(REDIS_WARNING, "rdbSave failed in qfork: %s", strerror(errno));
+        return REDIS_ERR;
+    }
+#endif
+    return REDIS_OK;
+
+}
+
+
 

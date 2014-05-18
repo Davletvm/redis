@@ -22,6 +22,14 @@
 
 #pragma once
 
+
+#define InMemoryMasterBufferSize  (16 * 1024)
+typedef struct InMemoryBuffersControl {
+    char buffer[2][InMemoryMasterBufferSize];
+    int size[2];
+} InMemoryBuffersControl;
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +37,7 @@ extern "C" {
     void SetupGlobals(LPVOID globalData, size_t globalDataSize, unsigned __int32 dictHashKey);
     int do_rdbSave(char* filename);
     int do_aofSave(char* filename);
+    int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2]);
 
 #ifdef __cplusplus
 }

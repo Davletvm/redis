@@ -120,7 +120,7 @@ How the parent invokes the QFork process:
 #endif
 
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
-const int cMaxBlocks = 1 << 16;                                  // 64KB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
+const int cMaxBlocks = 1 << 16;                                  // 64MB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
 const char* qforkFlag = "--QFork";
 const int cDeadForkWait = 30000;
@@ -129,11 +129,14 @@ const size_t pageSize = 4096;
 const char* maxvirtualmemoryflag = "maxvirtualmemory";
 
 
+
 typedef enum BlockState {
     bsINVALID = 0,
     bsUNMAPPED = 1,   
     bsMAPPED = 2
 }BlockState;
+
+
 
 struct QForkControl {
     HANDLE heapMemoryMapFile;
@@ -149,13 +152,20 @@ struct QForkControl {
     HANDLE operationComplete;
     HANDLE operationFailed;
     HANDLE terminateForkedProcess;
-    
+
+    HANDLE inMemoryBuffersControlFile;
+    HANDLE inMemoryBuffersControlHandle;
+    InMemoryBuffersControl * InMemoryBuffersControl;
+    HANDLE doSendBuffer[2];
+    HANDLE doneSentBuffer[2];
+
     // global data pointers to be passed to the forked process
     QForkBeginInfo globalData;
 };
 
 QForkControl* g_pQForkControl = NULL;
 HANDLE g_hQForkControlFileMap = NULL;
+
 HANDLE g_hForkedProcess = NULL;
 SIZE_T g_win64maxmemory = 0;
 SIZE_T g_win64maxvirtualmemory = 0;
@@ -215,6 +225,31 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             g_pQForkControl->heapStart,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
 
+        SmartFileMapHandle sfmhMapFileInMemoryControl(
+            g_pQForkControl->inMemoryBuffersControlFile,
+            PAGE_READWRITE,
+            HIDWORD(sizeof(InMemoryBuffersControl)), LODWORD(sizeof(InMemoryBuffersControl)),
+            string("QForkSlaveInit: Could not open file mapping object in slave"));
+        g_pQForkControl->inMemoryBuffersControlHandle = sfmhMapFile;
+
+        SmartFileView<InMemoryBuffersControl> sfvInMemory(
+            g_pQForkControl->inMemoryBuffersControlHandle,
+            FILE_MAP_ALL_ACCESS,
+            0, 0, 0,
+            string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
+        g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
+
+        SmartHandle dupSendBuffer0(shParent, sfvMasterQForkControl->doSendBuffer[0]);
+        g_pQForkControl->doSendBuffer[0] = dupSendBuffer0;
+        SmartHandle dupSendBuffer1(shParent, sfvMasterQForkControl->doSendBuffer[1]);
+        g_pQForkControl->doSendBuffer[1] = dupSendBuffer1;
+        SmartHandle dupSentBuffer0(shParent, sfvMasterQForkControl->doneSentBuffer[0]);
+        g_pQForkControl->doSendBuffer[0] = dupSentBuffer0;
+        SmartHandle dupSentBuffer1(shParent, sfvMasterQForkControl->doneSentBuffer[1]);
+        g_pQForkControl->doSendBuffer[1] = dupSentBuffer1;
+
+
+
         if (dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity) == 0) {
             throw std::system_error(
                 GetLastError(),
@@ -237,13 +272,15 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 
         // copy redis globals into fork process
         SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
-
+        
         // execute requiested operation
         int exitCode;
         if (g_pQForkControl->typeOfOperation == OperationType::otRDB) {
             exitCode = do_rdbSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
             exitCode = do_aofSave(g_pQForkControl->globalData.filename);
+        } else if (g_pQForkControl->typeOfOperation == OperationType::otRDBINMEMORY) {
+            exitCode = do_rdbSaveInMemory(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
             throw runtime_error("unexpected operation type");
         }
@@ -259,17 +296,17 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         return TRUE;
     }
     catch(std::system_error syserr) {
-        g_pQForkControl = NULL;
         if(g_pQForkControl != NULL) {
             if(g_pQForkControl->operationFailed != NULL) {
                 SetEvent(g_pQForkControl->operationFailed);
             }
+            g_pQForkControl = NULL;
         }
         return FALSE;
     }
     catch(std::runtime_error runerr) {
-        g_pQForkControl = NULL;
         SetEvent(g_pQForkControl->operationFailed);
+        g_pQForkControl = NULL;
         return FALSE;
     }
     return FALSE;
@@ -304,7 +341,33 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 "QForkMasterInit: MapViewOfFile failed");
         }
 
-    
+        g_pQForkControl->inMemoryBuffersControlFile = CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            NULL,
+            PAGE_READWRITE,
+            0, sizeof(InMemoryBuffersControl),
+            NULL);
+        if (g_hQForkControlFileMap == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: CreateFileMapping failed");
+        }
+
+        g_pQForkControl->InMemoryBuffersControl = (InMemoryBuffersControl*)MapViewOfFile(
+            g_pQForkControl->inMemoryBuffersControlFile,
+            FILE_MAP_ALL_ACCESS,
+            0, 0,
+            0);
+        if (g_pQForkControl->inMemoryBuffersControlHandle == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: MapViewOfFile failed");
+        }
+        g_pQForkControl->InMemoryBuffersControl->size[0] = 0;
+        g_pQForkControl->InMemoryBuffersControl->size[1] = 0;
+
         // This must be called only once per process! Calling it more times than that will not recreate existing 
         // section, and dlmalloc will ultimately fail with an access violation. Once is good.
         if (dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity) == 0) {
@@ -459,6 +522,34 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         }
         g_pQForkControl->terminateForkedProcess = CreateEvent(NULL,TRUE,FALSE,NULL);
         if (g_pQForkControl->terminateForkedProcess == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: CreateEvent failed.");
+        }
+        g_pQForkControl->doSendBuffer[0] = CreateEvent(NULL, TRUE, FALSE, NULL);
+        if (g_pQForkControl->doSendBuffer[0] == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: CreateEvent failed.");
+        }
+        g_pQForkControl->doSendBuffer[1] = CreateEvent(NULL, TRUE, FALSE, NULL);
+        if (g_pQForkControl->doSendBuffer[1] == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: CreateEvent failed.");
+        }
+        g_pQForkControl->doneSentBuffer[0] = CreateEvent(NULL, TRUE, FALSE, NULL);
+        if (g_pQForkControl->doneSentBuffer[0] == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QForkMasterInit: CreateEvent failed.");
+        }
+        g_pQForkControl->doneSentBuffer[1] = CreateEvent(NULL, TRUE, FALSE, NULL);
+        if (g_pQForkControl->doneSentBuffer[1] == NULL) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),

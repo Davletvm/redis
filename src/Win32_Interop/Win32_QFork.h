@@ -31,7 +31,8 @@ extern "C" {
 typedef enum operationType {
     otINVALID = 0,
     otRDB = 1,
-    otAOF = 2
+    otAOF = 2,
+    otRDBINMEMORY = 3,
 } OperationType;
 
 typedef enum operationStatus {
