@@ -953,14 +953,12 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         buf = server.repl_inMemory->buffer[server.repl_inMemory->activeBufferWrite] + server.repl_inMemory->posBufferWritten[server.repl_inMemory->activeBufferWrite];
     }
     redisAssert(readlen > 0);
-    server.repl_inMemory->lastRead = nread = read(fd, buf, readlen);
+    nread = read(fd, buf, readlen);
     if (nread <= 0) {
-        if (server.repl_inMemory->required) {
-            errno = WSAGetLastError();
-            redisLog(REDIS_WARNING, "I/O error %d (left at least %d) trying to sync in memory with MASTER: %s",
-                errno, server.repl_inMemory->required,
-                (nread == -1) ? wsa_strerror(errno) : "connection lost");
-        }
+        errno = WSAGetLastError();
+        redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
+            errno,
+            (nread == -1) ? wsa_strerror(errno) : "connection lost");
         replicationAbortSyncTransfer();
         return;
     }
@@ -1000,7 +998,7 @@ int readSyncBulkPayloadInMemory(int fd)
     }
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
     if (rdbLoad(NULL) != REDIS_OK) {
-        redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from disk");
+        redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         replicationAbortSyncTransfer();
         return REDIS_ERR;
     }

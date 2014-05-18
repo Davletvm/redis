@@ -1145,16 +1145,23 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
 
 int rdbLoad(char *filename) {
     uint32_t dbid;
-    int type, rdbver;
+    int type, rdbver, calledStartLoading = 0;
     redisDb *db = server.db+0;
     char buf[1024];
     long long expiretime, now = mstime();
     FILE *fp;
     rio rdb;
 
-    if ((fp = fopen(filename,"r")) == NULL) return REDIS_ERR;
+    if (!filename) {
+        
+        rioInitWithMemory(&rdb, server.repl_inMemory);
+        fp = NULL;
+    } else {
 
-    rioInitWithFile(&rdb,fp);
+        if ((fp = fopen(filename, "r")) == NULL) return REDIS_ERR;
+
+        rioInitWithFile(&rdb, fp);
+    }
     rdb.update_cksum = rdbLoadProgressCallback;
     rdb.max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
@@ -1174,6 +1181,7 @@ int rdbLoad(char *filename) {
     }
 
     startLoading(fp);
+    calledStartLoading = 1;
     while(1) {
         robj *key, *val;
         expiretime = -1;
@@ -1272,9 +1280,12 @@ readagain:
     stopLoading();
     return REDIS_OK;
 
-eoferr: /* unexpected end of file is handled here with a fatal exit */
+eoferr: /* unexpected end of file is handled here with a fatal exit, unless we are reading from the network, in which case we just return error */
     redisLog(REDIS_WARNING,"Short read or OOM loading DB. Unrecoverable error, aborting now.");
-    exit(1);
+    if (filename)
+        exit(1);
+    else if (calledStartLoading)
+        stopLoading();
     return REDIS_ERR; /* Just to avoid warning */
 }
 

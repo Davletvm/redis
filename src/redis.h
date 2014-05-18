@@ -600,9 +600,8 @@ typedef struct redisInMemoryRepl {
     int activeBufferWrite;
     char * shortcutBuffer;
     ssize_t shortcutBufferSize;
-    ssize_t lastRead;
-    ssize_t required;
     off_t totalRead;
+    int abortRequested;
 } redisInMemoryRepl;
 
 

@@ -106,24 +106,53 @@ static off_t rioFileTell(rio *r) {
     return (off_t)ftello(r->io.file.fp);
 }
 
+static void PollForRead()
+{
+    aeProcessEvents(server.el, AE_FILE_EVENTS);
+}
+
+static void PollForWrite()
+{
+}
+
+
 /* Returns 1 or 0 for success/failure. */
 static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
-    redisAssert(0);
+    ssize_t leftInActiveBuffer;
+    size_t lenToCopy;
+    redisInMemoryRepl * inm = r->io.memory.inMemory;
+    while (server.repl_inMemory && !inm->abortRequested) {
+        leftInActiveBuffer = inm->bufferSize - inm->posBufferWritten[inm->activeBufferWrite];
+        if (leftInActiveBuffer == 0) {
+            server.repl_inMemory->activeBufferWrite++;
+            if (server.repl_inMemory->activeBufferWrite == 2) server.repl_inMemory->activeBufferWrite = 0;
+        }
+        leftInActiveBuffer = inm->bufferSize - inm->posBufferWritten[inm->activeBufferWrite];
+        if (leftInActiveBuffer == 0) {
+            PollForWrite();
+            continue;
+        }
+        if (len > leftInActiveBuffer)
+            lenToCopy = leftInActiveBuffer;
+        else
+            lenToCopy = len;
+        memcpy(inm->buffer[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite], buf, lenToCopy);
+        len -= lenToCopy;
+        inm->posBufferWritten[inm->activeBufferWrite] += lenToCopy;
+        buf = ((char*)buf) + lenToCopy;
+        if (len == 0) return 1;
+    }
     return 0;
 }
 
 
-static void PollForMore()
-{
-    aeProcessEvents(server.el, AE_FILE_EVENTS);
-}
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryRepl * inm = r->io.memory.inMemory;
-    while (1) {
+    while (server.repl_inMemory && !inm->abortRequested) {
         leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
         if (leftInActiveBuffer == 0) {
             server.repl_inMemory->activeBufferRead++;
@@ -150,12 +179,14 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
             inm->shortcutBuffer = buf;
             inm->shortcutBufferSize = len;
         }
-        PollForMore();
+        PollForRead();
+        if (!server.repl_inMemory) return 0;
         if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {
             inm->shortcutBuffer = NULL;
             return 1;
         }
     }
+    return 0;
 }
 
 /* Returns read/write position in file. */
