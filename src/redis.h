@@ -591,6 +591,21 @@ typedef struct redisOpArray {
     int numops;
 } redisOpArray;
 
+typedef struct redisInMemoryRepl {
+    char * buffer[2];
+    ssize_t bufferSize;
+    ssize_t posBufferRead[2];
+    ssize_t posBufferWritten[2];
+    int activeBufferRead;
+    int activeBufferWrite;
+    char * shortcutBuffer;
+    ssize_t shortcutBufferSize;
+    ssize_t lastRead;
+    ssize_t required;
+    off_t totalRead;
+} redisInMemoryRepl;
+
+
 /*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
@@ -748,6 +763,7 @@ struct redisServer {
     int repl_transfer_s;     /* Slave -> Master SYNC socket */
     int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
+    redisInMemoryRepl * repl_inMemory;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */

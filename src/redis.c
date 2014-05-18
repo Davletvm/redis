@@ -1409,6 +1409,7 @@ void initServerConfig() {
     server.repl_disable_tcp_nodelay = REDIS_DEFAULT_REPL_DISABLE_TCP_NODELAY;
     server.slave_priority = REDIS_DEFAULT_SLAVE_PRIORITY;
     server.master_repl_offset = 0;
+    server.repl_inMemory = NULL;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;

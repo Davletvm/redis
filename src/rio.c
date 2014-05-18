@@ -106,6 +106,64 @@ static off_t rioFileTell(rio *r) {
     return (off_t)ftello(r->io.file.fp);
 }
 
+/* Returns 1 or 0 for success/failure. */
+static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
+    redisAssert(0);
+    return 0;
+}
+
+
+static void PollForMore()
+{
+    aeProcessEvents(server.el, AE_FILE_EVENTS);
+}
+
+/* Returns 1 or 0 for success/failure. */
+static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
+    ssize_t leftInActiveBuffer;
+    size_t lenToCopy;
+    redisInMemoryRepl * inm = r->io.memory.inMemory;
+    while (1) {
+        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
+        if (leftInActiveBuffer == 0) {
+            server.repl_inMemory->activeBufferRead++;
+            if (server.repl_inMemory->activeBufferRead == 2) server.repl_inMemory->activeBufferRead = 0;
+        }
+        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
+        if (leftInActiveBuffer > 0) {
+            if (len > leftInActiveBuffer)
+                lenToCopy = leftInActiveBuffer;
+            else
+                lenToCopy = len;
+            memcpy(buf, inm->buffer[inm->activeBufferRead], lenToCopy);
+            inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
+            buf = ((char*)buf) + lenToCopy;
+            len -= lenToCopy;
+            leftInActiveBuffer -= lenToCopy;
+            if (leftInActiveBuffer == 0) {
+                inm->posBufferRead[inm->activeBufferRead] = inm->posBufferWritten[inm->activeBufferRead] = 0;
+            }
+            if (len == 0) return 1;
+        }
+        redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
+        if (len > inm->bufferSize) {
+            inm->shortcutBuffer = buf;
+            inm->shortcutBufferSize = len;
+        }
+        PollForMore();
+        if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {
+            inm->shortcutBuffer = NULL;
+            return 1;
+        }
+    }
+}
+
+/* Returns read/write position in file. */
+static off_t rioMemoryTell(rio *r) {
+    return r->io.memory.inMemory->totalRead;
+}
+
+
 static const rio rioBufferIO = {
     rioBufferRead,
     rioBufferWrite,
@@ -128,6 +186,18 @@ static const rio rioFileIO = {
     { { NULL, 0 } } /* union for io-specific vars */
 };
 
+static const rio rioMemoryIO = {
+    rioMemoryRead,
+    rioMemoryWrite,
+    rioMemoryTell,
+    NULL,           /* update_checksum */
+    0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
+    { { NULL, 0 } } /* union for io-specific vars */
+};
+
+
 void rioInitWithFile(rio *r, FILE *fp) {
     *r = rioFileIO;
     r->io.file.fp = fp;
@@ -139,6 +209,11 @@ void rioInitWithBuffer(rio *r, sds s) {
     *r = rioBufferIO;
     r->io.buffer.ptr = s;
     r->io.buffer.pos = 0;
+}
+
+void rioInitWithMemory(rio *r, redisInMemoryRepl * inMemory) {
+    *r = rioMemoryIO;
+    r->io.memory.inMemory = inMemory;
 }
 
 /* This function can be installed both in memory and file streams when checksum
