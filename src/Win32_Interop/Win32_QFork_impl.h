@@ -38,6 +38,8 @@ extern "C" {
     int do_rdbSave(char* filename);
     int do_aofSave(char* filename);
     int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2]);
+    int SignalEvent(HANDLE events[], int which);
+    int ResetSignaledEvent(HANDLE events[], int which);
 
 #ifdef __cplusplus
 }

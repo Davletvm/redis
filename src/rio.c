@@ -111,35 +111,66 @@ static void PollForRead()
     aeProcessEvents(server.el, AE_FILE_EVENTS);
 }
 
-static void PollForWrite()
+static void SendActiveBuffer(rio * r)
 {
+    ResetEvent(r->io.memory.inMemory->master.sentDoneEvents[r->io.memory.inMemory->master.activeBuffer]);
+    SetEvent(r->io.memory.inMemory->master.doSendEvents[r->io.memory.inMemory->master.activeBuffer]);
 }
 
+static int WaitForFreeBuffer(rio * r)
+{
+    redisInMemoryRepl * inm = r->io.memory.inMemory;
+    WaitForMultipleObjects(2, inm->master.sentDoneEvents, FALSE, INFINITE);
+    DWORD rval = WaitForSingleObject(inm->master.sentDoneEvents[0], 0);
+    if (rval == WAIT_OBJECT_0) {
+        ResetEvent(inm->master.sentDoneEvents[0]);
+        inm->master.sizeFilled[0] = 0;
+    } else if (rval != WAIT_TIMEOUT) {
+        return 0;
+    }
+    rval = WaitForSingleObject(inm->master.sentDoneEvents[1], 0);
+    if (rval == WAIT_OBJECT_0) {
+        ResetEvent(inm->master.sentDoneEvents[1]);
+        inm->master.sizeFilled[1] = 0;
+    } else if (rval != WAIT_TIMEOUT) {
+        return 0;
+    }
+    return !inm->master.sizeFilled[0] || !inm->master.sizeFilled[1];
+}
 
-/* Returns 1 or 0 for success/failure. */
+/* Returns 1 or 0 for success/failure.
+    This is only called by the forked child
+    It writes to all r members.
+    The parent only reads the r members, and only
+    when signaled to do so.
+*/
 static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryRepl * inm = r->io.memory.inMemory;
     while (server.repl_inMemory && !inm->abortRequested) {
-        leftInActiveBuffer = inm->bufferSize - inm->posBufferWritten[inm->activeBufferWrite];
+        leftInActiveBuffer = inm->bufferSize - inm->master.sizeFilled[inm->master.activeBuffer];
         if (leftInActiveBuffer == 0) {
-            server.repl_inMemory->activeBufferWrite++;
-            if (server.repl_inMemory->activeBufferWrite == 2) server.repl_inMemory->activeBufferWrite = 0;
+            server.repl_inMemory->master.activeBuffer++;
+            if (server.repl_inMemory->master.activeBuffer == 2) server.repl_inMemory->master.activeBuffer = 0;
         }
-        leftInActiveBuffer = inm->bufferSize - inm->posBufferWritten[inm->activeBufferWrite];
+        leftInActiveBuffer = inm->bufferSize - inm->master.sizeFilled[inm->master.activeBuffer];
         if (leftInActiveBuffer == 0) {
-            PollForWrite();
+            if (!WaitForFreeBuffer(r))
+                return 0;
             continue;
         }
         if (len > leftInActiveBuffer)
             lenToCopy = leftInActiveBuffer;
         else
             lenToCopy = len;
-        memcpy(inm->buffer[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite], buf, lenToCopy);
+        memcpy(inm->buffer[inm->master.activeBuffer] + inm->master.sizeFilled[inm->master.activeBuffer], buf, lenToCopy);
         len -= lenToCopy;
-        inm->posBufferWritten[inm->activeBufferWrite] += lenToCopy;
+        leftInActiveBuffer -= lenToCopy;
+        inm->master.sizeFilled[inm->master.activeBuffer] += lenToCopy;
         buf = ((char*)buf) + lenToCopy;
+        if (leftInActiveBuffer == 0)
+            SendActiveBuffer(r);
         if (len == 0) return 1;
     }
     return 0;
@@ -153,36 +184,36 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
     size_t lenToCopy;
     redisInMemoryRepl * inm = r->io.memory.inMemory;
     while (server.repl_inMemory && !inm->abortRequested) {
-        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
+        leftInActiveBuffer = inm->slave.posBufferWritten[inm->slave.activeBufferRead] - inm->slave.posBufferRead[inm->slave.activeBufferRead];
         if (leftInActiveBuffer == 0) {
-            server.repl_inMemory->activeBufferRead++;
-            if (server.repl_inMemory->activeBufferRead == 2) server.repl_inMemory->activeBufferRead = 0;
+            server.repl_inMemory->slave.activeBufferRead++;
+            if (server.repl_inMemory->slave.activeBufferRead == 2) server.repl_inMemory->slave.activeBufferRead = 0;
         }
-        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
+        leftInActiveBuffer = inm->slave.posBufferWritten[inm->slave.activeBufferRead] - inm->slave.posBufferRead[inm->slave.activeBufferRead];
         if (leftInActiveBuffer > 0) {
             if (len > leftInActiveBuffer)
                 lenToCopy = leftInActiveBuffer;
             else
                 lenToCopy = len;
-            memcpy(buf, inm->buffer[inm->activeBufferRead], lenToCopy);
-            inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
+            memcpy(buf, inm->buffer[inm->slave.activeBufferRead], lenToCopy);
+            inm->slave.posBufferRead[inm->slave.activeBufferRead] += lenToCopy;
             buf = ((char*)buf) + lenToCopy;
             len -= lenToCopy;
             leftInActiveBuffer -= lenToCopy;
             if (leftInActiveBuffer == 0) {
-                inm->posBufferRead[inm->activeBufferRead] = inm->posBufferWritten[inm->activeBufferRead] = 0;
+                inm->slave.posBufferRead[inm->slave.activeBufferRead] = inm->slave.posBufferWritten[inm->slave.activeBufferRead] = 0;
             }
             if (len == 0) return 1;
         }
-        redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
+        redisAssert(inm->slave.posBufferWritten[inm->slave.activeBufferRead] == inm->slave.posBufferRead[inm->slave.activeBufferRead]);
         if (len > inm->bufferSize) {
-            inm->shortcutBuffer = buf;
-            inm->shortcutBufferSize = len;
+            inm->slave.shortcutBuffer = buf;
+            inm->slave.shortcutBufferSize = len;
         }
         PollForRead();
         if (!server.repl_inMemory) return 0;
-        if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {
-            inm->shortcutBuffer = NULL;
+        if (inm->slave.shortcutBuffer && inm->slave.shortcutBufferSize == 0) {
+            inm->slave.shortcutBuffer = NULL;
             return 1;
         }
     }

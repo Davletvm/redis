@@ -672,23 +672,28 @@ int rdbSave(char *filename) {
     char magic[10];
     int j;
     long long now = mstime();
-    FILE *fp;
+    FILE *fp = NULL;
     rio rdb;
     uint64_t cksum;
 
-    snprintf(tmpfile,256,"temp-%d.rdb", (int) getpid());
-#ifdef _WIN32
-    fp = fopen(tmpfile,"wb");
-#else
-    fp = fopen(tmpfile,"w");
-#endif
-    if (!fp) {
-        redisLog(REDIS_WARNING, "Failed opening .rdb for saving: %s",
-            strerror(errno));
-        return REDIS_ERR;
-    }
+    if (filename) {
 
-    rioInitWithFile(&rdb,fp);
+        snprintf(tmpfile, 256, "temp-%d.rdb", (int)getpid());
+#ifdef _WIN32
+        fp = fopen(tmpfile, "wb");
+#else
+        fp = fopen(tmpfile,"w");
+#endif
+        if (!fp) {
+            redisLog(REDIS_WARNING, "Failed opening .rdb for saving: %s",
+                strerror(errno));
+            return REDIS_ERR;
+        }
+
+        rioInitWithFile(&rdb, fp);
+    } else {
+        rioInitWithMemory(&rdb, server.repl_inMemory);
+    }
     if (server.rdb_checksum)
         rdb.update_cksum = rioGenericUpdateChecksum;
     snprintf(magic, sizeof(magic), "REDIS%04d", listLength(server.pubsub_scripts) || server.protects_used ? REDIS_MSRDB_VERSION : REDIS_RDB_VERSION);
@@ -749,28 +754,38 @@ int rdbSave(char *filename) {
     memrev64ifbe(&cksum);
     rioWrite(&rdb,&cksum,8);
 
-    /* Make sure data will not remain on the OS's output buffers */
-    fflush(fp);
-    fsync(fileno(fp));
-    fclose(fp);
+    if (filename) {
 
-    /* Use RENAME to make sure the DB file is changed atomically only
-     * if the generate DB file is ok. */
-    if (rename(tmpfile,filename) == -1) {
-        redisLog(REDIS_WARNING,"Error moving temp DB file on the final destination: %s", strerror(errno));
-        unlink(tmpfile);
-        return REDIS_ERR;
+        /* Make sure data will not remain on the OS's output buffers */
+        fflush(fp);
+        fsync(fileno(fp));
+        fclose(fp);
+
+        /* Use RENAME to make sure the DB file is changed atomically only
+         * if the generate DB file is ok. */
+        if (rename(tmpfile, filename) == -1) {
+            redisLog(REDIS_WARNING, "Error moving temp DB file on the final destination: %s", strerror(errno));
+            unlink(tmpfile);
+            return REDIS_ERR;
+        }
+        redisLog(REDIS_NOTICE, "DB saved on disk");
+        server.dirty = 0;
+        server.lastsave = time(NULL);
+        server.lastbgsave_status = REDIS_OK;
+    } else {
+        redisLog(REDIS_NOTICE, "DB written to memory");
     }
-    redisLog(REDIS_NOTICE,"DB saved on disk");
-    server.dirty = 0;
-    server.lastsave = time(NULL);
-    server.lastbgsave_status = REDIS_OK;
+
     return REDIS_OK;
 
 werr:
-    fclose(fp);
-    unlink(tmpfile);
-    redisLog(REDIS_WARNING,"Write error saving DB on disk: %s", strerror(errno));
+    if (filename) {
+        fclose(fp);
+        unlink(tmpfile);
+        redisLog(REDIS_WARNING, "Write error saving DB on disk: %s", strerror(errno));
+    } else {
+        redisLog(REDIS_WARNING, "Write error saving DB into memory: %s", strerror(errno));
+    }
     if (di) dictReleaseIterator(di);
     return REDIS_ERR;
 }

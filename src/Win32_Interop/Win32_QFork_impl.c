@@ -62,10 +62,38 @@ int do_aofSave(char* filename)
 int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2])
 {
 #ifndef NO_QFORKIMPL
+    redisInMemoryRepl inMemoryRepl;
+    memset(&inMemoryRepl, 0, sizeof(inMemoryRepl));
+    inMemoryRepl.buffer[0] = buffers->buffer[0];
+    inMemoryRepl.buffer[1] = buffers->buffer[1];
+    inMemoryRepl.bufferSize = InMemoryMasterBufferSize;
+    inMemoryRepl.master.doSendEvents = doSend;
+    inMemoryRepl.master.sentDoneEvents = doneSent;
+    inMemoryRepl.master.sizeFilled = buffers->size;
+    inMemoryRepl.master.sizeFilled[0] = 0;
+    inMemoryRepl.master.sizeFilled[1] = 0;
+    server.repl_inMemory = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
     if (rdbSave(NULL) != REDIS_OK) {
         redisLog(REDIS_WARNING, "rdbSave failed in qfork: %s", strerror(errno));
         return REDIS_ERR;
+    }
+    int sentActiveBuffer = 0;
+    int sentInActiveBuffer = 0;
+    int activeBuffer = inMemoryRepl.master.activeBuffer;
+    int inActiveBuffer = activeBuffer ? 0 : 1;
+    // If the buffer had been full, it would have been sent already.
+    if (inMemoryRepl.master.sizeFilled[activeBuffer] != inMemoryRepl.bufferSize) {
+        ResetEvent(doneSent[activeBuffer]);
+        SetEvent(doSend[activeBuffer]);
+    }
+    DWORD rval = WaitForSingleObject(doneSent[activeBuffer], INFINITE);
+    if (rval != WAIT_OBJECT_0) return REDIS_ERR;
+    // The other buffer had been sent if it was full
+    if (inMemoryRepl.master.sizeFilled[inActiveBuffer]) {
+        redisAssert(inMemoryRepl.master.sizeFilled[inActiveBuffer] == inMemoryRepl.bufferSize);
+        DWORD rval = WaitForSingleObject(doneSent[inActiveBuffer], INFINITE);
+        if (rval != WAIT_OBJECT_0) return REDIS_ERR;
     }
 #endif
     return REDIS_OK;

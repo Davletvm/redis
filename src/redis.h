@@ -594,14 +594,24 @@ typedef struct redisOpArray {
 typedef struct redisInMemoryRepl {
     char * buffer[2];
     ssize_t bufferSize;
-    ssize_t posBufferRead[2];
-    ssize_t posBufferWritten[2];
-    int activeBufferRead;
-    int activeBufferWrite;
-    char * shortcutBuffer;
-    ssize_t shortcutBufferSize;
     off_t totalRead;
     int abortRequested;
+    union {
+        struct {
+            char * shortcutBuffer;
+            ssize_t shortcutBufferSize;
+            ssize_t posBufferRead[2];
+            ssize_t posBufferWritten[2];
+            int activeBufferRead;
+            int activeBufferWrite;
+        } slave;
+        struct {
+            HANDLE * doSendEvents;
+            HANDLE * sentDoneEvents;
+            int * sizeFilled;
+            int activeBuffer;
+        } master;
+    };
 } redisInMemoryRepl;
 
 

@@ -359,14 +359,12 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
             FILE_MAP_ALL_ACCESS,
             0, 0,
             0);
-        if (g_pQForkControl->inMemoryBuffersControlHandle == NULL) {
+        if (g_pQForkControl->InMemoryBuffersControl == NULL) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
                 "QForkMasterInit: MapViewOfFile failed");
         }
-        g_pQForkControl->InMemoryBuffersControl->size[0] = 0;
-        g_pQForkControl->InMemoryBuffersControl->size[1] = 0;
 
         // This must be called only once per process! Calling it more times than that will not recreate existing 
         // section, and dlmalloc will ultimately fail with an access violation. Once is good.
@@ -650,6 +648,14 @@ StartupStatus QForkStartup(int argc, char** argv) {
     }
 }
 
+void CloseEventHandle(HANDLE * phandle)
+{
+    if (*phandle != NULL) {
+        CloseHandle(*phandle);
+        *phandle = NULL;
+    }
+}
+
 BOOL QForkShutdown() {
     if(g_hForkedProcess != NULL) {
         TerminateProcess(g_hForkedProcess, -1);
@@ -658,30 +664,17 @@ BOOL QForkShutdown() {
 
     if( g_pQForkControl != NULL )
     {
-        if (g_pQForkControl->forkedProcessReady != NULL) {
-            CloseHandle(g_pQForkControl->forkedProcessReady);
-            g_pQForkControl->forkedProcessReady = NULL;
-        }
-        if (g_pQForkControl->startOperation != NULL) {
-            CloseHandle(g_pQForkControl->startOperation);
-            g_pQForkControl->startOperation = NULL;
-        }
-        if (g_pQForkControl->operationComplete != NULL) {
-            CloseHandle(g_pQForkControl->operationComplete);
-            g_pQForkControl->operationComplete = NULL;
-        }
-        if (g_pQForkControl->operationFailed != NULL) {
-            CloseHandle(g_pQForkControl->operationFailed);
-            g_pQForkControl->operationFailed = NULL;
-        }
-        if (g_pQForkControl->terminateForkedProcess != NULL) {
-            CloseHandle(g_pQForkControl->terminateForkedProcess);
-            g_pQForkControl->terminateForkedProcess = NULL;
-        }
-        if (g_pQForkControl->heapMemoryMap != NULL) {
-            CloseHandle(g_pQForkControl->heapMemoryMap);
-            g_pQForkControl->heapMemoryMap = NULL;
-        }
+        CloseEventHandle(&g_pQForkControl->forkedProcessReady);
+        CloseEventHandle(&g_pQForkControl->startOperation);
+        CloseEventHandle(&g_pQForkControl->operationComplete);
+        CloseEventHandle(&g_pQForkControl->operationFailed);
+        CloseEventHandle(&g_pQForkControl->terminateForkedProcess);
+        CloseEventHandle(&g_pQForkControl->heapMemoryMap);
+        CloseEventHandle(&g_pQForkControl->doneSentBuffer[0]);
+        CloseEventHandle(&g_pQForkControl->doneSentBuffer[1]);
+        CloseEventHandle(&g_pQForkControl->doSendBuffer[0]);
+        CloseEventHandle(&g_pQForkControl->doSendBuffer[1]);
+
         if (g_pQForkControl->heapMemoryMapFile != INVALID_HANDLE_VALUE) {
             CloseHandle(g_pQForkControl->heapMemoryMapFile);
             g_pQForkControl->heapMemoryMapFile = INVALID_HANDLE_VALUE;
@@ -690,25 +683,36 @@ BOOL QForkShutdown() {
             UnmapViewOfFile(g_pQForkControl->heapStart);
             g_pQForkControl->heapStart = NULL;
         }
-
         if(g_pQForkControl != NULL) {
             UnmapViewOfFile(g_pQForkControl);
             g_pQForkControl = NULL;
         }
-        if (g_hQForkControlFileMap != NULL) {
-            CloseHandle(g_hQForkControlFileMap);
-            g_hQForkControlFileMap = NULL;
-        };
+        CloseEventHandle(&g_hQForkControlFileMap);
     }
 
     return TRUE;
 }
 
+void ResetEventHandle(HANDLE event) {
+    if (ResetEvent(event) == FALSE) {
+        throw std::system_error(
+            GetLastError(),
+            system_category(),
+            "BeginForkOperation: ResetEvent() failed.");
+    }
+}
+
+
 BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, uint32_t dictHashSeed) {
     try {
         // copy operation data
-        g_pQForkControl->typeOfOperation = type;
-        strcpy_s(g_pQForkControl->globalData.filename, fileName);
+        if (fileName) {
+            g_pQForkControl->typeOfOperation = type;
+            strcpy_s(g_pQForkControl->globalData.filename, fileName);
+        } else {
+            g_pQForkControl->typeOfOperation = otRDBINMEMORY;
+            g_pQForkControl->globalData.filename[0] = 0;
+        }
         if (sizeOfGlobalData > MAX_GLOBAL_DATA) {
             throw std::runtime_error("Global state too large.");
         }
@@ -737,36 +741,15 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         }
 
         // ensure events are in the correst state
-        if (ResetEvent(g_pQForkControl->operationComplete) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(), 
-                "BeginForkOperation: ResetEvent() 1 failed.");
-        }
-        if (ResetEvent(g_pQForkControl->operationFailed) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(), 
-                "BeginForkOperation: ResetEvent() 2 failed.");
-        }
-        if (ResetEvent(g_pQForkControl->startOperation) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "BeginForkOperation: ResetEvent() 3 failed.");
-        }
-        if (ResetEvent(g_pQForkControl->forkedProcessReady) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "BeginForkOperation: ResetEvent() 4 failed.");
-        }
-        if (ResetEvent(g_pQForkControl->terminateForkedProcess) == FALSE) {
-            throw std::system_error(
-                GetLastError(), 
-                system_category(),
-                "BeginForkOperation: ResetEvent() 5 failed.");
-        }
+        ResetEventHandle(g_pQForkControl->operationComplete);
+        ResetEventHandle(g_pQForkControl->operationFailed);
+        ResetEventHandle(g_pQForkControl->startOperation);
+        ResetEventHandle(g_pQForkControl->forkedProcessReady);
+        ResetEventHandle(g_pQForkControl->terminateForkedProcess);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
         // Launch the "forked" process
         char fileName[MAX_PATH];
@@ -888,36 +871,16 @@ BOOL EndForkOperation(int * pExitCode) {
             g_hForkedProcess = 0;
         }
 
-        if (ResetEvent(g_pQForkControl->operationComplete) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(), 
-                "EndForkOperation: ResetEvent() failed.");
-        }
-        if (ResetEvent(g_pQForkControl->operationFailed) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(), 
-                "EndForkOperation: ResetEvent() failed.");
-        }
-        if (ResetEvent(g_pQForkControl->startOperation) == FALSE ) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: ResetEvent() failed.");
-        }
-        if (ResetEvent(g_pQForkControl->forkedProcessReady) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: ResetEvent() failed.");
-        }
-        if (ResetEvent(g_pQForkControl->terminateForkedProcess) == FALSE) {
-            throw std::system_error(
-                GetLastError(), 
-                system_category(),
-                "EndForkOperation: ResetEvent() failed.");
-        }
+        // ensure events are in the correst state
+        ResetEventHandle(g_pQForkControl->operationComplete);
+        ResetEventHandle(g_pQForkControl->operationFailed);
+        ResetEventHandle(g_pQForkControl->startOperation);
+        ResetEventHandle(g_pQForkControl->forkedProcessReady);
+        ResetEventHandle(g_pQForkControl->terminateForkedProcess);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
         // restore protection constants on shared memory blocks 
         DWORD oldProtect = 0;

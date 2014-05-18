@@ -964,12 +964,12 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     char * buf;
 
     initInMemoryBuffersSlave();
-    if (server.repl_inMemory->shortcutBuffer) {
-        readlen = server.repl_inMemory->shortcutBufferSize;
-        buf = server.repl_inMemory->shortcutBuffer;
+    if (server.repl_inMemory->slave.shortcutBuffer) {
+        readlen = server.repl_inMemory->slave.shortcutBufferSize;
+        buf = server.repl_inMemory->slave.shortcutBuffer;
     } else {
-        readlen = server.repl_inMemory->bufferSize - server.repl_inMemory->posBufferWritten[server.repl_inMemory->activeBufferWrite];
-        buf = server.repl_inMemory->buffer[server.repl_inMemory->activeBufferWrite] + server.repl_inMemory->posBufferWritten[server.repl_inMemory->activeBufferWrite];
+        readlen = server.repl_inMemory->bufferSize - server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite];
+        buf = server.repl_inMemory->buffer[server.repl_inMemory->slave.activeBufferWrite] + server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite];
     }
     redisAssert(readlen > 0);
     nread = read(fd, buf, readlen);
@@ -982,14 +982,14 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         return;
     }
     server.repl_inMemory->totalRead += nread;
-    if (server.repl_inMemory->shortcutBuffer) {
-        server.repl_inMemory->shortcutBuffer += nread;
-        server.repl_inMemory->shortcutBufferSize -= nread;
+    if (server.repl_inMemory->slave.shortcutBuffer) {
+        server.repl_inMemory->slave.shortcutBuffer += nread;
+        server.repl_inMemory->slave.shortcutBufferSize -= nread;
     } else {
-        server.repl_inMemory->posBufferWritten[server.repl_inMemory->activeBufferWrite] += nread;
-        if (server.repl_inMemory->posBufferWritten[server.repl_inMemory->activeBufferWrite] == server.repl_inMemory->bufferSize) {
-            server.repl_inMemory->activeBufferWrite++;
-            if (server.repl_inMemory->activeBufferWrite == 2) server.repl_inMemory->activeBufferWrite = 0;
+        server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite] += nread;
+        if (server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite] == server.repl_inMemory->bufferSize) {
+            server.repl_inMemory->slave.activeBufferWrite++;
+            if (server.repl_inMemory->slave.activeBufferWrite == 2) server.repl_inMemory->slave.activeBufferWrite = 0;
         }
     }
 
