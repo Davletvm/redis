@@ -1,7 +1,7 @@
-if($args.Length -eq 0)
+if($args.Length -ne 2)
 {
     Write-Host "Exiting...Proper Usage: .\RunRedisTests.ps1 <WorkingDir> <tclPath>"
-    exit
+    exit -1
 }
 
 $WorkingDir = $args[0]

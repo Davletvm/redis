@@ -1,7 +1,7 @@
-if($args.Length -eq 0)
+if($args.Length -ne 6)
 {
     Write-Host "Exiting...Proper Usage: .\CopyBinaries.ps1 <ProjectName> <WorkingDir> <Branch> <BuildNumber> <BinCopyfolder> <DropPath>"
-    exit
+    exit -1
 }
 
 $ProjName=$args[0]
@@ -20,7 +20,8 @@ dir
 #Get Todays Date
 $CurrentDate = Get-Date
 $CurrentDateStr = $CurrentDate.ToString("yyyyMMdd")
-$BuildDropFolder="$DropPath\$ProjName\$Branch\$CurrentDateStr_$BuildNumber"
+Write-Host "date is :" $CurrentDateStr
+$BuildDropFolder="$DropPath\$ProjName\$Branch\" + "$CurrentDateStr" + "_" + $BuildNumber
 
 Write-Host "Creating Drop folder for this build.."
 New-Item -ItemType directory "$BuildDropFolder\Binaries"
@@ -33,10 +34,10 @@ Write-Host  "Copying sources to '$BinCopyFromFolder' to '$BuildDropFolder\Src'"
 Get-ChildItem -path "src\*" -recurse -include "*.c","*.cpp",".h" |
   Foreach-Object { Copy-Item -path $_ -destination "$BuildDropFolder\Src"}
 
-
+$latestDropfolder = "$DropPath\$ProjName\$Branch" + "\Latest" 
 Write-Host "Updating the Latest HardLink..."
-If (Test-Path "$DropPath\$ProjName\$Branch\Latest"){
-	Remove-Item "$DropPath\$ProjName\$Branch\Latest"
+If (Test-Path $latestDropfolder){
+	Remove-Item -Recurse -Force $latestDropfolder
 }
 
-cmd /c mklink /D /J "$DropPath\$ProjName\$Branch\Latest" $BuildDropFolder
+cmd /c mklink /D /J $latestDropfolder $BuildDropFolder
