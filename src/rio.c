@@ -113,29 +113,34 @@ static void PollForRead()
 
 static void SendActiveBuffer(rio * r)
 {
-    ResetEvent(r->io.memory.inMemory->master.sentDoneEvents[r->io.memory.inMemory->master.activeBuffer]);
-    SetEvent(r->io.memory.inMemory->master.doSendEvents[r->io.memory.inMemory->master.activeBuffer]);
+    redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
+    inm->sendState[inm->activeBuffer] = INMEMORY_STATE_READYTOSEND;
+    inm->sequence[inm->activeBuffer] = r->io.memorySend.sequence++;
+    ResetEvent(inm->sentDoneEvents[inm->activeBuffer]);
+    SetEvent(inm->doSendEvents[inm->activeBuffer]);
 }
 
 static int WaitForFreeBuffer(rio * r)
 {
-    redisInMemoryRepl * inm = r->io.memory.inMemory;
-    WaitForMultipleObjects(2, inm->master.sentDoneEvents, FALSE, INFINITE);
-    DWORD rval = WaitForSingleObject(inm->master.sentDoneEvents[0], 0);
+    redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
+    WaitForMultipleObjects(2, inm->sentDoneEvents, FALSE, INFINITE);
+    DWORD rval = WaitForSingleObject(inm->sentDoneEvents[0], 0);
     if (rval == WAIT_OBJECT_0) {
-        ResetEvent(inm->master.sentDoneEvents[0]);
-        inm->master.sizeFilled[0] = 0;
+        ResetEvent(inm->sentDoneEvents[0]);
+        inm->sizeFilled[0] = 0;
+        inm->sendState[0] = INMEMORY_STATE_READYTOFILL;
     } else if (rval != WAIT_TIMEOUT) {
         return 0;
     }
-    rval = WaitForSingleObject(inm->master.sentDoneEvents[1], 0);
+    rval = WaitForSingleObject(inm->sentDoneEvents[1], 0);
     if (rval == WAIT_OBJECT_0) {
-        ResetEvent(inm->master.sentDoneEvents[1]);
-        inm->master.sizeFilled[1] = 0;
+        ResetEvent(inm->sentDoneEvents[1]);
+        inm->sizeFilled[1] = 0;
+        inm->sendState[1] = INMEMORY_STATE_READYTOFILL;
     } else if (rval != WAIT_TIMEOUT) {
         return 0;
     }
-    return !inm->master.sizeFilled[0] || !inm->master.sizeFilled[1];
+    return !inm->sizeFilled[0] || !inm->sizeFilled[1];
 }
 
 /* Returns 1 or 0 for success/failure.
@@ -147,27 +152,28 @@ static int WaitForFreeBuffer(rio * r)
 static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
-    redisInMemoryRepl * inm = r->io.memory.inMemory;
-    while (server.repl_inMemory && !inm->abortRequested) {
-        leftInActiveBuffer = inm->bufferSize - inm->master.sizeFilled[inm->master.activeBuffer];
+    redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
+    while (server.repl_inMemorySend == inm) {
+        leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer];
         if (leftInActiveBuffer == 0) {
-            server.repl_inMemory->master.activeBuffer++;
-            if (server.repl_inMemory->master.activeBuffer == 2) server.repl_inMemory->master.activeBuffer = 0;
+            inm->activeBuffer++;
+            if (inm->activeBuffer == 2) inm->activeBuffer = 0;
+            leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer];
         }
-        leftInActiveBuffer = inm->bufferSize - inm->master.sizeFilled[inm->master.activeBuffer];
         if (leftInActiveBuffer == 0) {
             if (!WaitForFreeBuffer(r))
                 return 0;
             continue;
         }
+        inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
         if (len > leftInActiveBuffer)
             lenToCopy = leftInActiveBuffer;
         else
             lenToCopy = len;
-        memcpy(inm->buffer[inm->master.activeBuffer] + inm->master.sizeFilled[inm->master.activeBuffer], buf, lenToCopy);
+        memcpy(inm->buffer[inm->activeBuffer] + inm->sizeFilled[inm->activeBuffer], buf, lenToCopy);
         len -= lenToCopy;
         leftInActiveBuffer -= lenToCopy;
-        inm->master.sizeFilled[inm->master.activeBuffer] += lenToCopy;
+        inm->sizeFilled[inm->activeBuffer] += lenToCopy;
         buf = ((char*)buf) + lenToCopy;
         if (leftInActiveBuffer == 0)
             SendActiveBuffer(r);
@@ -182,38 +188,38 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
 static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
-    redisInMemoryRepl * inm = r->io.memory.inMemory;
-    while (server.repl_inMemory && !inm->abortRequested) {
-        leftInActiveBuffer = inm->slave.posBufferWritten[inm->slave.activeBufferRead] - inm->slave.posBufferRead[inm->slave.activeBufferRead];
+    redisInMemoryReplReceive * inm = r->io.memoryReceive.inMemory;
+    while (server.repl_inMemoryReceive == inm) {
+        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
         if (leftInActiveBuffer == 0) {
-            server.repl_inMemory->slave.activeBufferRead++;
-            if (server.repl_inMemory->slave.activeBufferRead == 2) server.repl_inMemory->slave.activeBufferRead = 0;
+            inm->activeBufferRead++;
+            if (inm->activeBufferRead == 2) inm->activeBufferRead = 0;
         }
-        leftInActiveBuffer = inm->slave.posBufferWritten[inm->slave.activeBufferRead] - inm->slave.posBufferRead[inm->slave.activeBufferRead];
+        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
         if (leftInActiveBuffer > 0) {
             if (len > leftInActiveBuffer)
                 lenToCopy = leftInActiveBuffer;
             else
                 lenToCopy = len;
-            memcpy(buf, inm->buffer[inm->slave.activeBufferRead], lenToCopy);
-            inm->slave.posBufferRead[inm->slave.activeBufferRead] += lenToCopy;
+            memcpy(buf, inm->buffer[inm->activeBufferRead], lenToCopy);
+            inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
             buf = ((char*)buf) + lenToCopy;
             len -= lenToCopy;
             leftInActiveBuffer -= lenToCopy;
             if (leftInActiveBuffer == 0) {
-                inm->slave.posBufferRead[inm->slave.activeBufferRead] = inm->slave.posBufferWritten[inm->slave.activeBufferRead] = 0;
+                inm->posBufferRead[inm->activeBufferRead] = inm->posBufferWritten[inm->activeBufferRead] = 0;
             }
             if (len == 0) return 1;
         }
-        redisAssert(inm->slave.posBufferWritten[inm->slave.activeBufferRead] == inm->slave.posBufferRead[inm->slave.activeBufferRead]);
+        redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
         if (len > inm->bufferSize) {
-            inm->slave.shortcutBuffer = buf;
-            inm->slave.shortcutBufferSize = len;
+            inm->shortcutBuffer = buf;
+            inm->shortcutBufferSize = len;
         }
         PollForRead();
-        if (!server.repl_inMemory) return 0;
-        if (inm->slave.shortcutBuffer && inm->slave.shortcutBufferSize == 0) {
-            inm->slave.shortcutBuffer = NULL;
+        if (server.repl_inMemoryReceive != inm) return 0;
+        if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {
+            inm->shortcutBuffer = NULL;
             return 1;
         }
     }
@@ -222,7 +228,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
 
 /* Returns read/write position in file. */
 static off_t rioMemoryTell(rio *r) {
-    return r->io.memory.inMemory->totalRead;
+    return r->io.memoryReceive.inMemory->totalRead;
 }
 
 
@@ -248,10 +254,21 @@ static const rio rioFileIO = {
     { { NULL, 0 } } /* union for io-specific vars */
 };
 
-static const rio rioMemoryIO = {
+static const rio rioMemoryReceiveIO = {
     rioMemoryRead,
-    rioMemoryWrite,
+    NULL,
     rioMemoryTell,
+    NULL,           /* update_checksum */
+    0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
+    { { NULL, 0 } } /* union for io-specific vars */
+};
+
+static const rio rioMemorySendIO = {
+    NULL,
+    rioMemoryWrite,
+    NULL,
     NULL,           /* update_checksum */
     0,              /* current checksum */
     0,              /* bytes read or written */
@@ -273,10 +290,17 @@ void rioInitWithBuffer(rio *r, sds s) {
     r->io.buffer.pos = 0;
 }
 
-void rioInitWithMemory(rio *r, redisInMemoryRepl * inMemory) {
-    *r = rioMemoryIO;
-    r->io.memory.inMemory = inMemory;
+void rioInitWithMemoryReceive(rio *r, redisInMemoryReplReceive * inMemory) {
+    *r = rioMemoryReceiveIO;
+    r->io.memoryReceive.inMemory = inMemory;
 }
+
+void rioInitWithMemorySend(rio *r, redisInMemoryReplSend * inMemory) {
+    *r = rioMemorySendIO;
+    r->io.memorySend.sequence = 0;
+    r->io.memorySend.inMemory = inMemory;
+}
+
 
 /* This function can be installed both in memory and file streams when checksum
  * computation is needed. */

@@ -1093,6 +1093,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             redisLog(REDIS_WARNING, "fork operation complete");
 
             bysignal = (opStatus == osFAILED);
+            if (!bysignal && server.repl_inMemorySend) {
+                bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
+                FinishInMemoryRepl();
+            }
             EndForkOperation(&exitcode);
 
             pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
@@ -1409,7 +1413,8 @@ void initServerConfig() {
     server.repl_disable_tcp_nodelay = REDIS_DEFAULT_REPL_DISABLE_TCP_NODELAY;
     server.slave_priority = REDIS_DEFAULT_SLAVE_PRIORITY;
     server.master_repl_offset = 0;
-    server.repl_inMemory = NULL;
+    server.repl_inMemorySend = NULL;
+    server.repl_inMemoryReceive = NULL;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;

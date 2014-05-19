@@ -217,12 +217,12 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else {
             redisPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
-        *(findFreeSlot()) = job;
 
         /* Lock again before reiterating the loop, if there are no longer
          * jobs to process we'll block again in pthread_cond_wait(). */
         pthread_mutex_lock(&bio_mutex[type]);
-        listDelNodeNoFree(bio_jobs[type],ln, findFreeSlot());
+        *(findFreeSlot()) = job;
+        listDelNodeNoFree(bio_jobs[type], ln, findFreeSlot());
         bio_pending[type]--;
     }
 }

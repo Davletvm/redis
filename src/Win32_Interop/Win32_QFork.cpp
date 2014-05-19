@@ -751,6 +751,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
         ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
+        SetupInMemoryBuffersMasterParent(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+
         // Launch the "forked" process
         char fileName[MAX_PATH];
         if (0 == GetModuleFileNameA(NULL, fileName, MAX_PATH)) {
@@ -788,6 +790,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
 
+
         return TRUE;
     }
     catch(std::system_error syserr) {
@@ -799,6 +802,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
     catch(...) {
         printf("BeginForkOperation: other exception caught.\n");
     }
+    ClearInMemoryBuffersMasterParent();
     return FALSE;
 }
 
@@ -821,6 +825,7 @@ OperationStatus GetForkOperationStatus() {
 BOOL AbortForkOperation()
 {
     try {
+        ClearInMemoryBuffersMasterParent();
         if( g_hForkedProcess != 0 )
         {
             if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
@@ -852,6 +857,7 @@ BOOL AbortForkOperation()
 BOOL EndForkOperation(int * pExitCode) {
     try {
         SetEvent(g_pQForkControl->terminateForkedProcess);
+        ClearInMemoryBuffersMasterParent();
         if( g_hForkedProcess != 0 )
         {
             if (WaitForSingleObject(g_hForkedProcess, cDeadForkWait) == WAIT_TIMEOUT) {

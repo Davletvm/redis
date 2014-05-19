@@ -591,29 +591,46 @@ typedef struct redisOpArray {
     int numops;
 } redisOpArray;
 
-typedef struct redisInMemoryRepl {
+typedef struct redisInMemoryReplReceive {
     char * buffer[2];
     ssize_t bufferSize;
     off_t totalRead;
     int abortRequested;
-    union {
-        struct {
-            char * shortcutBuffer;
-            ssize_t shortcutBufferSize;
-            ssize_t posBufferRead[2];
-            ssize_t posBufferWritten[2];
-            int activeBufferRead;
-            int activeBufferWrite;
-        } slave;
-        struct {
-            HANDLE * doSendEvents;
-            HANDLE * sentDoneEvents;
-            int * sizeFilled;
-            int activeBuffer;
-        } master;
-    };
-} redisInMemoryRepl;
+    char * shortcutBuffer;
+    ssize_t shortcutBufferSize;
+    ssize_t posBufferRead[2];
+    ssize_t posBufferWritten[2];
+    int activeBufferRead;
+    int activeBufferWrite;
+} redisInMemoryReplReceive;
 
+#define INMEMORY_STATE_INVALID -1
+#define INMEMORY_STATE_BEINGFILLED 0
+#define INMEMORY_STATE_READYTOSEND 1
+#define INMEMORY_STATE_SENDING 2
+#define INMEMORY_STATE_SENT 3
+#define INMEMORY_STATE_READYTOFILL 4
+
+
+typedef struct redisInMemoryReplSend {
+    int id;
+    char * buffer[2];
+    ssize_t bufferSize;
+    HANDLE * doSendEvents;
+    HANDLE * sentDoneEvents;
+    int * sizeFilled;
+    int * sequence;
+    int * sendState;
+    int activeBuffer;
+    redisClient * slave;
+} redisInMemoryReplSend;
+
+typedef struct redisInMemorySendCookie
+{
+    int id;
+    HANDLE sentDoneEvent;
+    int * sendState;
+} redisInMemorySendCookie;
 
 /*-----------------------------------------------------------------------------
  * Global server state
@@ -772,7 +789,8 @@ struct redisServer {
     int repl_transfer_s;     /* Slave -> Master SYNC socket */
     int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
-    redisInMemoryRepl * repl_inMemory;
+    redisInMemoryReplReceive * repl_inMemoryReceive;
+    redisInMemoryReplSend * repl_inMemorySend;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */

@@ -411,6 +411,151 @@ need_full_resync:
     return REDIS_ERR;
 }
 
+
+void sendBulkToSlaveLenDone(aeEventLoop *el, int fd, void *privdata, int written) {
+    aeWinSendReq *req = (aeWinSendReq *)privdata;
+    REDIS_NOTUSED(el);
+    REDIS_NOTUSED(fd);
+
+    sdsfree((sds)req->buf);
+}
+
+
+void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, int mask) {
+    redisClient *slave = privdata;
+    char *buf;
+    ssize_t result, buflen;
+    REDIS_NOTUSED(el);
+    REDIS_NOTUSED(mask);
+
+    if (slave->repldboff == 0) {
+        /* Write the bulk write count before to transfer the DB. In theory here
+        * we don't know how much room there is in the output buffer of the
+        * socket, but in pratice SO_SNDLOWAT (the minimum count for output
+        * operations) will never be smaller than the few bytes we need. */
+        sds bulkcount;
+
+        bulkcount = sdscatprintf(sdsempty(), "$%lld\r\n", (long long) -2);
+
+        result = aeWinSocketSend(fd, bulkcount, (int)sdslen(bulkcount),
+            el, slave, bulkcount, sendBulkToSlaveLenDone);
+        if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
+            sdsfree(bulkcount);
+            freeClient(slave);
+            return;
+        }
+        slave->repldboff = 1;
+    }
+    // The actual send will be done when signaled - on the event loop
+    // But not on this fd signal.  Instead we have a watcher
+    // thread send IO completion events whenever the producer 
+    // has a buffer ready to send.
+}
+
+
+void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int written) {
+    aeWinSendReq *req = (aeWinSendReq *)privdata;
+    REDIS_NOTUSED(el);
+    REDIS_NOTUSED(fd);
+    redisInMemorySendCookie * cookie = (redisInMemorySendCookie*)(req->data);
+    if (server.repl_inMemorySend && server.repl_inMemorySend->id == cookie->id) {
+        *(cookie->sendState) = INMEMORY_STATE_SENT;
+        SetEvent(cookie->sentDoneEvent);
+    }
+    free(cookie);
+}
+
+
+
+void sendInMemoryBuffersToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
+    redisClient *slave = privdata;
+    char *buf;
+    ssize_t result;
+    REDIS_NOTUSED(el);
+    REDIS_NOTUSED(mask);
+    REDIS_NOTUSED(privdata);
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    int send1Ready = 0, send2Ready = 0;
+    int sendFirst = -1, sendSecond = -1;
+    DWORD rval = WaitForSingleObject(inm->doSendEvents[0], 0);
+    send1Ready = rval == WAIT_OBJECT_0;
+    if (!send1Ready && rval != WAIT_TIMEOUT) {
+        redisLog(REDIS_WARNING, "Cannot send in memmory data to slave on Handle 0");
+        freeClient(inm->slave);
+        return;
+    }
+    rval = WaitForSingleObject(inm->doSendEvents[1], 0);
+    send2Ready = rval == WAIT_OBJECT_0;
+    if (!send2Ready && rval != WAIT_TIMEOUT) {
+        redisLog(REDIS_WARNING, "Cannot send in memmory data to slave on Handle 1");
+        freeClient(inm->slave);
+        return;
+    }
+    redisAssert(send1Ready || send2Ready);
+    if (!send1Ready && !send2Ready) return;
+    if (send1Ready)
+        ResetEvent(inm->doSendEvents[0]);
+    if (send2Ready)
+        ResetEvent(inm->doSendEvents[1]);
+    if (send1Ready && send2Ready) {
+        if (inm->sequence[0] < inm->sequence[1]) {
+            sendFirst = 0;
+            sendSecond = 1;
+        } else {
+            sendFirst = 1;
+            sendSecond = 0;
+        }
+    } else if (send1Ready) {
+        sendFirst = 0;
+    } else {
+        sendFirst = 1;
+    }
+    redisInMemorySendCookie * cookie = zmalloc(sizeof(redisInMemorySendCookie));
+    cookie->id = inm->id;
+    cookie->sentDoneEvent = inm->sentDoneEvents[sendFirst];
+    cookie->sendState = inm->sendState + sendFirst;
+    result = aeWinSocketSend(fd, inm->buffer[sendFirst], inm->sizeFilled[sendFirst],
+        el, slave, cookie, sendInMemoryBuffersToSlaveDone);
+    if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
+        redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
+        free(cookie);
+        freeClient(slave);
+        return;
+    }
+    inm->sendState[sendFirst] = INMEMORY_STATE_SENDING;
+    if (sendSecond != -1) {
+        cookie = zmalloc(sizeof(redisInMemorySendCookie));
+        cookie->id = inm->id;
+        cookie->sentDoneEvent = inm->sentDoneEvents[sendSecond];
+        cookie->sendState = inm->sendState + sendSecond;
+        result = aeWinSocketSend(fd, inm->buffer[sendSecond], inm->sizeFilled[sendSecond],
+            el, slave, cookie, sendInMemoryBuffersToSlaveDone);
+        if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
+            redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
+            free(cookie);
+            freeClient(slave);
+            return;
+        }
+        inm->sendState[sendSecond] = INMEMORY_STATE_SENDING;
+    }
+}
+
+
+int SetupInMemoryRepl(redisClient *slave)
+{
+    slave->repldboff = 0;
+    slave->repldbsize = -2;
+    slave->replstate = REDIS_REPL_SEND_BULK;
+    aeDeleteFileEvent(server.el, slave->fd, AE_WRITABLE);
+    if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendInMemoryBuffersToSlavePrefix, slave) == AE_ERR) {
+        freeClient(slave);
+        redisLog(REDIS_WARNING, "Unable to create send inmemory buffers event");
+        return 0;
+    }
+    return 1;
+}
+
+
 /* SYNC ad PSYNC command implemenation. */
 void syncCommand(redisClient *c) {
     /* ignore SYNC if already slave or in monitor mode */
@@ -494,14 +639,27 @@ void syncCommand(redisClient *c) {
             redisLog(REDIS_NOTICE,"Waiting for next BGSAVE for SYNC");
         }
     } else {
-        /* Ok we don't have a BGSAVE in progress, let's start one */
-        redisLog(REDIS_NOTICE,"Starting BGSAVE for SYNC");
-        if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
-            redisLog(REDIS_NOTICE,"Replication failed, can't BGSAVE");
-            addReplyError(c,"Unable to perform background save");
-            return;
+        if (1 /* use inmemory transfer */) {
+            redisLog(REDIS_NOTICE, "Starting InMemory BGSAVE for SYNC");
+            if (rdbSaveBackground(NULL) != REDIS_OK) {
+                redisLog(REDIS_NOTICE, "Replication failed, can't BGSAVE in Memory");
+                addReplyError(c, "Unable to perform background save");
+                return;
+            }
+            c->replstate = REDIS_REPL_TRANSFER;
+            if (!SetupInMemoryRepl(c))
+                return;
+
+        } else {
+            /* Ok we don't have a BGSAVE in progress, let's start one */
+            redisLog(REDIS_NOTICE, "Starting BGSAVE for SYNC");
+            if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
+                redisLog(REDIS_NOTICE, "Replication failed, can't BGSAVE");
+                addReplyError(c, "Unable to perform background save");
+                return;
+            }
+            c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
         }
-        c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
         /* Flush the script cache for the new slave. */
         replicationScriptCacheFlush();
     }
@@ -572,13 +730,6 @@ void replconfCommand(redisClient *c) {
 }
 
 #ifdef WIN32_IOCP
-void sendBulkToSlaveLenDone(aeEventLoop *el, int fd, void *privdata, int written) {
-    aeWinSendReq *req = (aeWinSendReq *)privdata;
-    REDIS_NOTUSED(el);
-    REDIS_NOTUSED(fd);
-
-    sdsfree((sds)req->buf);
-}
 
 void sendBulkToSlaveDataDone(aeEventLoop *el, int fd, void *privdata, int nwritten) {
     aeWinSendReq *req = (aeWinSendReq *)privdata;
@@ -653,6 +804,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
 }
+
 
 #else
 
@@ -796,41 +948,32 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
 
 void clearInMemoryReplBuffersSlave()
 {
-    if (server.repl_inMemory)
+    if (server.repl_inMemoryReceive)
     {
-        zfree(server.repl_inMemory->buffer[0]);
-        zfree(server.repl_inMemory->buffer[1]);
-        zfree(server.repl_inMemory);
-        server.repl_inMemory = NULL;
+        zfree(server.repl_inMemoryReceive->buffer[0]);
+        zfree(server.repl_inMemoryReceive->buffer[1]);
+        zfree(server.repl_inMemoryReceive);
+        server.repl_inMemoryReceive = NULL;
     }
 }
 
 void initInMemoryBuffersSlave()
 {
-    if (!server.repl_inMemory) {
-        server.repl_inMemory = zcalloc(sizeof(redisInMemoryRepl));
-        server.repl_inMemory->buffer[0] = zmalloc(16 * 1024);
-        server.repl_inMemory->buffer[1] = zmalloc(16 * 1024);
-        server.repl_inMemory->bufferSize = 16 * 1024;
+    if (!server.repl_inMemoryReceive) {
+        server.repl_inMemoryReceive = zcalloc(sizeof(redisInMemoryReplReceive));
+        server.repl_inMemoryReceive->buffer[0] = zmalloc(16 * 1024);
+        server.repl_inMemoryReceive->buffer[1] = zmalloc(16 * 1024);
+        server.repl_inMemoryReceive->bufferSize = 16 * 1024;
     }
 }
 
-void initInMemoryBuffersMaster(void* buf1, void* buf2, ssize_t size)
-{
-    if (!server.repl_inMemory) {
-        server.repl_inMemory = zcalloc(sizeof(redisInMemoryRepl));
-        server.repl_inMemory->buffer[0] = buf1;
-        server.repl_inMemory->buffer[1] = buf2;
-        server.repl_inMemory->bufferSize = size;
-    }
-}
 
 void clearInMemoryBufferMaster()
 {
-    if (server.repl_inMemory)
+    if (server.repl_inMemorySend)
     {
-        zfree(server.repl_inMemory);
-        server.repl_inMemory = NULL;
+        zfree(server.repl_inMemorySend);
+        server.repl_inMemorySend = NULL;
     }
 }
 
@@ -964,12 +1107,12 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     char * buf;
 
     initInMemoryBuffersSlave();
-    if (server.repl_inMemory->slave.shortcutBuffer) {
-        readlen = server.repl_inMemory->slave.shortcutBufferSize;
-        buf = server.repl_inMemory->slave.shortcutBuffer;
+    if (server.repl_inMemoryReceive->shortcutBuffer) {
+        readlen = server.repl_inMemoryReceive->shortcutBufferSize;
+        buf = server.repl_inMemoryReceive->shortcutBuffer;
     } else {
-        readlen = server.repl_inMemory->bufferSize - server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite];
-        buf = server.repl_inMemory->buffer[server.repl_inMemory->slave.activeBufferWrite] + server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite];
+        readlen = server.repl_inMemoryReceive->bufferSize - server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite];
+        buf = server.repl_inMemoryReceive->buffer[server.repl_inMemoryReceive->activeBufferWrite] + server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite];
     }
     redisAssert(readlen > 0);
     nread = read(fd, buf, readlen);
@@ -981,15 +1124,15 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         replicationAbortSyncTransfer();
         return;
     }
-    server.repl_inMemory->totalRead += nread;
-    if (server.repl_inMemory->slave.shortcutBuffer) {
-        server.repl_inMemory->slave.shortcutBuffer += nread;
-        server.repl_inMemory->slave.shortcutBufferSize -= nread;
+    server.repl_inMemoryReceive->totalRead += nread;
+    if (server.repl_inMemoryReceive->shortcutBuffer) {
+        server.repl_inMemoryReceive->shortcutBuffer += nread;
+        server.repl_inMemoryReceive->shortcutBufferSize -= nread;
     } else {
-        server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite] += nread;
-        if (server.repl_inMemory->slave.posBufferWritten[server.repl_inMemory->slave.activeBufferWrite] == server.repl_inMemory->bufferSize) {
-            server.repl_inMemory->slave.activeBufferWrite++;
-            if (server.repl_inMemory->slave.activeBufferWrite == 2) server.repl_inMemory->slave.activeBufferWrite = 0;
+        server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite] += nread;
+        if (server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite] == server.repl_inMemoryReceive->bufferSize) {
+            server.repl_inMemoryReceive->activeBufferWrite++;
+            if (server.repl_inMemoryReceive->activeBufferWrite == 2) server.repl_inMemoryReceive->activeBufferWrite = 0;
         }
     }
 

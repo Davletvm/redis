@@ -75,8 +75,12 @@ struct _rio {
             off_t autosync; /* fsync after 'autosync' bytes written. */
         } file;
         struct {
-            redisInMemoryRepl *inMemory;
-        } memory;
+            redisInMemoryReplSend *inMemory;
+            int sequence;
+        } memorySend;
+        struct {
+            redisInMemoryReplReceive *inMemory;
+        } memoryReceive;
     } io;
 };
 
@@ -118,7 +122,8 @@ static __inline off_t rioTell(rio *r) {
 
 void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
-void rioInitWithMemory(rio * r, redisInMemoryRepl * inMemory);
+void rioInitWithMemorySend(rio * r, redisInMemoryReplSend * inMemory);
+void rioInitWithMemoryReceive(rio * r, redisInMemoryReplReceive * inMemory);
 
 size_t rioWriteBulkCount(rio *r, char prefix, int count);
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len);

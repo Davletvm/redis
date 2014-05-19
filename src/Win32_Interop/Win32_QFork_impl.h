@@ -27,6 +27,8 @@
 typedef struct InMemoryBuffersControl {
     char buffer[2][InMemoryMasterBufferSize];
     int size[2];
+    int bufferSequence[2];
+    int bufferState[2];
 } InMemoryBuffersControl;
 
 
@@ -38,8 +40,8 @@ extern "C" {
     int do_rdbSave(char* filename);
     int do_aofSave(char* filename);
     int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2]);
-    int SignalEvent(HANDLE events[], int which);
-    int ResetSignaledEvent(HANDLE events[], int which);
+    void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[2], HANDLE doneSent[2]);
+    void ClearInMemoryBuffersMasterParent();
 
 #ifdef __cplusplus
 }

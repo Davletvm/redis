@@ -692,7 +692,7 @@ int rdbSave(char *filename) {
 
         rioInitWithFile(&rdb, fp);
     } else {
-        rioInitWithMemory(&rdb, server.repl_inMemory);
+        rioInitWithMemorySend(&rdb, server.repl_inMemorySend);
     }
     if (server.rdb_checksum)
         rdb.update_cksum = rioGenericUpdateChecksum;
@@ -825,7 +825,7 @@ int rdbSaveBackground(char *filename) {
     {
         if (!BeginForkOperation(otRDB, filename, &server, sizeof(server), &childpid, dictGetHashFunctionSeed())) {
             childpid = -1;
-        }    
+        }
 #endif
         /* Parent */
         server.stat_fork_time = ustime()-start;
@@ -1169,7 +1169,7 @@ int rdbLoad(char *filename) {
 
     if (!filename) {
         
-        rioInitWithMemory(&rdb, server.repl_inMemory);
+        rioInitWithMemoryReceive(&rdb, server.repl_inMemoryReceive);
         fp = NULL;
     } else {
 
