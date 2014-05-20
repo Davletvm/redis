@@ -200,9 +200,10 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
     // There are 2 states here.
     // We are either waiting to be allowed to watch for the watched events
     // Or we are watching the watched events.  
+    // In either state, we wait for control event in case we should
+    // change what events we watch for
 
-    DWORD rval = WaitForSingleObject(state->watcherContinueEvent, 0);
-    int postAllowed = rval == WAIT_OBJECT_0;
+    int postAllowed = FALSE;
 
     while (1) {
         if (postAllowed) {
@@ -211,7 +212,6 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             }
             printf("Waiting for events %d\r\n", watchedCount);
             DWORD rval = WaitForMultipleObjects(watchedCount + 1, watchArray, FALSE, INFINITE);
-            printf("Wait Finished\r\n", watchedCount);
             EnterCriticalSection(&(state->threadCS));
             if (rval == WAIT_OBJECT_0) {
                 ResetEvent(watchArray[0]);
@@ -220,15 +220,13 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
                     exitRequested = 1;
                 } else {
                     printf("control requested\r\n");
-                    for (int x = 0; x < state->cWatchedItems; x++) {
-                        watchedItems[x] = state->watchedItems[x];
-                    }
+                    memcpy(watchedItems, state->watchedItems, sizeof(aeWatchedItem) * state->cWatchedItems);
                     watchedCount = state->cWatchedItems;
                 }
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
-                printf("posting completion %d\r\n", id);
-                PostQueuedCompletionStatus(state->iocp, 0, -1, id);
+                printf("completion requested %d\r\n", id);
+                PostQueuedCompletionStatus(state->iocp, 0, -1, (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
             LeaveCriticalSection(&(state->threadCS));
@@ -245,13 +243,11 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
                     exitRequested = 1;
                 } else {
                     printf("control requested\r\n");
-                    for (int x = 0; x < state->cWatchedItems; x++) {
-                        watchedItems[x] = state->watchedItems[x];
-                    }
+                    memcpy(watchedItems, state->watchedItems, sizeof(aeWatchedItem) * state->cWatchedItems);
                     watchedCount = state->cWatchedItems;
                 }
             } else if (rval == WAIT_OBJECT_0 + 1) {
-                printf("post allowed\r\n");
+                printf("post requested\r\n");
                 postAllowed = 1;
                 ResetEvent(state->watcherContinueEvent);
             }
@@ -456,7 +452,7 @@ void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
     printf("EventSignaled %d\r\n", id);
     aeApiState *state = (aeApiState *)eventLoop->apidata;
     if (state->cWatchedItems > 0 && id == state->watchedItems[0].id) {
-        state->watchedItems[0].proc(eventLoop, id);
+        state->watchedItems[0].proc(eventLoop, (void*)id);
     }
 }
 

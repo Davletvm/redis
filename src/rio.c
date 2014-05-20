@@ -130,7 +130,7 @@ static int WaitForFreeBuffer(rio * r)
     if (rval == WAIT_OBJECT_0) {
         redisLog(REDIS_NOTICE, "Got free buffer 0");
         ResetEvent(inm->sentDoneEvents[0]);
-        inm->sizeFilled[0] = 0;
+        *(inm->sizeFilled[0]) = 0;
         inm->sendState[0] = INMEMORY_STATE_READYTOFILL;
     } else if (rval != WAIT_TIMEOUT) {
         return 0;
@@ -139,12 +139,12 @@ static int WaitForFreeBuffer(rio * r)
     if (rval == WAIT_OBJECT_0) {
         redisLog(REDIS_NOTICE, "Got free buffer 1");
         ResetEvent(inm->sentDoneEvents[1]);
-        inm->sizeFilled[1] = 0;
+        *(inm->sizeFilled[1]) = 0;
         inm->sendState[1] = INMEMORY_STATE_READYTOFILL;
     } else if (rval != WAIT_TIMEOUT) {
         return 0;
     }
-    return !inm->sizeFilled[0] || !inm->sizeFilled[1];
+    return !*(inm->sizeFilled[0]) || !*(inm->sizeFilled[1]);
 }
 
 /* Returns 1 or 0 for success/failure.
@@ -158,11 +158,11 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     size_t lenToCopy;
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
     while (server.repl_inMemorySend == inm) {
-        leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer];
+        leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
         if (leftInActiveBuffer == 0) {
             inm->activeBuffer++;
             if (inm->activeBuffer == 2) inm->activeBuffer = 0;
-            leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer];
+            leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
         }
         if (leftInActiveBuffer == 0) {
             if (!WaitForFreeBuffer(r))
@@ -174,10 +174,10 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
             lenToCopy = leftInActiveBuffer;
         else
             lenToCopy = len;
-        memcpy(inm->buffer[inm->activeBuffer] + inm->sizeFilled[inm->activeBuffer], buf, lenToCopy);
+        memcpy(inm->buffer[inm->activeBuffer] + *(inm->sizeFilled[inm->activeBuffer]), buf, lenToCopy);
         len -= lenToCopy;
         leftInActiveBuffer -= lenToCopy;
-        inm->sizeFilled[inm->activeBuffer] += lenToCopy;
+        *(inm->sizeFilled[inm->activeBuffer]) += lenToCopy;
         buf = ((char*)buf) + lenToCopy;
         if (leftInActiveBuffer == 0)
             SendActiveBuffer(r);
@@ -205,7 +205,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
                 lenToCopy = leftInActiveBuffer;
             else
                 lenToCopy = len;
-            memcpy(buf, inm->buffer[inm->activeBufferRead], lenToCopy);
+            memcpy(buf, inm->buffer[inm->activeBufferRead] + inm->posBufferRead[inm->activeBufferRead], lenToCopy);
             inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
             buf = ((char*)buf) + lenToCopy;
             len -= lenToCopy;

@@ -646,7 +646,7 @@ off_t rdbSavedObjectLen(robj *o) {
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val,
                         long long expiretime, long long now)
 {
-    if (val->protected) {
+    if (val->protected && (expiretime == -1 || expiretime >= now)) {
         if (rdbSaveType(rdb, REDIS_RDB_OPCODE_PROTECT) == -1) return -1;
     }
     /* Save the expire time */
@@ -1179,6 +1179,7 @@ int rdbLoad(char *filename) {
     }
     rdb.update_cksum = rdbLoadProgressCallback;
     rdb.max_processing_chunk = server.loading_process_events_interval_bytes;
+//    DebugBreak();
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf,"REDIS",5) != 0) {

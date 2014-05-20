@@ -24,9 +24,12 @@
 
 
 #define InMemoryMasterBufferSize  (16 * 1024)
+typedef struct SPBuffer {
+    int s;
+    char b[InMemoryMasterBufferSize];
+}SPBuffer;
 typedef struct InMemoryBuffersControl {
-    char buffer[2][InMemoryMasterBufferSize];
-    int size[2];
+    SPBuffer buffer[2];
     int bufferSequence[2];
     int bufferState[2];
     int id;

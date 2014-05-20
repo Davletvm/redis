@@ -595,11 +595,13 @@ typedef struct redisInMemoryReplReceive {
     char * buffer[2];
     ssize_t bufferSize;
     off_t totalRead;
-    int abortRequested;
     char * shortcutBuffer;
     ssize_t shortcutBufferSize;
     ssize_t posBufferRead[2];
     ssize_t posBufferWritten[2];
+    int inPacket;
+    int packetSizeValid;
+    ssize_t currentPacketSize;
     int activeBufferRead;
     int activeBufferWrite;
 } redisInMemoryReplReceive;
@@ -618,7 +620,7 @@ typedef struct redisInMemoryReplSend {
     ssize_t bufferSize;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
-    int * sizeFilled;
+    int * sizeFilled[2];
     int * sequence;
     int * sendState;
     int activeBuffer;
