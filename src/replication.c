@@ -1127,7 +1127,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             return;
         }
         inm->currentPacketSize -= nread;
-        if (!inm->currentPacketSize)
+        if (!inm->currentPacketSize) 
             inm->inPacket = 0;
         inm->totalRead += nread;
         if (inm->shortcutBuffer) {
@@ -1155,6 +1155,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         if (inm->packetSizeValid == sizeof(inm->currentPacketSize)) {
             redisLog(REDIS_NOTICE, "next packet size %d", inm->currentPacketSize);
             inm->inPacket = 1;
+            inm->packetSizeValid = 0;
         }
 
     }
