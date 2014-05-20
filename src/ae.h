@@ -57,6 +57,7 @@ typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData,
 typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
+typedef void aeHandleEventCallback(struct aeEventLoop *eventLoop, void * param);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -116,5 +117,7 @@ char *aeGetApiName(void);
 void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
-
+int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int id);
+int aeClearCallbacks(aeEventLoop *eventLoop);
+int aeSetReadyForCallback(aeEventLoop *eventLoop);
 #endif

@@ -153,7 +153,6 @@ struct QForkControl {
     HANDLE operationFailed;
     HANDLE terminateForkedProcess;
 
-    HANDLE inMemoryBuffersControlFile;
     HANDLE inMemoryBuffersControlHandle;
     InMemoryBuffersControl * InMemoryBuffersControl;
     HANDLE doSendBuffer[2];
@@ -182,71 +181,89 @@ extern "C"
 
 
 BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
+    SmartHandle shParent;
+    SmartHandle shMMFile;
+    SmartFileView<QForkControl> sfvMasterQForkControl;
+    SmartHandle dupHeapFileHandle;
+    SmartHandle dupForkedProcessReady; 
+    SmartHandle dupStartOperation;
+    SmartHandle dupOperationComplete;
+    SmartHandle dupOperationFailed;
+    SmartHandle dupTerminateProcess;
+    SmartFileMapHandle sfmhMapFile;
+    SmartFileView<byte> sfvHeap;
+    SmartHandle sfMMFileInMemoryControlHandle;
+    SmartFileView<InMemoryBuffersControl> sfvInMemory;
+    SmartHandle dupSendBuffer0;
+    SmartHandle dupSendBuffer1;
+    SmartHandle dupSentBuffer0;
+    SmartHandle dupSentBuffer1;
+
     try {
         g_isForkedProcess = TRUE;
-        SmartHandle shParent( 
+        shParent.Assign( 
             OpenProcess(SYNCHRONIZE | PROCESS_DUP_HANDLE, TRUE, ParentProcessID),
             string("Could not open parent process"));
 
-        SmartHandle shMMFile(shParent, QForkConrolMemoryMapHandle);
-        SmartFileView<QForkControl> sfvMasterQForkControl( 
+        shMMFile.Assign(shParent, QForkConrolMemoryMapHandle);
+        sfvMasterQForkControl.Assign( 
             shMMFile, 
             FILE_MAP_COPY, 
             string("Could not map view of QForkControl in slave. Is system swap file large enough?"));
         g_pQForkControl = sfvMasterQForkControl;
 
         // duplicate handles and stuff into control structure (master protected by PAGE_WRITECOPY)
-        SmartHandle dupHeapFileHandle(shParent, sfvMasterQForkControl->heapMemoryMapFile);
+        dupHeapFileHandle.Assign(shParent, sfvMasterQForkControl->heapMemoryMapFile);
         g_pQForkControl->heapMemoryMapFile = dupHeapFileHandle;
-        SmartHandle dupForkedProcessReady(shParent,sfvMasterQForkControl->forkedProcessReady);
+        dupForkedProcessReady.Assign(shParent,sfvMasterQForkControl->forkedProcessReady);
         g_pQForkControl->forkedProcessReady = dupForkedProcessReady;
-        SmartHandle dupStartOperation(shParent,sfvMasterQForkControl->startOperation);
+        dupStartOperation.Assign(shParent, sfvMasterQForkControl->startOperation);
         g_pQForkControl->startOperation = dupStartOperation;
-        SmartHandle dupOperationComplete(shParent,sfvMasterQForkControl->operationComplete);
+        dupOperationComplete.Assign(shParent, sfvMasterQForkControl->operationComplete);
         g_pQForkControl->operationComplete = dupOperationComplete;
-        SmartHandle dupOperationFailed(shParent,sfvMasterQForkControl->operationFailed);
+        dupOperationFailed.Assign(shParent, sfvMasterQForkControl->operationFailed);
         g_pQForkControl->operationFailed = dupOperationFailed;
-        SmartHandle dupTerminateProcess(shParent,sfvMasterQForkControl->terminateForkedProcess);
+        dupTerminateProcess.Assign(shParent, sfvMasterQForkControl->terminateForkedProcess);
         g_pQForkControl->terminateForkedProcess = dupTerminateProcess;
 
-       // create section handle on MM file
-       SIZE_T mmSize = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
-       SmartFileMapHandle sfmhMapFile(
+
+        // create section handle on MM file
+        SIZE_T mmSize = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
+        sfmhMapFile.Assign(
            g_pQForkControl->heapMemoryMapFile, 
            PAGE_READONLY, 
            HIDWORD(mmSize), LODWORD(mmSize),
            string("QForkSlaveInit: Could not open file mapping object in slave"));
-       g_pQForkControl->heapMemoryMap = sfmhMapFile;
+        g_pQForkControl->heapMemoryMap = sfmhMapFile;
 
-        SmartFileView<byte> sfvHeap(
+        sfvHeap.Assign(
             g_pQForkControl->heapMemoryMap,
             FILE_MAP_READ,
             0, 0, 0,
             g_pQForkControl->heapStart,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
 
-        SmartFileMapHandle sfmhMapFileInMemoryControl(
-            g_pQForkControl->inMemoryBuffersControlFile,
-            PAGE_READWRITE,
-            HIDWORD(sizeof(InMemoryBuffersControl)), LODWORD(sizeof(InMemoryBuffersControl)),
-            string("QForkSlaveInit: Could not open file mapping object in slave"));
-        g_pQForkControl->inMemoryBuffersControlHandle = sfmhMapFile;
+        sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
+        g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
 
-        SmartFileView<InMemoryBuffersControl> sfvInMemory(
+        sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
+        g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
+
+        sfvInMemory.Assign(
             g_pQForkControl->inMemoryBuffersControlHandle,
             FILE_MAP_ALL_ACCESS,
             0, 0, 0,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
         g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
 
-        SmartHandle dupSendBuffer0(shParent, sfvMasterQForkControl->doSendBuffer[0]);
+        dupSendBuffer0.Assign(shParent, sfvMasterQForkControl->doSendBuffer[0]);
         g_pQForkControl->doSendBuffer[0] = dupSendBuffer0;
-        SmartHandle dupSendBuffer1(shParent, sfvMasterQForkControl->doSendBuffer[1]);
+        dupSendBuffer1.Assign(shParent, sfvMasterQForkControl->doSendBuffer[1]);
         g_pQForkControl->doSendBuffer[1] = dupSendBuffer1;
-        SmartHandle dupSentBuffer0(shParent, sfvMasterQForkControl->doneSentBuffer[0]);
-        g_pQForkControl->doSendBuffer[0] = dupSentBuffer0;
-        SmartHandle dupSentBuffer1(shParent, sfvMasterQForkControl->doneSentBuffer[1]);
-        g_pQForkControl->doSendBuffer[1] = dupSentBuffer1;
+        dupSentBuffer0.Assign(shParent, sfvMasterQForkControl->doneSentBuffer[0]);
+        g_pQForkControl->doneSentBuffer[0] = dupSentBuffer0;
+        dupSentBuffer1.Assign(shParent, sfvMasterQForkControl->doneSentBuffer[1]);
+        g_pQForkControl->doneSentBuffer[1] = dupSentBuffer1;
 
 
 
@@ -260,7 +277,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "QForkMasterInit: DLMalloc failed initializing allocation granularity.");
+                "QForkmasterinit: DLMalloc failed initializing allocation granularity.");
         }
 
 
@@ -341,7 +358,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 "QForkMasterInit: MapViewOfFile failed");
         }
 
-        g_pQForkControl->inMemoryBuffersControlFile = CreateFileMappingW(
+        g_pQForkControl->inMemoryBuffersControlHandle = CreateFileMappingW(
             INVALID_HANDLE_VALUE,
             NULL,
             PAGE_READWRITE,
@@ -355,7 +372,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         }
 
         g_pQForkControl->InMemoryBuffersControl = (InMemoryBuffersControl*)MapViewOfFile(
-            g_pQForkControl->inMemoryBuffersControlFile,
+            g_pQForkControl->inMemoryBuffersControlHandle,
             FILE_MAP_ALL_ACCESS,
             0, 0,
             0);
@@ -707,12 +724,12 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
     try {
         // copy operation data
         if (fileName) {
-            g_pQForkControl->typeOfOperation = type;
             strcpy_s(g_pQForkControl->globalData.filename, fileName);
         } else {
-            g_pQForkControl->typeOfOperation = otRDBINMEMORY;
+            type = otRDBINMEMORY;
             g_pQForkControl->globalData.filename[0] = 0;
         }
+        g_pQForkControl->typeOfOperation = type;
         if (sizeOfGlobalData > MAX_GLOBAL_DATA) {
             throw std::runtime_error("Global state too large.");
         }
@@ -751,7 +768,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
         ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
-        SetupInMemoryBuffersMasterParent(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+        if (type == otRDBINMEMORY)
+            SetupInMemoryBuffersMasterParent(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
 
         // Launch the "forked" process
         char fileName[MAX_PATH];
@@ -768,6 +786,10 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         char arguments[_MAX_PATH];
         memset(arguments,0,_MAX_PATH);
         PROCESS_INFORMATION pi;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         sprintf_s(arguments, _MAX_PATH, "%s %ld %ld", qforkFlag, g_hQForkControlFileMap, GetCurrentProcessId());
         if (FALSE == CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
             throw system_error( 

@@ -49,6 +49,13 @@ sGetQueuedCompletionStatusEx pGetQueuedCompletionStatusEx;
   * and then find matching structure in list */
 
 #define MAX_SOCKET_LOOKUP   65535
+#define MAX_WATCHED_ITEMS 2
+
+typedef struct aeWatchedItem {
+    HANDLE watchedHandle;
+    int id;
+    aeHandleEventCallback * proc;
+} aeWatchedItem;
 
 /* structure that keeps state of sockets and Completion port handle */
 typedef struct aeApiState {
@@ -57,12 +64,20 @@ typedef struct aeApiState {
     OVERLAPPED_ENTRY entries[MAX_COMPLETE_PER_POLL];
     list lookup[MAX_SOCKET_LOOKUP];
     list closing;
+    HANDLE watcherThread;
+    HANDLE watcherSignalEvent;
+    HANDLE watcherContinueEvent;
+    CRITICAL_SECTION threadCS;
+    aeWatchedItem watchedItems[MAX_WATCHED_ITEMS];
+    int cWatchedItems;
 } aeApiState;
 
 /* uses virtual FD as an index */
 int aeSocketIndex(int fd) {
     return fd;
 }
+
+
 
 /* get data for socket / fd being monitored. Create if not found*/
 aeSockState *aeGetSockState(void *apistate, int fd) {
@@ -159,7 +174,7 @@ void aeDelSockState(void *apistate, aeSockState *sockState) {
         socklist = &(((aeApiState *)apistate)->closing);
         if (removeMatchFromList(socklist, sockState) == 1) {
             zfree(sockState);
-            return;
+                return;
         }
     } else {
         // not safe to delete. Move to closing
@@ -173,13 +188,126 @@ void aeDelSockState(void *apistate, aeSockState *sockState) {
     }
 }
 
+DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
+{
+    aeApiState * state = (aeApiState*)lpParameter;
+    aeWatchedItem watchedItems[MAX_WATCHED_ITEMS];
+    int watchedCount = 0;
+    HANDLE watchArray[MAX_WATCHED_ITEMS + 2];
+    int exitRequested = 0;
+    watchArray[0] = state->watcherSignalEvent;
+
+    // There are 2 states here.
+    // We are either waiting to be allowed to watch for the watched events
+    // Or we are watching the watched events.  
+
+    DWORD rval = WaitForSingleObject(state->watcherContinueEvent, 0);
+    int postAllowed = rval == WAIT_OBJECT_0;
+
+    while (1) {
+        if (postAllowed) {
+            for (int x = 0; x < watchedCount; x++) {
+                watchArray[x + 1] = watchedItems[x].watchedHandle;
+            }
+            printf("Waiting for events %d\r\n", watchedCount);
+            DWORD rval = WaitForMultipleObjects(watchedCount + 1, watchArray, FALSE, INFINITE);
+            printf("Wait Finished\r\n", watchedCount);
+            EnterCriticalSection(&(state->threadCS));
+            if (rval == WAIT_OBJECT_0) {
+                ResetEvent(watchArray[0]);
+                if (state->cWatchedItems == -1) {
+                    printf("exit requested\r\n");
+                    exitRequested = 1;
+                } else {
+                    printf("control requested\r\n");
+                    for (int x = 0; x < state->cWatchedItems; x++) {
+                        watchedItems[x] = state->watchedItems[x];
+                    }
+                    watchedCount = state->cWatchedItems;
+                }
+            } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
+                int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
+                printf("posting completion %d\r\n", id);
+                PostQueuedCompletionStatus(state->iocp, 0, -1, id);
+                postAllowed = 0;
+            }
+            LeaveCriticalSection(&(state->threadCS));
+            if (exitRequested) break;
+        } else {
+            watchArray[1] = state->watcherContinueEvent;
+            printf("Waiting for control\r\n");
+            DWORD rval = WaitForMultipleObjects(2, watchArray, FALSE, INFINITE);
+            EnterCriticalSection(&(state->threadCS));
+            if (rval == WAIT_OBJECT_0) {
+                ResetEvent(watchArray[0]);
+                if (state->cWatchedItems == -1) {
+                    printf("exit requested\r\n");
+                    exitRequested = 1;
+                } else {
+                    printf("control requested\r\n");
+                    for (int x = 0; x < state->cWatchedItems; x++) {
+                        watchedItems[x] = state->watchedItems[x];
+                    }
+                    watchedCount = state->cWatchedItems;
+                }
+            } else if (rval == WAIT_OBJECT_0 + 1) {
+                printf("post allowed\r\n");
+                postAllowed = 1;
+                ResetEvent(state->watcherContinueEvent);
+            }
+            LeaveCriticalSection(&(state->threadCS));
+            if (exitRequested) break;
+
+        }
+    }
+    return 0;
+}
+
+
+/* termination */
+static void aeApiFree(aeEventLoop *eventLoop) {
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    if (state) {
+        if (state->watcherThread) {
+            EnterCriticalSection(&(state->threadCS));
+            state->cWatchedItems = -1;
+            SetEvent(state->watcherSignalEvent);
+            LeaveCriticalSection(&(state->threadCS));
+            WaitForSingleObject(state->watcherThread, INFINITE);
+            CloseHandle(state->watcherThread);
+            state->watcherThread = NULL;
+        }
+        if (state->watcherSignalEvent) {
+            CloseHandle(state->watcherSignalEvent);
+            state->watcherSignalEvent = NULL;
+        }
+        if (state->watcherContinueEvent) {
+            CloseHandle(state->watcherContinueEvent);
+            state->watcherContinueEvent = NULL;
+        }
+        if (state->iocp) {
+            CloseHandle(state->iocp);
+            state->iocp = NULL;
+        }
+        DeleteCriticalSection(&(state->threadCS));
+        zfree(state);
+    }
+    eventLoop->apidata = NULL;
+    aeWinCleanup();
+}
+
+
+
 /* Called by ae to initialize state */
 static int aeApiCreate(aeEventLoop *eventLoop) {
     HMODULE kernel32_module;
-    aeApiState *state = (aeApiState *)zmalloc(sizeof(aeApiState));
+    aeApiState *state = (aeApiState *)zcalloc(sizeof(aeApiState));
 
     if (!state) return -1;
-    memset(state, 0, sizeof(aeApiState));
+
+    eventLoop->apidata = state;
+
+    InitializeCriticalSectionAndSpinCount(&(state->threadCS), 5000);
 
     /* create a single IOCP to be shared by all sockets */
     state->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE,
@@ -187,8 +315,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
                                          0,
                                          1);
     if (state->iocp == NULL) {
-        zfree(state);
-        return -1;
+        goto err;
     }
 
     pGetQueuedCompletionStatusEx = NULL;
@@ -199,11 +326,22 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
                                         "GetQueuedCompletionStatusEx");
     }
 
+
+    if (!(state->watcherSignalEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
+        goto err;
+    if (!(state->watcherContinueEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
+        goto err;
+
+    if (!(state->watcherThread = CreateThread(NULL, 256 * 1024, WatcherThreadProc, state, 0, NULL)))
+        goto err;
+
     state->setsize = eventLoop->setsize;
-    eventLoop->apidata = state;
     /* initialize the IOCP socket code with state reference */
     aeWinInit(state, state->iocp, aeGetSockState, aeDelSockState);
     return 0;
+err:
+    aeApiFree(eventLoop);
+    return -1;
 }
 
 static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
@@ -212,13 +350,6 @@ static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
 }
 
 
-/* termination */
-static void aeApiFree(aeEventLoop *eventLoop) {
-    aeApiState *state = (aeApiState *)eventLoop->apidata;
-    CloseHandle(state->iocp);
-    zfree(state);
-    aeWinCleanup();
-}
 
 /* monitor state changes for a socket */
 static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
@@ -278,6 +409,58 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
     if (mask & AE_WRITABLE) sockstate->masks &= ~AE_WRITABLE;
 }
 
+
+int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int id)
+{
+    printf("set callbacks count: %d\r\n",count);
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    if (count > MAX_WATCHED_ITEMS || count < 0) 
+        return -1;
+    EnterCriticalSection(&(state->threadCS));
+    state->cWatchedItems = count;
+    for (int x = 0; x < count; x++) {
+        printf("set callbacks id: %d\r\n", id);
+        state->watchedItems[x].id = id;
+        state->watchedItems[x].proc = proc;
+        state->watchedItems[x].watchedHandle = handles[x];
+    }
+    SetEvent(state->watcherSignalEvent);
+    LeaveCriticalSection(&(state->threadCS));
+    return 0;
+}
+
+
+int aeClearCallbacks(aeEventLoop *eventLoop)
+{
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    printf("Clearing callbacks\r\n");
+    EnterCriticalSection(&(state->threadCS));
+    state->cWatchedItems = 0;
+    SetEvent(state->watcherSignalEvent);
+    LeaveCriticalSection(&(state->threadCS));
+    return 0;
+}
+
+
+int aeSetReadyForCallback(aeEventLoop *eventLoop)
+{
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    printf("SetReadyForContinue\r\n");
+    SetEvent(state->watcherContinueEvent);
+    return 0;
+}
+
+
+void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
+{
+    printf("EventSignaled %d\r\n", id);
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    if (state->cWatchedItems > 0 && id == state->watchedItems[0].id) {
+        state->watchedItems[0].proc(eventLoop, id);
+    }
+}
+
+
 /* return array of sockets that are ready for read or write 
    depending on the mask for each socket */
 static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
@@ -287,7 +470,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     int numevents = 0;
     ULONG numComplete = 0;
     int rc;
-    int mswait = (tvp->tv_sec * 1000) + (tvp->tv_usec / 1000);
+    int mswait = tvp ? (tvp->tv_sec * 1000) + (tvp->tv_usec / 1000) : INFINITE;
 
     if (pGetQueuedCompletionStatusEx != NULL) {
         /* first get an array of completion notifications */
@@ -333,6 +516,11 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
         for (j = 0; j < numComplete && numevents < state->setsize; j++, entry++) {
             /* the competion key is the socket */
             int rfd = (int)entry->lpCompletionKey;
+            if (rfd < 0) {
+                int id = (int)entry->lpOverlapped;
+                aeEventSignaled(eventLoop, 0, id);
+                continue;
+            }
             sockstate = aeGetExistingSockState(state, rfd);
 
             if (sockstate != NULL) {

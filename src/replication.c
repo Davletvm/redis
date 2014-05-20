@@ -435,6 +435,7 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
         * operations) will never be smaller than the few bytes we need. */
         sds bulkcount;
 
+        redisLog(REDIS_NOTICE, "Sending in memory prefix");
         bulkcount = sdscatprintf(sdsempty(), "$%lld\r\n", (long long) -2);
 
         result = aeWinSocketSend(fd, bulkcount, (int)sdslen(bulkcount),
@@ -445,6 +446,7 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
             return;
         }
         slave->repldboff = 1;
+        aeSetReadyForCallback(el);
     }
     // The actual send will be done when signaled - on the event loop
     // But not on this fd signal.  Instead we have a watcher
@@ -460,6 +462,7 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
     redisInMemorySendCookie * cookie = (redisInMemorySendCookie*)(req->data);
     if (server.repl_inMemorySend && server.repl_inMemorySend->id == cookie->id) {
         *(cookie->sendState) = INMEMORY_STATE_SENT;
+        redisLog(REDIS_NOTICE, "Successfully sent buffer to Slave");
         SetEvent(cookie->sentDoneEvent);
     }
     free(cookie);
@@ -467,16 +470,17 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
 
 
 
-void sendInMemoryBuffersToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
-    redisClient *slave = privdata;
+void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     char *buf;
     ssize_t result;
-    REDIS_NOTUSED(el);
-    REDIS_NOTUSED(mask);
-    REDIS_NOTUSED(privdata);
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     int send1Ready = 0, send2Ready = 0;
     int sendFirst = -1, sendSecond = -1;
+    if (!inm || id != inm->id) {
+        redisLog(REDIS_WARNING, "Signaled stale inmemory buffer send %d %d", id, inm->id);
+        return;
+    }
+    redisClient * slave = inm->slave;
     DWORD rval = WaitForSingleObject(inm->doSendEvents[0], 0);
     send1Ready = rval == WAIT_OBJECT_0;
     if (!send1Ready && rval != WAIT_TIMEOUT) {
@@ -497,6 +501,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int fd, void *privdata, int mas
         ResetEvent(inm->doSendEvents[0]);
     if (send2Ready)
         ResetEvent(inm->doSendEvents[1]);
+    aeSetReadyForCallback(el);
     if (send1Ready && send2Ready) {
         if (inm->sequence[0] < inm->sequence[1]) {
             sendFirst = 0;
@@ -514,7 +519,8 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int fd, void *privdata, int mas
     cookie->id = inm->id;
     cookie->sentDoneEvent = inm->sentDoneEvents[sendFirst];
     cookie->sendState = inm->sendState + sendFirst;
-    result = aeWinSocketSend(fd, inm->buffer[sendFirst], inm->sizeFilled[sendFirst],
+    redisLog(REDIS_NOTICE, "Sending buffer to Slave");
+    result = aeWinSocketSend(slave->fd, inm->buffer[sendFirst], inm->sizeFilled[sendFirst],
         el, slave, cookie, sendInMemoryBuffersToSlaveDone);
     if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
         redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
@@ -528,7 +534,8 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int fd, void *privdata, int mas
         cookie->id = inm->id;
         cookie->sentDoneEvent = inm->sentDoneEvents[sendSecond];
         cookie->sendState = inm->sendState + sendSecond;
-        result = aeWinSocketSend(fd, inm->buffer[sendSecond], inm->sizeFilled[sendSecond],
+        redisLog(REDIS_NOTICE, "Sending buffer to Slave");
+        result = aeWinSocketSend(slave->fd, inm->buffer[sendSecond], inm->sizeFilled[sendSecond],
             el, slave, cookie, sendInMemoryBuffersToSlaveDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
             redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
@@ -546,6 +553,7 @@ int SetupInMemoryRepl(redisClient *slave)
     slave->repldboff = 0;
     slave->repldbsize = -2;
     slave->replstate = REDIS_REPL_SEND_BULK;
+    server.repl_inMemorySend->slave = slave;
     aeDeleteFileEvent(server.el, slave->fd, AE_WRITABLE);
     if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendInMemoryBuffersToSlavePrefix, slave) == AE_ERR) {
         freeClient(slave);
@@ -968,16 +976,6 @@ void initInMemoryBuffersSlave()
 }
 
 
-void clearInMemoryBufferMaster()
-{
-    if (server.repl_inMemorySend)
-    {
-        zfree(server.repl_inMemorySend);
-        server.repl_inMemorySend = NULL;
-    }
-}
-
-
 /* Abort the async download of the bulk dataset while SYNC-ing with master */
 void replicationAbortSyncTransfer(void) {
     redisAssert(server.repl_state == REDIS_REPL_TRANSFER);
@@ -1106,16 +1104,19 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     off_t left;
     char * buf;
 
-    initInMemoryBuffersSlave();
     if (server.repl_inMemoryReceive->shortcutBuffer) {
+        redisLog(REDIS_NOTICE, "reading into shortcut buffer");
         readlen = server.repl_inMemoryReceive->shortcutBufferSize;
         buf = server.repl_inMemoryReceive->shortcutBuffer;
     } else {
+        redisLog(REDIS_NOTICE, "reading into buffer %d", server.repl_inMemoryReceive->activeBufferWrite);
+
         readlen = server.repl_inMemoryReceive->bufferSize - server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite];
         buf = server.repl_inMemoryReceive->buffer[server.repl_inMemoryReceive->activeBufferWrite] + server.repl_inMemoryReceive->posBufferWritten[server.repl_inMemoryReceive->activeBufferWrite];
     }
     redisAssert(readlen > 0);
     nread = read(fd, buf, readlen);
+    redisLog(REDIS_NOTICE, "read %d", nread);
     if (nread <= 0) {
         errno = WSAGetLastError();
         redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
@@ -1159,6 +1160,7 @@ int readSyncBulkPayloadInMemory(int fd)
         return REDIS_ERR;
     }
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
+    initInMemoryBuffersSlave();
     if (rdbLoad(NULL) != REDIS_OK) {
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         replicationAbortSyncTransfer();
@@ -1219,6 +1221,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     if (server.repl_transfer_size == -2) {
         readSyncBulkPayloadInMemory(fd);
+        return;
     }
 
     /* Read bulk data */

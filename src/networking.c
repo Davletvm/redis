@@ -734,6 +734,9 @@ void freeClient(redisClient *c) {
             memset(c->replFileCopy, 0, MAX_PATH);
 #endif
         }
+        if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
+            ClearInMemoryBuffersMasterParent();
+        }
         l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
         redisAssert(ln != NULL);

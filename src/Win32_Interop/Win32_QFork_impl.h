@@ -29,6 +29,7 @@ typedef struct InMemoryBuffersControl {
     int size[2];
     int bufferSequence[2];
     int bufferState[2];
+    int id;
 } InMemoryBuffersControl;
 
 

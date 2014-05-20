@@ -1133,6 +1133,7 @@ int replicationScriptCacheExists(sds sha1);
 void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void replicationSendNewlineToMaster(void);
+void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);

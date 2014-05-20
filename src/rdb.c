@@ -1124,7 +1124,7 @@ void startLoading(FILE *fp) {
     /* Load the DB */
     server.loading = 1;
     server.loading_start_time = time(NULL);
-    if (fstat(fileno(fp), &sb) == -1) {
+    if (!fp || fstat(fileno(fp), &sb) == -1) {
         server.loading_total_bytes = 1; /* just to avoid division by zero */
     } else {
         server.loading_total_bytes = sb.st_size;
@@ -1182,14 +1182,14 @@ int rdbLoad(char *filename) {
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf,"REDIS",5) != 0) {
-        fclose(fp);
+        if (fp) fclose(fp);
         redisLog(REDIS_WARNING,"Wrong signature trying to load DB from file");
         errno = EINVAL;
         return REDIS_ERR;
     }
     rdbver = atoi(buf+5);
     if (rdbver < 1 || (rdbver > REDIS_RDB_VERSION && rdbver != REDIS_MSRDB_VERSION)) {
-        fclose(fp);
+        if (fp) fclose(fp);
         redisLog(REDIS_WARNING,"Can't handle RDB format version %d",rdbver);
         errno = EINVAL;
         return REDIS_ERR;
@@ -1291,7 +1291,7 @@ readagain:
         }
     }
 
-    fclose(fp);
+    if (fp) fclose(fp);
     stopLoading();
     return REDIS_OK;
 

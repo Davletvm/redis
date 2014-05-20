@@ -969,6 +969,22 @@ void databasesCron(void) {
     }
 }
 
+void FinishInMemoryRepl()
+{
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    inm->slave->repldbfd = -1;
+    aeDeleteFileEvent(server.el, inm->slave->fd, AE_WRITABLE);
+    inm->slave->replstate = REDIS_REPL_ONLINE;
+    inm->slave->repl_ack_time = server.unixtime;
+    if (aeCreateFileEvent(server.el, inm->slave->fd, AE_WRITABLE,
+        sendReplyToClient, inm->slave) == AE_ERR) {
+        freeClient(inm->slave);
+        return;
+    }
+    redisLog(REDIS_NOTICE, "In memory synchronization with slave succeeded");
+
+}
+
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -1042,14 +1058,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             used = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
             if (used || vkeys) {
-                redisLog(REDIS_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
+             //   redisLog(REDIS_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(server.dict); */
             }
         }
     }
 
     /* Show information about connected clients */
-    if (!server.sentinel_mode) {
+    if (!server.sentinel_mode && 0) {
         run_with_period(5000) {
 #ifdef _WIN32
             redisLog(REDIS_VERBOSE,
@@ -1093,7 +1109,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             redisLog(REDIS_WARNING, "fork operation complete");
 
             bysignal = (opStatus == osFAILED);
-            if (!bysignal && server.repl_inMemorySend) {
+            if (!bysignal && server.repl_inMemorySend && server.rdb_child_pid != -1) {
                 bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
                 FinishInMemoryRepl();
             }

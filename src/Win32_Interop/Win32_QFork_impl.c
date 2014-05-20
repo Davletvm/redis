@@ -29,6 +29,7 @@ void SetupGlobals(LPVOID globalData, size_t globalDataSize, uint32_t dictHashSee
 #ifndef NO_QFORKIMPL
     memcpy(&server, globalData, globalDataSize);
     dictSetHashFunctionSeed(dictHashSeed);
+    setLogVerbosityLevel(server.verbosity);
 #endif
 }
 
@@ -62,6 +63,7 @@ int do_aofSave(char* filename)
 void ClearInMemoryBuffersMasterParent()
 {
 #ifndef NO_QFORKIMPL
+    aeClearCallbacks(server.el);
     if (server.repl_inMemorySend) {
         zfree(server.repl_inMemorySend);
         server.repl_inMemorySend = NULL;
@@ -70,11 +72,21 @@ void ClearInMemoryBuffersMasterParent()
 }
 static int control_id = 0;
 
-void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[2], HANDLE doneSent[2])
+void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 {
 #ifndef NO_QFORKIMPL
+    int id = (int)param;
+    sendInMemoryBuffersToSlave(el, id);
+#endif
+}
+
+
+void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[2], HANDLE doneSent[2])
+{
+    control->id = control_id++;
+#ifndef NO_QFORKIMPL
     server.repl_inMemorySend = zcalloc(sizeof(redisInMemoryReplSend));
-    server.repl_inMemorySend->id = control_id++;
+    server.repl_inMemorySend->id = control->id;
     server.repl_inMemorySend->buffer[0] = control->buffer[0];
     server.repl_inMemorySend->buffer[1] = control->buffer[1];
     server.repl_inMemorySend->sizeFilled = control->size;
@@ -87,6 +99,8 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->sendState[1] = INMEMORY_STATE_INVALID;
     server.repl_inMemorySend->sequence[0] = -1;
     server.repl_inMemorySend->sequence[1] = -1;
+
+    aeSetCallbacks(server.el, aeHandleEventCallbackProc, 2, doSend, server.repl_inMemorySend->id);
 #endif
 }
 
@@ -97,6 +111,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     redisInMemoryReplSend inMemoryRepl;
     DWORD rval;
     memset(&inMemoryRepl, 0, sizeof(inMemoryRepl));
+    inMemoryRepl.id = buffers->id;
     inMemoryRepl.buffer[0] = buffers->buffer[0];
     inMemoryRepl.buffer[1] = buffers->buffer[1];
     inMemoryRepl.sizeFilled = buffers->size;
@@ -107,10 +122,12 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     inMemoryRepl.sendState = buffers->bufferState;
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
+    redisLog(REDIS_NOTICE, "Save inmemory starting");
     if (rdbSave(NULL) != REDIS_OK) {
         redisLog(REDIS_WARNING, "rdbSave failed in qfork: %s", strerror(errno));
         return REDIS_ERR;
     }
+    redisLog(REDIS_NOTICE, "Save inmemory finished");
     int activeBuffer = inMemoryRepl.activeBuffer;
     int inActiveBuffer = activeBuffer ? 0 : 1;
     // If the buffer had been full, it would have been sent already.
@@ -118,17 +135,22 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
         ResetEvent(doneSent[activeBuffer]);
         inMemoryRepl.sendState[activeBuffer] = INMEMORY_STATE_READYTOSEND;
         inMemoryRepl.sequence[activeBuffer] = INT32_MAX;
+        redisLog(REDIS_NOTICE, "Sending partially filled buffer %d", activeBuffer);
         SetEvent(doSend[activeBuffer]);
     }
     if (inMemoryRepl.sizeFilled[activeBuffer]) {
+        redisLog(REDIS_NOTICE, "Waiting for send complete on buffer %d", activeBuffer);
         rval = WaitForSingleObject(doneSent[activeBuffer], INFINITE);
         if (rval != WAIT_OBJECT_0) return REDIS_ERR;
+        redisLog(REDIS_NOTICE, "Send complete received on %d", activeBuffer);
     }
     // The other buffer had been sent if it was full
     if (inMemoryRepl.sizeFilled[inActiveBuffer]) {
         redisAssert(inMemoryRepl.sizeFilled[inActiveBuffer] == inMemoryRepl.bufferSize);
+        redisLog(REDIS_NOTICE, "Waiting for send complete on buffer %d", inActiveBuffer);
         DWORD rval = WaitForSingleObject(doneSent[inActiveBuffer], INFINITE);
         if (rval != WAIT_OBJECT_0) return REDIS_ERR;
+        redisLog(REDIS_NOTICE, "Send complete received on %d", inActiveBuffer);
     }
 #endif
     return REDIS_OK;

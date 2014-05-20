@@ -48,6 +48,20 @@ private:
     HANDLE m_handle;
 
 public:
+    HANDLE Assign(HANDLE h)
+    {
+        Close();
+        m_handle = h;
+        if (Invalid())
+            throw std::runtime_error("invalid handle passed to constructor");
+        return h;
+    }
+
+    SmartHandle()
+    {
+        m_handle = INVALID_HANDLE_VALUE;
+    }
+
     SmartHandle( HANDLE handle )
     {
         m_handle = handle;
@@ -55,11 +69,29 @@ public:
             throw std::runtime_error("invalid handle passed to constructor");
     }
 
-    SmartHandle( HANDLE handle, string errorToReport )
+    HANDLE Assign(HANDLE h, string errorToReport)
     {
+        Close();
+        m_handle = h;
+        if (Invalid())
+            throw std::runtime_error(errorToReport);
+        return h;
+    }
+
+    SmartHandle(HANDLE handle, string errorToReport)
+    {
+        Close();
         m_handle = handle;
         if(Invalid())
             throw std::runtime_error(errorToReport);
+    }
+
+    HANDLE Assign(HANDLE parentProcess, HANDLE parentHandleToDuplicate)
+    {
+        Close();
+        if (!DuplicateHandle(parentProcess, parentHandleToDuplicate, GetCurrentProcess(), &m_handle, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            throw std::system_error(GetLastError(), system_category(), "handle duplication failed");
+        return m_handle;
     }
 
     SmartHandle( HANDLE parentProcess, HANDLE parentHandleToDuplicate )
@@ -115,6 +147,23 @@ public:
         return m_viewPtr;
     }
 
+    SmartFileView()
+    {
+        m_viewPtr = NULL;
+    }
+
+    T* Assign(HANDLE fileMapHandle, DWORD desiredAccess, string errorToReport)
+    {
+        UnmapViewOfFile();
+        m_viewPtr = (T*)MapViewOfFile(fileMapHandle, desiredAccess, 0, 0, sizeof(T));
+        if (Invalid()) {
+            DebugBreak();
+            throw std::system_error(GetLastError(), system_category(), errorToReport.c_str());
+        }
+        return m_viewPtr;
+    }
+
+
     SmartFileView( HANDLE fileMapHandle, DWORD desiredAccess, string errorToReport )
     {
         m_viewPtr = (T*)MapViewOfFile( fileMapHandle, desiredAccess, 0, 0, sizeof(T) );
@@ -124,6 +173,18 @@ public:
         }
     }
 
+    T* Assign(HANDLE fileMapHandle, DWORD desiredAccess, DWORD fileOffsetHigh, DWORD fileOffsetLow, SIZE_T bytesToMap, string errorToReport)
+    {
+        UnmapViewOfFile();
+        m_viewPtr = (T*)MapViewOfFile(fileMapHandle, desiredAccess, fileOffsetHigh, fileOffsetLow, bytesToMap);
+        if (Invalid()) {
+            DebugBreak();
+            throw std::system_error(GetLastError(), system_category(), errorToReport.c_str());
+        }
+        return m_viewPtr;
+    }
+
+
     SmartFileView( HANDLE fileMapHandle, DWORD desiredAccess, DWORD fileOffsetHigh, DWORD fileOffsetLow, SIZE_T bytesToMap, string errorToReport )
     {
         m_viewPtr = (T*)MapViewOfFile( fileMapHandle, desiredAccess, fileOffsetHigh, fileOffsetLow, bytesToMap );
@@ -132,6 +193,17 @@ public:
             throw std::system_error(GetLastError(), system_category(), errorToReport.c_str());
         }
     }
+
+    T* Assign(HANDLE fileMapHandle, DWORD desiredAccess, DWORD fileOffsetHigh, DWORD fileOffsetLow, SIZE_T bytesToMap, LPVOID baseAddress, string errorToReport)
+    {
+        UnmapViewOfFile();
+        m_viewPtr = (T*)MapViewOfFileEx(fileMapHandle, desiredAccess, fileOffsetHigh, fileOffsetLow, bytesToMap, baseAddress);
+        if (Invalid()) {
+            throw std::system_error(GetLastError(), system_category(), errorToReport.c_str());
+        }
+        return m_viewPtr;
+    }
+
 
     SmartFileView( HANDLE fileMapHandle, DWORD desiredAccess, DWORD fileOffsetHigh, DWORD fileOffsetLow, SIZE_T bytesToMap, LPVOID baseAddress, string errorToReport )
     {
@@ -174,13 +246,7 @@ public:
 
     ~SmartFileView()
     {
-        if( m_viewPtr != NULL )
-        {
-            if( !::UnmapViewOfFile(m_viewPtr) )
-                throw system_error(GetLastError(), system_category(), "UnmapViewOfFile failed" );
-
-            m_viewPtr = NULL;
-        }
+        UnmapViewOfFile();
     }
 };
 
@@ -196,6 +262,26 @@ public:
         return m_handle;
     }
 
+    SmartFileMapHandle()
+    {
+        m_handle = INVALID_HANDLE_VALUE;
+    }
+
+
+    HANDLE Assign(HANDLE mmFile, DWORD protectionFlags, DWORD maxSizeHigh, DWORD maxSizeLow, string errorToReport)
+    {
+        Unmap();
+        m_handle = CreateFileMapping(mmFile, NULL, protectionFlags, maxSizeHigh, maxSizeLow, NULL);
+        if (Invalid())
+            throw std::system_error(GetLastError(), system_category(), errorToReport);
+
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        systemAllocationGranularity = si.dwAllocationGranularity;
+        return m_handle;
+    }
+
+
     SmartFileMapHandle( HANDLE mmFile, DWORD protectionFlags, DWORD maxSizeHigh, DWORD maxSizeLow, string errorToReport )
     {
         m_handle = CreateFileMapping( mmFile, NULL, protectionFlags, maxSizeHigh, maxSizeLow, NULL );
@@ -209,10 +295,9 @@ public:
 
     void Unmap()
     {
-        if( m_handle == NULL || m_handle == INVALID_HANDLE_VALUE )
-            throw std::invalid_argument("m_handle == NULL");
-
-        CloseHandle(m_handle);
+        if (Valid()) {
+            CloseHandle(m_handle);
+        }
         m_handle = NULL;
     }
 

@@ -64,6 +64,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
 OperationStatus GetForkOperationStatus();
 BOOL EndForkOperation(int * pExitCode);
 BOOL AbortForkOperation();
+void ClearInMemoryBuffersMasterParent();
 
 // For DLMalloc use only
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh);
