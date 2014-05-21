@@ -194,31 +194,33 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
     size_t lenToCopy;
     redisInMemoryReplReceive * inm = r->io.memoryReceive.inMemory;
     while (server.repl_inMemoryReceive == inm) {
-        leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
-        if (leftInActiveBuffer == 0) {
-            inm->activeBufferRead++;
-            if (inm->activeBufferRead == 2) inm->activeBufferRead = 0;
+        if (!inm->shortcutBuffer) {
             leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
-        }
-        if (leftInActiveBuffer > 0) {
-            if (len > leftInActiveBuffer)
-                lenToCopy = leftInActiveBuffer;
-            else
-                lenToCopy = len;
-            memcpy(buf, inm->buffer[inm->activeBufferRead] + inm->posBufferRead[inm->activeBufferRead], lenToCopy);
-            inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
-            buf = ((char*)buf) + lenToCopy;
-            len -= lenToCopy;
-            leftInActiveBuffer -= lenToCopy;
             if (leftInActiveBuffer == 0) {
-                inm->posBufferRead[inm->activeBufferRead] = inm->posBufferWritten[inm->activeBufferRead] = 0;
+                inm->activeBufferRead++;
+                if (inm->activeBufferRead == 2) inm->activeBufferRead = 0;
+                leftInActiveBuffer = inm->posBufferWritten[inm->activeBufferRead] - inm->posBufferRead[inm->activeBufferRead];
             }
-            if (len == 0) return 1;
-        }
-        redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
-        if (len > inm->bufferSize) {
-            inm->shortcutBuffer = buf;
-            inm->shortcutBufferSize = len;
+            if (leftInActiveBuffer > 0) {
+                if (len > leftInActiveBuffer)
+                    lenToCopy = leftInActiveBuffer;
+                else
+                    lenToCopy = len;
+                memcpy(buf, inm->buffer[inm->activeBufferRead] + inm->posBufferRead[inm->activeBufferRead], lenToCopy);
+                inm->posBufferRead[inm->activeBufferRead] += lenToCopy;
+                buf = ((char*)buf) + lenToCopy;
+                len -= lenToCopy;
+                leftInActiveBuffer -= lenToCopy;
+                if (leftInActiveBuffer == 0) {
+                    inm->posBufferRead[inm->activeBufferRead] = inm->posBufferWritten[inm->activeBufferRead] = 0;
+                }
+                if (len == 0) return 1;
+            }
+            redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
+            if (len > inm->bufferSize) {
+                inm->shortcutBuffer = buf;
+                inm->shortcutBufferSize = len;
+            }
         }
         PollForRead();
         if (server.repl_inMemoryReceive != inm) {

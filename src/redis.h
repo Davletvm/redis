@@ -625,6 +625,7 @@ typedef struct redisInMemoryReplSend {
     int * sendState;
     int activeBuffer;
     redisClient * slave;
+    size_t totalSent;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie

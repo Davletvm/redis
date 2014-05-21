@@ -92,6 +92,8 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->buffer[1] = control->buffer[1].b;
     server.repl_inMemorySend->sizeFilled[0] = &(control->buffer[0].s);
     server.repl_inMemorySend->sizeFilled[1] = &(control->buffer[1].s);
+    server.repl_inMemorySend->sizeFilled[0][0] = 0;
+    server.repl_inMemorySend->sizeFilled[1][0] = 0;
     server.repl_inMemorySend->bufferSize = InMemoryMasterBufferSize;
     server.repl_inMemorySend->doSendEvents = doSend;
     server.repl_inMemorySend->sentDoneEvents = doneSent;

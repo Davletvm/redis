@@ -517,7 +517,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     cookie->id = inm->id;
     cookie->sentDoneEvent = inm->sentDoneEvents[sendFirst];
     cookie->sendState = inm->sendState + sendFirst;
-    redisLog(REDIS_NOTICE, "Sending buffer to Slave. size: %d", *(inm->sizeFilled[sendFirst]));
+    redisLog(REDIS_NOTICE, "Sending buffer to Slave. size: %d, total: %lld", *(inm->sizeFilled[sendFirst]), inm->totalSent + *(inm->sizeFilled[sendFirst]));
     result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendFirst], *(inm->sizeFilled[sendFirst]) + sizeof(int),
         el, slave, cookie, sendInMemoryBuffersToSlaveDone);
     if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
@@ -527,12 +527,13 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
         return;
     }
     inm->sendState[sendFirst] = INMEMORY_STATE_SENDING;
+    inm->totalSent += *(inm->sizeFilled[sendFirst]);
     if (sendSecond != -1) {
         cookie = zmalloc(sizeof(redisInMemorySendCookie));
         cookie->id = inm->id;
         cookie->sentDoneEvent = inm->sentDoneEvents[sendSecond];
         cookie->sendState = inm->sendState + sendSecond;
-        redisLog(REDIS_NOTICE, "Sending buffer to Slave. size: %d", *(inm->sizeFilled[sendSecond]));
+        redisLog(REDIS_NOTICE, "Sending buffer to Slave. size: %d, total: %lld", *(inm->sizeFilled[sendSecond]), inm->totalSent + *(inm->sizeFilled[sendSecond]));
         result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendSecond], *(inm->sizeFilled[sendSecond]) + sizeof(int),
             el, slave, cookie, sendInMemoryBuffersToSlaveDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
@@ -542,6 +543,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
             return;
         }
         inm->sendState[sendSecond] = INMEMORY_STATE_SENDING;
+        inm->totalSent += *(inm->sizeFilled[sendSecond]);
     }
 }
 
@@ -967,9 +969,9 @@ void initInMemoryBuffersSlave()
 {
     if (!server.repl_inMemoryReceive) {
         server.repl_inMemoryReceive = zcalloc(sizeof(redisInMemoryReplReceive));
-        server.repl_inMemoryReceive->buffer[0] = zmalloc(16 * 1024);
-        server.repl_inMemoryReceive->buffer[1] = zmalloc(16 * 1024);
-        server.repl_inMemoryReceive->bufferSize = 16 * 1024;
+        server.repl_inMemoryReceive->buffer[0] = zmalloc(32 * 1024 * 1024);
+        server.repl_inMemoryReceive->buffer[1] = zmalloc(32 * 1024 * 1024);
+        server.repl_inMemoryReceive->bufferSize = 32 * 1024 * 1024;
     }
 }
 
@@ -1033,12 +1035,12 @@ int finishedReadingBulkPayload()
     close(server.repl_transfer_fd);
     server.repl_transfer_fd = -1;
 #endif
-    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
-        redisLog(REDIS_WARNING, "Failed trying to rename the temp DB into dump.rdb in MASTER <-> SLAVE synchronization: %s", strerror(errno));
-        replicationAbortSyncTransfer();
-        return REDIS_ERR;
-    }
     if (server.repl_transfer_size != -2) {
+        if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+            redisLog(REDIS_WARNING, "Failed trying to rename the temp DB into dump.rdb in MASTER <-> SLAVE synchronization: %s", strerror(errno));
+            replicationAbortSyncTransfer();
+            return REDIS_ERR;
+        }
         redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Flushing old data before in-memory transfer");
         signalFlushedDb(-1);
         emptyDb(replicationEmptyDbCallback);
@@ -1054,6 +1056,7 @@ int finishedReadingBulkPayload()
             return REDIS_ERR;
         }
     } else {
+        unlink(server.repl_transfer_tmpfile);
         clearInMemoryReplBuffersSlave();
     }
     /* Final setup of the connected slave <- master link */
@@ -1117,7 +1120,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             readlen = inm->currentPacketSize;
         redisAssert(readlen > 0);
         nread = read(fd, buf, readlen);
-        redisLog(REDIS_NOTICE, "read %d", nread);
+        redisLog(REDIS_NOTICE, "read %d, total: %lld", nread, inm->totalRead + nread);
         if (nread <= 0) {
             errno = WSAGetLastError();
             redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
@@ -1183,7 +1186,7 @@ int readSyncBulkPayloadInMemory(int fd)
     }
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
     initInMemoryBuffersSlave();
-    if (rdbLoad(NULL) != REDIS_OK) {
+    if (rdbLoad(NULL) != REDIS_OK) {  // now read, which will keep blocking on incoming data
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         replicationAbortSyncTransfer();
         return REDIS_ERR;

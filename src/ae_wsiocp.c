@@ -222,6 +222,7 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
                     printf("control requested\r\n");
                     memcpy(watchedItems, state->watchedItems, sizeof(aeWatchedItem) * state->cWatchedItems);
                     watchedCount = state->cWatchedItems;
+                    if (!watchedCount) postAllowed = 0;
                 }
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;

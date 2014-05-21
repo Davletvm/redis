@@ -249,13 +249,6 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
         g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
 
-        sfvInMemory.Assign(
-            g_pQForkControl->inMemoryBuffersControlHandle,
-            FILE_MAP_ALL_ACCESS,
-            0, 0, 0,
-            string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
-        g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
-
         dupSendBuffer0.Assign(shParent, sfvMasterQForkControl->doSendBuffer[0]);
         g_pQForkControl->doSendBuffer[0] = dupSendBuffer0;
         dupSendBuffer1.Assign(shParent, sfvMasterQForkControl->doSendBuffer[1]);
