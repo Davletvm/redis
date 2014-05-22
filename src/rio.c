@@ -110,7 +110,7 @@ static off_t rioFileTell(rio *r) {
 static void SendActiveBuffer(rio * r)
 {
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    redisLog(REDIS_NOTICE, "Sending buffer %d", inm->activeBuffer);
+    redisLog(REDIS_DEBUG, "Sending buffer %d", inm->activeBuffer);
     inm->sendState[inm->activeBuffer] = INMEMORY_STATE_READYTOSEND;
     inm->sequence[inm->activeBuffer] = r->io.memorySend.sequence++;
     ResetEvent(inm->sentDoneEvents[inm->activeBuffer]);
@@ -119,12 +119,12 @@ static void SendActiveBuffer(rio * r)
 
 static int WaitForFreeBuffer(rio * r)
 {
-    redisLog(REDIS_NOTICE, "Waiting for free buffers.");
+    redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
     WaitForMultipleObjects(2, inm->sentDoneEvents, FALSE, INFINITE);
     DWORD rval = WaitForSingleObject(inm->sentDoneEvents[0], 0);
     if (rval == WAIT_OBJECT_0) {
-        redisLog(REDIS_NOTICE, "Got free buffer 0");
+        redisLog(REDIS_DEBUG, "Got free buffer 0");
         ResetEvent(inm->sentDoneEvents[0]);
         *(inm->sizeFilled[0]) = 0;
         inm->sendState[0] = INMEMORY_STATE_READYTOFILL;
@@ -133,7 +133,7 @@ static int WaitForFreeBuffer(rio * r)
     }
     rval = WaitForSingleObject(inm->sentDoneEvents[1], 0);
     if (rval == WAIT_OBJECT_0) {
-        redisLog(REDIS_NOTICE, "Got free buffer 1");
+        redisLog(REDIS_DEBUG, "Got free buffer 1");
         ResetEvent(inm->sentDoneEvents[1]);
         *(inm->sizeFilled[1]) = 0;
         inm->sendState[1] = INMEMORY_STATE_READYTOFILL;
@@ -227,15 +227,15 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
             }
         }
         if (!PollForRead()) {
-            redisLog(REDIS_NOTICE, "Error while reading: timeout");
+            redisLog(REDIS_DEBUG, "Error while reading: timeout");
             return 0;
         }
         if (server.repl_inMemoryReceive != inm) {
-            redisLog(REDIS_NOTICE, "Disconnected while reading");
+            redisLog(REDIS_DEBUG, "Disconnected while reading");
             return 0;
         }
         if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROROREND) {
-            redisLog(REDIS_NOTICE, "Error while reading: %d", inm->endStateFlags);
+            redisLog(REDIS_DEBUG, "Error while reading: %d", inm->endStateFlags);
             return 0;
         }
         if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {

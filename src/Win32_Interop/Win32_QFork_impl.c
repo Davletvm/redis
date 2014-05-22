@@ -114,7 +114,7 @@ void SendBuffer(redisInMemoryReplSend * inm, int which, int sequence)
     ResetEvent(inm->sentDoneEvents[which]);
     inm->sendState[which] = INMEMORY_STATE_READYTOSEND;
     inm->sequence[which] = sequence;
-    redisLog(REDIS_NOTICE, "Sending partially filled buffer %d", which);
+    redisLog(REDIS_DEBUG, "Sending partially filled buffer %d", which);
     ResetEvent(inm->sentDoneEvents[which]);
     SetEvent(inm->doSendEvents[which]);
 }
@@ -137,12 +137,12 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     inMemoryRepl.sendState = buffers->bufferState;
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
-    redisLog(REDIS_NOTICE, "Save inmemory starting");
+    redisLog(REDIS_DEBUG, "Save inmemory starting");
     if (rdbSave(NULL) != REDIS_OK) {
         redisLog(REDIS_WARNING, "rdbSave failed in qfork: %s", strerror(errno));
         return REDIS_ERR;
     }
-    redisLog(REDIS_NOTICE, "Save inmemory finished");
+    redisLog(REDIS_DEBUG, "Save inmemory finished");
     int activeBuffer = inMemoryRepl.activeBuffer;
     int inActiveBuffer = activeBuffer ? 0 : 1;
     int sentEmpty = 0;
@@ -166,26 +166,26 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     }
     // If all buffers are in flight, we need to wait for the first one
     if (!sentEmpty) {
-        redisLog(REDIS_NOTICE, "Waiting for send complete on both buffers");
+        redisLog(REDIS_DEBUG, "Waiting for send complete on both buffers");
         rval = WaitForMultipleObjects(2, doneSent, FALSE, INFINITE);
         if (rval < WAIT_OBJECT_0 || rval > WAIT_OBJECT_0 + 1)
             return REDIS_ERR;
-        redisLog(REDIS_NOTICE, "Send complete received on %d", rval - WAIT_OBJECT_0);
+        redisLog(REDIS_DEBUG, "Send complete received on %d", rval - WAIT_OBJECT_0);
         inMemoryRepl.sizeFilled[rval - WAIT_OBJECT_0][0] = 0;
         SendBuffer(&inMemoryRepl, rval - WAIT_OBJECT_0, INT32_MAX);
     }
     // Now just wait for all to have been sent
     if (inMemoryRepl.sendState[0] == INMEMORY_STATE_READYTOSEND) {
-        redisLog(REDIS_NOTICE, "Waiting for send complete on buffer %d", 0);
+        redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", 0);
         rval = WaitForSingleObject(doneSent[0], INFINITE);
         if (rval != WAIT_OBJECT_0) return REDIS_ERR;
-        redisLog(REDIS_NOTICE, "Send complete received on %d", 0);
+        redisLog(REDIS_DEBUG, "Send complete received on %d", 0);
     }
     if (inMemoryRepl.sendState[1] == INMEMORY_STATE_READYTOSEND) {
-        redisLog(REDIS_NOTICE, "Waiting for send complete on buffer %d", 1);
+        redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", 1);
         rval = WaitForSingleObject(doneSent[1], INFINITE);
         if (rval != WAIT_OBJECT_0) return REDIS_ERR;
-        redisLog(REDIS_NOTICE, "Send complete received on %d", 1);
+        redisLog(REDIS_DEBUG, "Send complete received on %d", 1);
     }
 #endif
     return REDIS_OK;

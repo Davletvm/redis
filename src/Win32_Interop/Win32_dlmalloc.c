@@ -572,6 +572,7 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #include <windows.h>
 #include <tchar.h>
 #include "Win32_QFork.h"
+#include "..\redisLog.h"
 #define HAVE_MMAP 1
 #define HAVE_MORECORE 0
 #define LACKS_UNISTD_H
@@ -1710,7 +1711,7 @@ static FORCEINLINE void* win32mmap(size_t size) {
 #endif
   if( ptr == NULL )
   {
-      printf( "VirtualAlloc/COWAlloc fail!\n");
+      redisLog(REDIS_WARNING, "VirtualAlloc/COWAlloc fail!\n");
   }
   return (ptr != 0)? ptr: MFAIL;
 }
@@ -1724,7 +1725,7 @@ static FORCEINLINE void* win32direct_mmap(size_t size) {
 #endif
   if( ptr == NULL )
   {
-      printf( "VirtualAlloc/COWAlloc fail!\n");
+      redisLog(REDIS_WARNING, "VirtualAlloc/COWAlloc fail!\n");
   }
   return (ptr != 0)? ptr: MFAIL;
 }

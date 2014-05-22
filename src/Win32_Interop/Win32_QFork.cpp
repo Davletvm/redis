@@ -36,6 +36,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include "..\redisLog.h"
 using namespace std;
 
 //#define DEBUG_WITH_PROCMON
@@ -248,7 +249,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
             g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
 
-            sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
+            sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
             g_pQForkControl->inMemoryBuffersControl = sfvInMemory;
 
             g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
@@ -306,6 +307,8 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 
         // parent will notify us when to quit
         WaitForSingleObject(g_pQForkControl->terminateForkedProcess, INFINITE);
+
+        redisLog(REDIS_NOTICE, "Successfully completed background operation.");
 
         g_pQForkControl = NULL;
         return TRUE;
@@ -551,13 +554,13 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         return TRUE;
     }
     catch(std::system_error syserr) {
-        printf("QForkMasterInit: system error caught. error code=0x%08x, message=%s\n", syserr.code().value(), syserr.what());
+        redisLog(REDIS_WARNING, "QForkMasterInit: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
     }
     catch(std::runtime_error runerr) {
-        printf("QForkMasterInit: runtime error caught. message=%s\n", runerr.what());
+        redisLog(REDIS_WARNING, "QForkMasterInit: runtime error caught. message=%s", runerr.what());
     }
     catch(...) {
-        printf("QForkMasterInit: other exception caught.\n");
+        redisLog(REDIS_WARNING, "QForkMasterInit: other exception caught.");
     }
     return FALSE;
 }
@@ -597,11 +600,11 @@ StartupStatus QForkStartup(int argc, char** argv) {
                             if (getline(iss, maxmemoryString, ' ')) {
                                 maxvirtualmemory = memtoll(maxmemoryString.c_str(), &memtollerr);
                                 if (memtollerr != 0) {
-                                    printf (
-                                        "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
+                                    redisLog(REDIS_WARNING, 
+                                        "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.", 
                                         maxvirtualmemoryflag,
                                         maxmemoryString.c_str());
-                                    printf( "Failing startup.\n");
+                                    redisLog(REDIS_WARNING, "Failing startup.");
                                     return StartupStatus::ssFAILED;
                                 }
                                 maxMemoryFlagFound = true;
@@ -614,19 +617,19 @@ StartupStatus QForkStartup(int argc, char** argv) {
             if( strncmp(argv[n],"--", 2) == 0) {
                 if (_stricmp(argv[n]+2,maxvirtualmemoryflag) == 0) {
                     if (n + 1 >= argc) {
-                        printf (
-                            "%s specified without a size.\n", 
+                        redisLog(REDIS_WARNING,
+                            "%s specified without a size.", 
                             argv[n] );
-                        printf( "Failing startup.\n");
+                        redisLog(REDIS_WARNING, "Failing startup.");
                         return StartupStatus::ssFAILED;
                     }
                     maxvirtualmemory = memtoll(argv[n+1], &memtollerr);
                     if (memtollerr != 0) {
-                        printf (
-                            "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.\n", 
+                        redisLog(REDIS_WARNING,
+                            "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.", 
                             argv[n],
                             argv[n+1] );
-                        printf( "Failing startup.\n");
+                        redisLog(REDIS_WARNING, "Failing startup.");
                         return StartupStatus::ssFAILED;
                     } 
                     maxMemoryFlagFound = true;
@@ -714,26 +717,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         g_pQForkControl->globalData.globalDataSize = sizeOfGlobalData;
         g_pQForkControl->globalData.dictHashSeed = dictHashSeed;
 
-
-        // protect both the heap and the fork control map from propagating local changes 
-        DWORD oldProtect = 0;
-        if (VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "BeginForkOperation: VirtualProtect 1 failed");
-        }
-        if (VirtualProtect(
-            g_pQForkControl->heapStart,
-            g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
-            PAGE_WRITECOPY,
-            &oldProtect) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "BeginForkOperation: VirtualProtect 2 failed");
-        }
-
         // ensure events are in the correst state
         ResetEventHandle(g_pQForkControl->operationComplete);
         ResetEventHandle(g_pQForkControl->operationFailed);
@@ -746,7 +729,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
         if (type == otRDBINMEMORY) {
-            DebugBreak();
 
             size_t size = sizeof(InMemoryBuffersControl);
             if (sendBufferSize < 1024) sendBufferSize = 1024;
@@ -774,7 +756,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 INVALID_HANDLE_VALUE,
                 NULL,
                 PAGE_READWRITE,
-                0, LOWORD(size),
+                HIDWORD(size), LODWORD(size),
                 NULL);
             if (g_pQForkControl->inMemoryBuffersControlHandle == NULL) {
                 throw std::system_error(
@@ -796,12 +778,34 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             }
             g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
             g_pQForkControl->inMemoryBuffersControl->buffer[1] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset);
+            g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
 
             SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
             g_pQForkControl->inMemoryBuffersControlHandle = NULL;
             g_pQForkControl->inMemoryBuffersControl = NULL;
         }
+
+        // protect both the heap and the fork control map from propagating local changes 
+        DWORD oldProtect = 0;
+        if (VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "BeginForkOperation: VirtualProtect 1 failed");
+        }
+        if (VirtualProtect(
+            g_pQForkControl->heapStart,
+            g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
+            PAGE_WRITECOPY,
+            &oldProtect) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "BeginForkOperation: VirtualProtect 2 failed");
+        }
+
+
         // Launch the "forked" process
         char fileName[MAX_PATH];
         if (0 == GetModuleFileNameA(NULL, fileName, MAX_PATH)) {
@@ -836,8 +840,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         handles[0] = g_pQForkControl->forkedProcessReady;
         handles[1] = g_pQForkControl->operationFailed;
         // wait for "forked" process to map memory
-        if(WaitForMultipleObjects(2, handles, FALSE, 10000) != WAIT_OBJECT_0) {
-            throw system_error(
+        if (WaitForMultipleObjects(2, handles, FALSE, 1000000) != WAIT_OBJECT_0) {
+                throw system_error(
                 GetLastError(),
                 system_category(),
                 "Forked Process did not respond successfully in a timely manner.");
@@ -850,13 +854,13 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         return TRUE;
     }
     catch(std::system_error syserr) {
-        printf("BeginForkOperation: system error caught. error code=0x%08x, message=%s\n", syserr.code().value(), syserr.what());
+        redisLog(REDIS_WARNING, "BeginForkOperation: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
     }
     catch(std::runtime_error runerr) {
-        printf("BeginForkOperation: runtime error caught. message=%s\n", runerr.what());
+        redisLog(REDIS_WARNING, "BeginForkOperation: runtime error caught. message=%s", runerr.what());
     }
     catch(...) {
-        printf("BeginForkOperation: other exception caught.\n");
+        redisLog(REDIS_WARNING, "BeginForkOperation: other exception caught.");
     }
     ClearInMemoryBuffersMasterParent();
     return FALSE;
@@ -897,13 +901,13 @@ BOOL AbortForkOperation()
         return EndForkOperation(NULL);
     }
     catch(std::system_error syserr) {
-        printf("0x%08x - %s\n", syserr.code().value(), syserr.what());
+        redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
 
         // If we can not properly restore fork state, then another fork operation is not possible. 
         exit(1);
     }
     catch( ... ) {
-        printf("Some other exception caught in EndForkOperation().\n");
+        redisLog(REDIS_WARNING, "Some other exception caught in EndForkOperation().");
         exit(1);
     }
     return FALSE;
@@ -912,6 +916,8 @@ BOOL AbortForkOperation()
 
 BOOL EndForkOperation(int * pExitCode) {
     try {
+
+        redisLog(REDIS_NOTICE, "Ending fork operation");
         SetEvent(g_pQForkControl->terminateForkedProcess);
 
         if( g_hForkedProcess != 0 )
@@ -1115,13 +1121,13 @@ BOOL EndForkOperation(int * pExitCode) {
         return TRUE;
     }
     catch(std::system_error syserr) {
-        printf("0x%08x - %s\n", syserr.code().value(), syserr.what());
+        redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
 
         // If we can not properly restore fork state, then another fork operation is not possible. 
         exit(1);
     }
     catch( ... ) {
-        printf("Some other exception caught in EndForkOperation().\n");
+        redisLog(REDIS_WARNING, "Some other exception caught in EndForkOperation().");
         exit(1);
     }
     return FALSE;
