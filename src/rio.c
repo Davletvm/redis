@@ -106,10 +106,6 @@ static off_t rioFileTell(rio *r) {
     return (off_t)ftello(r->io.file.fp);
 }
 
-static void PollForRead()
-{
-    aeProcessEvents(server.el, AE_FILE_EVENTS);
-}
 
 static void SendActiveBuffer(rio * r)
 {
@@ -144,7 +140,7 @@ static int WaitForFreeBuffer(rio * r)
     } else if (rval != WAIT_TIMEOUT) {
         return 0;
     }
-    return !*(inm->sizeFilled[0]) || !*(inm->sizeFilled[1]);
+    return !inm->sizeFilled[0][0] || !inm->sizeFilled[1][0];
 }
 
 /* Returns 1 or 0 for success/failure.
@@ -187,6 +183,14 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
 }
 
 
+static int PollForRead()
+{
+    int timeout = server.repl_timeout - (time(NULL) - server.repl_transfer_lastio);
+    if (timeout <= 0) return 0;
+
+    return aeProcessEvents(server.el, AE_FILE_EVENTS, server.repl_timeout - (time(NULL) - server.repl_transfer_lastio));
+}
+
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
@@ -217,14 +221,21 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
                 if (len == 0) return 1;
             }
             redisAssert(inm->posBufferWritten[inm->activeBufferRead] == inm->posBufferRead[inm->activeBufferRead]);
-            if (len > inm->bufferSize) {
+            if (len > server.repl_inMemoryShortcutMin) {
                 inm->shortcutBuffer = buf;
                 inm->shortcutBufferSize = len;
             }
         }
-        PollForRead();
+        if (!PollForRead()) {
+            redisLog(REDIS_NOTICE, "Error while reading: timeout");
+            return 0;
+        }
         if (server.repl_inMemoryReceive != inm) {
             redisLog(REDIS_NOTICE, "Disconnected while reading");
+            return 0;
+        }
+        if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROROREND) {
+            redisLog(REDIS_NOTICE, "Error while reading: %d", inm->endStateFlags);
             return 0;
         }
         if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {

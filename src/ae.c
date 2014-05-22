@@ -377,7 +377,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * the events that's possible to process without to wait are processed.
  *
  * The function returns the number of events processed. */
-int aeProcessEvents(aeEventLoop *eventLoop, int flags)
+int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
 {
     int processed = 0, numevents;
 
@@ -422,6 +422,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             } else {
                 /* Otherwise we can block */
                 tvp = NULL; /* wait forever */
+                if (defaultTimeout != -1) {
+                    tv.tv_sec = defaultTimeout;
+                    tv.tv_usec = 0;
+                    tvp = &tv;
+                }
             }
         }
 
@@ -482,7 +487,7 @@ void aeMain(aeEventLoop *eventLoop) {
     while (!eventLoop->stop) {
         if (eventLoop->beforesleep != NULL)
             eventLoop->beforesleep(eventLoop);
-        aeProcessEvents(eventLoop, AE_ALL_EVENTS);
+        aeProcessEvents(eventLoop, AE_ALL_EVENTS, -1);
     }
 }
 

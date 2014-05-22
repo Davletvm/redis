@@ -1431,6 +1431,10 @@ void initServerConfig() {
     server.master_repl_offset = 0;
     server.repl_inMemorySend = NULL;
     server.repl_inMemoryReceive = NULL;
+    server.repl_inMemoryUse = REDIS_DEFAULT_INMEMORYREPL;
+    server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
+    server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
+    server.repl_inMemoryShortcutMin = REDIS_DEFAULT_INMEMORY_SHORTCUTMIN;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;

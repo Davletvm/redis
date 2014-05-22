@@ -23,16 +23,16 @@
 #pragma once
 
 
-#define InMemoryMasterBufferSize  (32 * 1024 * 1024)
 typedef struct SPBuffer {
     int s;
-    char b[InMemoryMasterBufferSize];
+    char b[1024];
 }SPBuffer;
 typedef struct InMemoryBuffersControl {
-    SPBuffer buffer[2];
     int bufferSequence[2];
     int bufferState[2];
     int id;
+    int bufferSize;
+    SPBuffer * buffer[2];
 } InMemoryBuffersControl;
 
 

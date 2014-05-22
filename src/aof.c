@@ -532,7 +532,7 @@ int loadAppendOnlyFile(char *filename) {
         /* Serve the clients from time to time */
         if (!(loops++ % 1000)) {
             loadingProgress((off_t)ftello(fp));
-            aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
+            aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT, -1);
         }
 
         if (fgets(buf,sizeof(buf),fp) == NULL) {
@@ -1014,7 +1014,7 @@ int rewriteAppendOnlyFileBackground(void) {
     start = ustime();
 
     snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
-    if (BeginForkOperation(otAOF, tmpfile, &server, sizeof(server), &server.aof_child_pid, dictGetHashFunctionSeed()) == FALSE) {
+    if (BeginForkOperation(otAOF, tmpfile, 0, &server, sizeof(server), &server.aof_child_pid, dictGetHashFunctionSeed()) == FALSE) {
             redisLog(REDIS_WARNING,
                 "Can't rewrite append only file in background: fork: %s",
                 strerror(errno));

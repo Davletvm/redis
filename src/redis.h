@@ -135,6 +135,11 @@
 #define REDIS_PEER_ID_LEN (REDIS_IP_STR_LEN+32) /* Must be enough for ip:port */
 #define REDIS_BINDADDR_MAX 16
 
+#define REDIS_DEFAULT_INMEMORYREPL 0
+#define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
+#define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
+#define REDIS_DEFAULT_INMEMORY_SHORTCUTMIN (1024 * 128)
+
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
 #define ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC 25 /* CPU max % for keys collection */
@@ -591,6 +596,12 @@ typedef struct redisOpArray {
     int numops;
 } redisOpArray;
 
+#define INMEMORY_ENDSTATE_NONE 0
+#define INMEMORY_ENDSTATE_ENDREQUESTED 1
+#define INMEMORY_ENDSTATE_ENDFOUND 2
+#define INMEMORY_ENDSTATE_ERROR 4
+#define INMEMORY_ENDSTATE_ERROROREND (INMEMORY_ENDSTATE_ERROR | INMEMORY_ENDSTATE_ENDFOUND)
+
 typedef struct redisInMemoryReplReceive {
     char * buffer[2];
     ssize_t bufferSize;
@@ -604,13 +615,12 @@ typedef struct redisInMemoryReplReceive {
     ssize_t currentPacketSize;
     int activeBufferRead;
     int activeBufferWrite;
+    int endStateFlags;
 } redisInMemoryReplReceive;
 
 #define INMEMORY_STATE_INVALID -1
 #define INMEMORY_STATE_BEINGFILLED 0
 #define INMEMORY_STATE_READYTOSEND 1
-#define INMEMORY_STATE_SENDING 2
-#define INMEMORY_STATE_SENT 3
 #define INMEMORY_STATE_READYTOFILL 4
 
 
@@ -632,7 +642,6 @@ typedef struct redisInMemorySendCookie
 {
     int id;
     HANDLE sentDoneEvent;
-    int * sendState;
 } redisInMemorySendCookie;
 
 /*-----------------------------------------------------------------------------
@@ -794,6 +803,10 @@ struct redisServer {
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
     redisInMemoryReplReceive * repl_inMemoryReceive;
     redisInMemoryReplSend * repl_inMemorySend;
+    int repl_inMemoryUse; /* Don't use disk to synchornize with slaves */
+    int repl_inMemorySendBuffer; /* Send buffer size */
+    int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
+    int repl_inMemoryShortcutMin; /* Size to use read directly into allocated object */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */

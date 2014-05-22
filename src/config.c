@@ -497,6 +497,19 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
             server.notify_keyspace_scripts = flags;
+        } else if (!strcasecmp(argv[0], "repl-inmemory") && argc == 2) {
+            if ((server.repl_inMemoryUse = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "repl-inmemory-send-buffer-size") &&
+            argc == 2) {
+            server.repl_inMemorySendBuffer = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0], "repl-inmemory-receive-buffer-size") &&
+            argc == 2) {
+            server.repl_inMemoryReceiveBuffer = memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0], "repl-inmemory-shortcut-min-size") &&
+            argc == 2) {
+            server.repl_inMemoryShortcutMin = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0], "sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
              * mode ASAP. */
@@ -509,7 +522,6 @@ void loadServerConfigFromString(char *config) {
                 if (err) goto loaderr;
             }
 #ifdef _WIN32
-        } else if (!strcasecmp(argv[0],"bypass-system-reserve")) {
         } else if (!strcasecmp(argv[0],"maxvirtualmemory")) {
         // handled in qfork init. bypass here,
 #endif
@@ -875,22 +887,31 @@ void configSetCommand(redisClient *c) {
             disableWatchdog();
     } else if (!strcasecmp(c->argv[2]->ptr,"rdbcompression")) {
         int yn = yesnotoi(o->ptr);
-
         if (yn == -1) goto badfmt;
         server.rdb_compression = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"notify-keyspace-events")) {
         int flags = keyspaceEventsStringToFlags(o->ptr);
-
         if (flags == -1) goto badfmt;
         server.notify_keyspace_events = flags;
     } else if (!strcasecmp(c->argv[2]->ptr, "notify-keyspace-scripts")) {
         int flags = keyspaceEventsStringToFlags(o->ptr);
-
         if (flags == -1 || (flags & (REDIS_NOTIFY_KEYSPACE | REDIS_NOTIFY_KEYEVENT))) goto badfmt;
         server.notify_keyspace_scripts = flags;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.repl_inMemoryUse = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-send-buffer-size")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
+        server.repl_inMemorySendBuffer = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-receive-buffer-size")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
+        server.repl_inMemoryReceiveBuffer = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-shortcut-min-size")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1) goto badfmt;
+        server.repl_inMemoryShortcutMin = ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
-
         if (yn == -1) goto badfmt;
         server.repl_disable_tcp_nodelay = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"slave-priority")) {
@@ -1800,6 +1821,10 @@ int rewriteConfig(char *path) {
     rewriteConfigClientoutputbufferlimitOption(state);
     rewriteConfigNumericalOption(state,"hz",server.hz,REDIS_DEFAULT_HZ);
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
+    rewriteConfigYesNoOption(state, "repl-inmemory", server.repl_inMemoryUse, REDIS_DEFAULT_INMEMORYREPL);
+    rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
+    rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
+    rewriteConfigBytesOption(state, "repl-inmemory-shortcut-min-size", server.repl_inMemoryShortcutMin, REDIS_DEFAULT_INMEMORY_SHORTCUTMIN);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines

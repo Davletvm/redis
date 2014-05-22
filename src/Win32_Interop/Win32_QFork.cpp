@@ -154,7 +154,8 @@ struct QForkControl {
     HANDLE terminateForkedProcess;
 
     HANDLE inMemoryBuffersControlHandle;
-    InMemoryBuffersControl * InMemoryBuffersControl;
+    InMemoryBuffersControl * inMemoryBuffersControl;
+    int inMemoryBuffersControlOffset;
     HANDLE doSendBuffer[2];
     HANDLE doneSentBuffer[2];
 
@@ -243,12 +244,16 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             g_pQForkControl->heapStart,
             string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
 
-        sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
-        g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
+        if (g_pQForkControl->inMemoryBuffersControlHandle) {
+            sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
+            g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
 
-        sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
-        g_pQForkControl->InMemoryBuffersControl = sfvInMemory;
+            sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
+            g_pQForkControl->inMemoryBuffersControl = sfvInMemory;
 
+            g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
+            g_pQForkControl->inMemoryBuffersControl->buffer[1] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset);
+        }
         dupSendBuffer0.Assign(shParent, sfvMasterQForkControl->doSendBuffer[0]);
         g_pQForkControl->doSendBuffer[0] = dupSendBuffer0;
         dupSendBuffer1.Assign(shParent, sfvMasterQForkControl->doSendBuffer[1]);
@@ -290,7 +295,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
             exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otRDBINMEMORY) {
-            exitCode = do_rdbSaveInMemory(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
             throw runtime_error("unexpected operation type");
         }
@@ -351,30 +356,9 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 "QForkMasterInit: MapViewOfFile failed");
         }
 
-        g_pQForkControl->inMemoryBuffersControlHandle = CreateFileMappingW(
-            INVALID_HANDLE_VALUE,
-            NULL,
-            PAGE_READWRITE,
-            0, sizeof(InMemoryBuffersControl),
-            NULL);
-        if (g_hQForkControlFileMap == NULL) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "QForkMasterInit: CreateFileMapping failed");
-        }
+        g_pQForkControl->inMemoryBuffersControl = NULL;
+        g_pQForkControl->inMemoryBuffersControlHandle = NULL;
 
-        g_pQForkControl->InMemoryBuffersControl = (InMemoryBuffersControl*)MapViewOfFile(
-            g_pQForkControl->inMemoryBuffersControlHandle,
-            FILE_MAP_ALL_ACCESS,
-            0, 0,
-            0);
-        if (g_pQForkControl->InMemoryBuffersControl == NULL) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "QForkMasterInit: MapViewOfFile failed");
-        }
 
         // This must be called only once per process! Calling it more times than that will not recreate existing 
         // section, and dlmalloc will ultimately fail with an access violation. Once is good.
@@ -713,7 +697,7 @@ void ResetEventHandle(HANDLE event) {
 }
 
 
-BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, uint32_t dictHashSeed) {
+BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, uint32_t dictHashSeed) {
     try {
         // copy operation data
         if (fileName) {
@@ -739,11 +723,11 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
                 system_category(),
                 "BeginForkOperation: VirtualProtect 1 failed");
         }
-        if (VirtualProtect( 
-            g_pQForkControl->heapStart, 
-            g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize, 
-            PAGE_WRITECOPY, 
-            &oldProtect) == FALSE ) {
+        if (VirtualProtect(
+            g_pQForkControl->heapStart,
+            g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
+            PAGE_WRITECOPY,
+            &oldProtect) == FALSE) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
@@ -761,9 +745,63 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
         ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
-        if (type == otRDBINMEMORY)
-            SetupInMemoryBuffersMasterParent(g_pQForkControl->InMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+        if (type == otRDBINMEMORY) {
+            DebugBreak();
 
+            size_t size = sizeof(InMemoryBuffersControl);
+            if (sendBufferSize < 1024) sendBufferSize = 1024;
+            size_t SPBufferSize = offsetof(SPBuffer, b) + sendBufferSize;
+            SPBufferSize = (SPBufferSize + 0x0f) & ~0x0f;
+            size += SPBufferSize * 2;
+            g_pQForkControl->inMemoryBuffersControlOffset = sizeof(InMemoryBuffersControl)+SPBufferSize;
+
+            if (g_pQForkControl->inMemoryBuffersControl) {
+                if (!UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl)) {
+                    throw std::system_error(
+                        GetLastError(),
+                        system_category(),
+                        "BeginForkOperation: UnmapViewOfFile failed");
+                }
+                g_pQForkControl->inMemoryBuffersControl = NULL;
+            }
+
+            if (g_pQForkControl->inMemoryBuffersControlHandle) {
+                CloseHandle(g_pQForkControl->inMemoryBuffersControlHandle);
+                g_pQForkControl->inMemoryBuffersControlHandle = NULL;
+            }
+
+            g_pQForkControl->inMemoryBuffersControlHandle = CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                NULL,
+                PAGE_READWRITE,
+                0, LOWORD(size),
+                NULL);
+            if (g_pQForkControl->inMemoryBuffersControlHandle == NULL) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "BeginForkOperation: CreateFileMapping failed");
+            }
+
+            g_pQForkControl->inMemoryBuffersControl = (InMemoryBuffersControl*)MapViewOfFile(
+                g_pQForkControl->inMemoryBuffersControlHandle,
+                FILE_MAP_ALL_ACCESS,
+                0, 0,
+                0);
+            if (g_pQForkControl->inMemoryBuffersControl == NULL) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "BeginForkOperation: MapViewOfFile failed");
+            }
+            g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
+            g_pQForkControl->inMemoryBuffersControl->buffer[1] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset);
+
+            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+        } else {
+            g_pQForkControl->inMemoryBuffersControlHandle = NULL;
+            g_pQForkControl->inMemoryBuffersControl = NULL;
+        }
         // Launch the "forked" process
         char fileName[MAX_PATH];
         if (0 == GetModuleFileNameA(NULL, fileName, MAX_PATH)) {
@@ -794,12 +832,15 @@ BOOL BeginForkOperation(OperationType type, char* fileName, LPVOID globalData, i
         g_hForkedProcess = pi.hProcess; // must CloseHandle on this
         CloseHandle(pi.hThread);
 
+        HANDLE handles[2];
+        handles[0] = g_pQForkControl->forkedProcessReady;
+        handles[1] = g_pQForkControl->operationFailed;
         // wait for "forked" process to map memory
-        if(WaitForSingleObject(g_pQForkControl->forkedProcessReady,100000) != WAIT_OBJECT_0) {
+        if(WaitForMultipleObjects(2, handles, FALSE, 10000) != WAIT_OBJECT_0) {
             throw system_error(
                 GetLastError(),
                 system_category(),
-                "Forked Process did not respond in a timely manner.");
+                "Forked Process did not respond successfully in a timely manner.");
         }
 
         // signal the 2nd process that we want to do some work
@@ -872,7 +913,7 @@ BOOL AbortForkOperation()
 BOOL EndForkOperation(int * pExitCode) {
     try {
         SetEvent(g_pQForkControl->terminateForkedProcess);
-        ClearInMemoryBuffersMasterParent();
+
         if( g_hForkedProcess != 0 )
         {
             if (WaitForSingleObject(g_hForkedProcess, cDeadForkWait) == WAIT_TIMEOUT) {
@@ -890,6 +931,23 @@ BOOL EndForkOperation(int * pExitCode) {
 
             CloseHandle(g_hForkedProcess);
             g_hForkedProcess = 0;
+        }
+
+        ClearInMemoryBuffersMasterParent();
+
+        if (g_pQForkControl->inMemoryBuffersControl) {
+            if (!UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl)) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "BeginForkOperation: UnmapViewOfFile failed");
+            }
+            g_pQForkControl->inMemoryBuffersControl = NULL;
+        }
+
+        if (g_pQForkControl->inMemoryBuffersControlHandle) {
+            CloseHandle(g_pQForkControl->inMemoryBuffersControlHandle);
+            g_pQForkControl->inMemoryBuffersControlHandle = NULL;
         }
 
         // ensure events are in the correst state

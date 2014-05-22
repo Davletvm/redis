@@ -823,7 +823,7 @@ int rdbSaveBackground(char *filename) {
     } else {
 #else
     {
-        if (!BeginForkOperation(otRDB, filename, &server, sizeof(server), &childpid, dictGetHashFunctionSeed())) {
+        if (!BeginForkOperation(otRDB, filename, server.repl_inMemorySendBuffer, &server, sizeof(server), &childpid, dictGetHashFunctionSeed())) {
             childpid = -1;
         }
 #endif
@@ -1154,7 +1154,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         if (server.masterhost && server.repl_state == REDIS_REPL_TRANSFER)
             replicationSendNewlineToMaster();
         loadingProgress(r->processed_bytes);
-        aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
+        aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT, -1);
     }
 }
 
