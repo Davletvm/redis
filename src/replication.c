@@ -642,7 +642,7 @@ void syncCommand(redisClient *c) {
             redisLog(REDIS_NOTICE,"Waiting for next BGSAVE for SYNC");
         }
     } else {
-        if (server.repl_inMemoryUse) {
+        if (server.repl_inMemoryUse && c->slave_inmemoryVersion) {
             redisLog(REDIS_NOTICE, "Starting InMemory BGSAVE for SYNC");
             if (rdbSaveBackground(NULL) != REDIS_OK) {
                 redisLog(REDIS_NOTICE, "Replication failed, can't BGSAVE in Memory");
@@ -723,6 +723,20 @@ void replconfCommand(redisClient *c) {
             c->repl_ack_time = server.unixtime;
             /* Note: this command does not reply anything! */
             return;
+        } else if (!strcasecmp(c->argv[j]->ptr, "repl-inmemory")) {
+            long long version;
+            if ((getLongLongFromObject(c->argv[j + 1], &version) != REDIS_OK)) {
+                addReplyError(c, "Bad repl-inmemory version");
+                return;
+            } else if (version != 1) {
+                addReplyError(c, "Unsupported repl-inmemory version");
+                return;
+            } else if (!server.repl_inMemoryUse) {
+                addReplyError(c, "repl-inmemory not configured");
+                return;
+            } else {
+                c->slave_inmemoryVersion = (int)version;
+            }
         } else {
             addReplyErrorFormat(c,"Unrecognized REPLCONF option: %s",
                 (char*)c->argv[j]->ptr);
@@ -1601,6 +1615,15 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Master accepted a Partial Resynchronization.");
         return;
     }
+
+    {
+        err = sendSynchronousCommand(fd, "REPLCONF", "repl-inmemory", shared.one->ptr, NULL);
+        if (err[0] == '-') {
+            redisLog(REDIS_NOTICE, "(Non critical) Master does not understand REPLCONF repl-inmemory 1");
+        }
+        sdsfree(err);
+    }
+
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
      * and the server.repl_master_runid and repl_master_initial_offset are

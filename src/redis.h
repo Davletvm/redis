@@ -510,6 +510,7 @@ typedef struct redisClient {
     long long repl_ack_time;/* replication ack time, if this is a slave */
     char replrunid[REDIS_RUN_ID_SIZE+1]; /* master run id if this is a master */
     int slave_listening_port; /* As configured with: SLAVECONF listening-port */
+    int slave_inmemoryVersion;
     multiState mstate;      /* MULTI/EXEC state */
     blockingState bpop;   /* blocking state */
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
