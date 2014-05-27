@@ -185,10 +185,12 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
 
 static int PollForRead()
 {
-    int timeout = server.repl_timeout - (time(NULL) - server.repl_transfer_lastio);
+    server.unixtime = time(NULL);
+
+    int timeout = server.repl_timeout - (server.unixtime - server.repl_transfer_lastio);
     if (timeout <= 0) return 0;
 
-    return aeProcessEvents(server.el, AE_FILE_EVENTS, server.repl_timeout - (time(NULL) - server.repl_transfer_lastio));
+    return aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
 }
 
 

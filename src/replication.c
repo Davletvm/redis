@@ -1605,6 +1605,15 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         sdsfree(err);
     }
 
+    {
+        err = sendSynchronousCommand(fd, "REPLCONF", "repl-inmemory", "1", NULL);
+        if (err[0] == '-') {
+            redisLog(REDIS_NOTICE, "(Non critical) Master does not understand REPLCONF repl-inmemory 1: %s", err);
+        }
+        sdsfree(err);
+    }
+
+
     /* Try a partial resynchonization. If we don't have a cached master
      * slaveTryPartialResynchronization() will at least try to use PSYNC
      * to start a full resynchronization so that we get the master run id
@@ -1616,13 +1625,6 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
 
-    {
-        err = sendSynchronousCommand(fd, "REPLCONF", "repl-inmemory", shared.one->ptr, NULL);
-        if (err[0] == '-') {
-            redisLog(REDIS_NOTICE, "(Non critical) Master does not understand REPLCONF repl-inmemory 1");
-        }
-        sdsfree(err);
-    }
 
 
     /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC

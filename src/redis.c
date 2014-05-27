@@ -2949,7 +2949,6 @@ int freeMemoryIfNeeded(void) {
                         if (deE) when = dictGetSignedIntegerVal(deE); else when = -1;
                         if (when < 0 || when > now) {
                             if (continues < server.maxmemory_samples) continues++;
-                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
                         }
                     }
@@ -2978,7 +2977,6 @@ int freeMemoryIfNeeded(void) {
                         if (deE) when = dictGetSignedIntegerVal(deE); else when = -1;
                         if (when < 0 || when > now) {
                             if (continues < server.maxmemory_samples) continues++;
-                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
                         }
                     }
@@ -3005,7 +3003,6 @@ int freeMemoryIfNeeded(void) {
                         long long when = dictGetSignedIntegerVal(deE);
                         if (when < 0 || when > now) {
                             if (continues < server.maxmemory_samples) continues++;
-                            printf("continuing on:%s\r\n", dictGetKey(deV));
                             continue;
                         }
                     }

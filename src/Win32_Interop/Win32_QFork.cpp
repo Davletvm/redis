@@ -702,6 +702,7 @@ void ResetEventHandle(HANDLE event) {
 
 BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, uint32_t dictHashSeed) {
     try {
+        redisLog(REDIS_NOTICE, "Starting to fork");
         // copy operation data
         if (fileName) {
             strcpy_s(g_pQForkControl->globalData.filename, fileName);
@@ -850,7 +851,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
 
-
+        redisLog(REDIS_NOTICE, "Forked successfully");
         return TRUE;
     }
     catch(std::system_error syserr) {
@@ -1060,12 +1061,6 @@ BOOL EndForkOperation(int * pExitCode) {
                     "EndForkOperation: UnmapViewOfFile failed.");
             }
 
-            if (UnmapViewOfFile(heapAltRegion) == FALSE) {
-                throw std::system_error(
-                    GetLastError(),
-                    system_category(),
-                    "EndForkOperation: UnmapViewOfFile failed.");
-            }
 
             g_pQForkControl->heapStart = 
                 MapViewOfFileEx(
@@ -1080,6 +1075,13 @@ BOOL EndForkOperation(int * pExitCode) {
                     GetLastError(),
                     system_category(),
                     "EndForkOperation: Remapping ForkControl block failed.");
+            }
+
+            if (UnmapViewOfFile(heapAltRegion) == FALSE) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "EndForkOperation: UnmapViewOfFile failed.");
             }
 
         }
@@ -1117,6 +1119,8 @@ BOOL EndForkOperation(int * pExitCode) {
         controlCopy = NULL;
         delete [] pwsi;
         pwsi = NULL;
+
+        redisLog(REDIS_NOTICE, "Fork operation completed");
 
         return TRUE;
     }
