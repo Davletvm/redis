@@ -308,7 +308,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         // parent will notify us when to quit
         WaitForSingleObject(g_pQForkControl->terminateForkedProcess, INFINITE);
 
-        redisLog(REDIS_NOTICE, "Successfully completed background operation.");
+        redisLog(REDIS_NOTICE, "Successfully completed background operation.  Exiting child.");
 
         g_pQForkControl = NULL;
         return TRUE;
@@ -702,7 +702,7 @@ void ResetEventHandle(HANDLE event) {
 
 BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, uint32_t dictHashSeed) {
     try {
-        redisLog(REDIS_NOTICE, "Starting to fork");
+        redisLog(REDIS_NOTICE, "Starting to fork parent process.");
         // copy operation data
         if (fileName) {
             strcpy_s(g_pQForkControl->globalData.filename, fileName);
@@ -795,6 +795,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 system_category(),
                 "BeginForkOperation: VirtualProtect 1 failed");
         }
+        redisLog(REDIS_DEBUG, "Protecting heap");
         if (VirtualProtect(
             g_pQForkControl->heapStart,
             g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
@@ -805,6 +806,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 system_category(),
                 "BeginForkOperation: VirtualProtect 2 failed");
         }
+        redisLog(REDIS_DEBUG, "Protected heap");
 
 
         // Launch the "forked" process
@@ -827,6 +829,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         sprintf_s(arguments, _MAX_PATH, "%s %ld %ld", qforkFlag, g_hQForkControlFileMap, GetCurrentProcessId());
+        redisLog(REDIS_DEBUG, "launching child");
         if (FALSE == CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
             throw system_error( 
                 GetLastError(),
@@ -836,6 +839,9 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         (*childPID) = pi.dwProcessId;
         g_hForkedProcess = pi.hProcess; // must CloseHandle on this
         CloseHandle(pi.hThread);
+
+        redisLog(REDIS_DEBUG, "Waiting on forked process");
+
 
         HANDLE handles[2];
         handles[0] = g_pQForkControl->forkedProcessReady;
@@ -899,7 +905,8 @@ BOOL AbortForkOperation()
             g_hForkedProcess = 0;
         }
 
-        return EndForkOperation(NULL);
+        SetEvent(g_pQForkControl->operationFailed);
+        return TRUE;
     }
     catch(std::system_error syserr) {
         redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
@@ -976,6 +983,7 @@ BOOL EndForkOperation(int * pExitCode) {
                 system_category(),
                 "EndForkOperation: VirtualProtect 3 failed.");
         }
+        redisLog(REDIS_DEBUG, "Unprotecting heap");
         if (VirtualProtect( 
             g_pQForkControl->heapStart, 
             g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize, 
@@ -986,6 +994,7 @@ BOOL EndForkOperation(int * pExitCode) {
                 system_category(),
                 "EndForkOperation: VirtualProtect 4 failed.");
         }
+        redisLog(REDIS_DEBUG, "Unprotected heap");
 
         //
         // What can be done to unify COW pages back into the section?
@@ -1035,6 +1044,7 @@ BOOL EndForkOperation(int * pExitCode) {
                 }
             }
         }
+        redisLog(REDIS_DEBUG, "Calculated changed pages");
 
         if (cowList.size() > 0) {
             void * heapAltRegion;
@@ -1046,6 +1056,7 @@ BOOL EndForkOperation(int * pExitCode) {
                     system_category(),
                     "EndForkOperation: Remapping ForkControl block failed.");
             }
+            redisLog(REDIS_DEBUG, "Mapped original heap view");
 
             for (COWListIterator cli = cowList.begin(); cli != cowList.end(); cli++) {
                 memcpy(
@@ -1054,12 +1065,16 @@ BOOL EndForkOperation(int * pExitCode) {
                     pageSize);
             }
 
+            redisLog(REDIS_DEBUG, "Copied changed pages");
+
             if (UnmapViewOfFile(g_pQForkControl->heapStart) == FALSE) {
                 throw std::system_error(
                     GetLastError(),
                     system_category(),
                     "EndForkOperation: UnmapViewOfFile failed.");
             }
+
+            redisLog(REDIS_DEBUG, "Unmapped modified heap");
 
 
             g_pQForkControl->heapStart = 
@@ -1069,6 +1084,8 @@ BOOL EndForkOperation(int * pExitCode) {
                     0,0,                            
                     0,  
                     g_pQForkControl->heapStart);
+
+            redisLog(REDIS_DEBUG, "mapped new heap");
 
             if (g_pQForkControl->heapStart == NULL) {
                 throw std::system_error(
@@ -1083,6 +1100,8 @@ BOOL EndForkOperation(int * pExitCode) {
                     system_category(),
                     "EndForkOperation: UnmapViewOfFile failed.");
             }
+            redisLog(REDIS_DEBUG, "Unmapped original heap");
+
 
         }
 

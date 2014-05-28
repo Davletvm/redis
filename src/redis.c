@@ -1106,7 +1106,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 #ifdef _WIN32
         OperationStatus opStatus = GetForkOperationStatus();
         if (opStatus == osCOMPLETE || opStatus == osFAILED) {
-            redisLog(REDIS_WARNING, "fork operation complete");
+            redisLog(REDIS_NOTICE, opStatus == osCOMPLETE ? "Child work completed" : "Child work failed");
 
             bysignal = (opStatus == osFAILED);
             if (!bysignal && server.repl_inMemorySend && server.rdb_child_pid != -1) {
@@ -2264,10 +2264,10 @@ int time_independent_strcmp(char *a, char *b) {
 }
 
 void authCommand(redisClient *c) {
-    if (!server.requirepass) {
+    if (!server.requirepass && !server.requirepass2) {
         addReplyError(c,"Client sent AUTH, but no password is set");
-    } else if (!time_independent_strcmp(c->argv[1]->ptr, server.requirepass) ||
-               ((server.requirepass2 != NULL) && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass2))) {
+    } else if ((server.requirepass && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) ||
+               (server.requirepass2 && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass2))) {
       c->authenticated = 1;
       addReply(c,shared.ok);
     } else {

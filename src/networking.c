@@ -672,6 +672,9 @@ void freeClient(redisClient *c) {
             redisLog(REDIS_WARNING,"Connection with slave %s:%d lost.",
                 ip, c->slave_listening_port);
         }
+        if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
+            AbortForkOperation();
+        }
     }
 
     /* Free the query buffer */

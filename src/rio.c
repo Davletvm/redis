@@ -188,7 +188,7 @@ static int PollForRead()
     server.unixtime = time(NULL);
 
     int timeout = server.repl_timeout - (server.unixtime - server.repl_transfer_lastio);
-    if (timeout <= 0) return 0;
+    if (timeout <= 0) return -1;
 
     return aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
 }
@@ -228,7 +228,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
                 inm->shortcutBufferSize = len;
             }
         }
-        if (!PollForRead()) {
+        if (PollForRead() < 0) {
             redisLog(REDIS_DEBUG, "Error while reading: timeout");
             return 0;
         }

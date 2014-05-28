@@ -12,7 +12,23 @@ source tests/support/test.tcl
 source tests/support/util.tcl
 
 set ::all_tests_1 {
+    integration/replication-4
     integration/replication-psync
+    integration/aof
+    integration/rdb
+    integration/convert-zipmap-hash-on-load
+    unit/pubsub
+    unit/slowlog
+    unit/scripting
+    unit/eventscripting
+    unit/maxmemory
+    unit/protect
+    unit/introspection
+    unit/limits
+    unit/obuf-limits
+    unit/dump
+    unit/bitops
+    unit/memefficiency
 }
 
 

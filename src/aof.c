@@ -177,9 +177,13 @@ void stopAppendOnly(void) {
     /* rewrite operation in progress? kill it, wait child exit */
     if (server.aof_child_pid != -1) {
         redisLog(REDIS_NOTICE,"Killing running AOF rewrite child: %ld",
-            (long) server.aof_child_pid);
+            (long)server.aof_child_pid);
 #ifdef _WIN32
-        AbortForkOperation();
+        {
+            AbortForkOperation();
+            int ec;
+            EndForkOperation(&ec);
+        }
 #else
         {
             int statloc;
@@ -1010,11 +1014,11 @@ int rewriteAppendOnlyFileBackground(void) {
     long long start;
     char tmpfile[256];
 
-    if (server.aof_child_pid != -1) return REDIS_ERR;
+    if (server.aof_child_pid != -1 || server.rdb_child_pid != -1) return REDIS_ERR;
     start = ustime();
 
     snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
-    if (BeginForkOperation(otAOF, tmpfile, 0, &server, sizeof(server), &server.aof_child_pid, dictGetHashFunctionSeed()) == FALSE) {
+    if (BeginForkOperation(otAOF, tmpfile, 0, &server, sizeof(server), &server.aof_child_pid, dictGetHashFunctionSeed()) == FALSE || server.aof_child_pid == -1) {
             redisLog(REDIS_WARNING,
                 "Can't rewrite append only file in background: fork: %s",
                 strerror(errno));

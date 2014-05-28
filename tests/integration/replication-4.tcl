@@ -71,6 +71,14 @@ start_server {tags {"repl"}} {
             }
         }
 
+        test {Master should be done with bgsave} {
+            wait_for_condition 50 100 {
+                [s -1 rdb_bgsave_in_progress] eq {0}
+            } else {
+                fail "BGsave still not finished."
+            }
+        }
+
         test {With min-slaves-to-write (1,3): master should be writable} {
             $master config set min-slaves-max-lag 3
             $master config set min-slaves-to-write 1

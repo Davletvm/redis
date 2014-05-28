@@ -515,8 +515,8 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     redisInMemorySendCookie * cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
     cookie->sentDoneEvent = inm->sentDoneEvents[sendFirst];
-    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld", *(inm->sizeFilled[sendFirst]), inm->totalSent + *(inm->sizeFilled[sendFirst]));
-    result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendFirst], *(inm->sizeFilled[sendFirst]) + sizeof(int),
+    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld", inm->sizeFilled[sendFirst][0], inm->totalSent + inm->sizeFilled[sendFirst][0]);
+    result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendFirst], inm->sizeFilled[sendFirst][0] + sizeof(int),
         el, slave, cookie, sendInMemoryBuffersToSlaveDone);
     if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
         redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
@@ -524,13 +524,13 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
         freeClient(slave);
         return;
     }
-    inm->totalSent += *(inm->sizeFilled[sendFirst]);
+    inm->totalSent += inm->sizeFilled[sendFirst][0];
     if (sendSecond != -1) {
         cookie = zmalloc(sizeof(redisInMemorySendCookie));
         cookie->id = inm->id;
         cookie->sentDoneEvent = inm->sentDoneEvents[sendSecond];
-        redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld", *(inm->sizeFilled[sendSecond]), inm->totalSent + *(inm->sizeFilled[sendSecond]));
-        result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendSecond], *(inm->sizeFilled[sendSecond]) + sizeof(int),
+        redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld", inm->sizeFilled[sendSecond][0], inm->totalSent + inm->sizeFilled[sendSecond][0]);
+        result = aeWinSocketSend(slave->fd, inm->sizeFilled[sendSecond], inm->sizeFilled[sendSecond][0] + sizeof(int),
             el, slave, cookie, sendInMemoryBuffersToSlaveDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
             redisLog(REDIS_WARNING, "Cannot send in memmory data to slave.");
@@ -538,7 +538,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
             freeClient(slave);
             return;
         }
-        inm->totalSent += *(inm->sizeFilled[sendSecond]);
+        inm->totalSent += inm->sizeFilled[sendSecond][0];
     }
 }
 
@@ -629,7 +629,7 @@ void syncCommand(redisClient *c) {
             slave = ln->value;
             if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_END) break;
         }
-        if (ln) {
+        if (ln && !server.repl_inMemorySend) {
             /* Perfect, the server is already registering differences for
              * another slave. Set the right state, and copy the buffer. */
             copyClientOutputBuffer(c,slave);
@@ -1215,7 +1215,8 @@ int readSyncBulkPayloadInMemory(int fd)
     server.repl_transfer_lastio = server.unixtime;
     if (rdbLoad(NULL) != REDIS_OK) {  // now read, which will keep blocking on incoming data
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
-        replicationAbortSyncTransfer();
+        if (server.repl_inMemoryReceive) 
+            replicationAbortSyncTransfer();
         return REDIS_ERR;
     }
     server.repl_inMemoryReceive->endStateFlags |= INMEMORY_ENDSTATE_ENDREQUESTED;

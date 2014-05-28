@@ -48,6 +48,16 @@ start_server {tags {"repl"}} {
             }
         }
 
+
+        test {Master should be done with bgsave} {
+            wait_for_condition 50 100 {
+                [s 0 rdb_bgsave_in_progress] eq {0}
+            } else {
+                fail "BGsave still not finished."
+            }
+        }
+
+
         set numops 20000 ;# Enough to trigger the Script Cache LRU eviction.
 
         # While we are at it, enable AOF to test it will be consistent as well
@@ -84,14 +94,27 @@ start_server {tags {"repl"}} {
             } else {
                 set csv1 [csvdump r]
                 set csv2 [csvdump {r -1}]
-                set fd [open /tmp/repldump1.txt w]
+                if { $::tcl_platform(platform) == "windows" } {
+                    set tmpdir $::env(TEMP)
+                    set fd [open [file join $tmpdir repldump1.txt] w]
+                } else {
+                    set fd [open /tmp/repldump1.txt w]
+                }
                 puts -nonewline $fd $csv1
                 close $fd
-                set fd [open /tmp/repldump2.txt w]
+                if { $::tcl_platform(platform) == "windows" } {
+                    set fd [open [file join $tmpdir repldump2.txt] w]
+                } else {
+                    set fd [open /tmp/repldump2.txt w]
+                }
                 puts -nonewline $fd $csv2
                 close $fd
                 puts "Master - Slave inconsistency"
-                puts "Run diff -u against /tmp/repldump*.txt for more info"
+                if { $::tcl_platform(platform) == "windows" } {
+                    puts "Run fc against repldump*.txt in $tmpdir for more info"
+                } else {
+                    puts "Run diff -u against /tmp/repldump*.txt for more info"
+                }
 
             }
 
