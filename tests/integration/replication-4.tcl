@@ -1,3 +1,7 @@
+foreach imr {yes no} {
+
+test "Testing with repl-inmemory $imr" { }
+
 proc start_bg_complex_data {host port db ops} {
     set tclsh [info nameofexecutable]
     exec $tclsh tests/helpers/bg_complex_data.tcl $host $port $db $ops &
@@ -9,6 +13,9 @@ proc stop_bg_complex_data {handle} {
 
 start_server {tags {"repl"}} {
     start_server {} {
+
+        r 0 config set repl-inmemory $imr
+        r -1 config set repl-inmemory $imr
 
         set master [srv -1 client]
         set master_host [srv -1 host]
@@ -57,6 +64,10 @@ start_server {tags {"repl"}} {
 
 start_server {tags {"repl"}} {
     start_server {} {
+
+        r 0 config set repl-inmemory $imr
+        r -1 config set repl-inmemory $imr
+
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
@@ -107,6 +118,10 @@ start_server {tags {"repl"}} {
 
 start_server {tags {"repl"}} {
     start_server {} {
+
+        r 0 config set repl-inmemory $imr
+        r -1 config set repl-inmemory $imr
+
         set master [srv -1 client]
         set master_host [srv -1 host]
         set master_port [srv -1 port]
@@ -141,4 +156,6 @@ start_server {tags {"repl"}} {
             assert {[$master dbsize] > 0}
         }
     }
+}
+
 }

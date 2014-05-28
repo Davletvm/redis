@@ -1058,14 +1058,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             used = dictSize(server.db[j].dict);
             vkeys = dictSize(server.db[j].expires);
             if (used || vkeys) {
-             //   redisLog(REDIS_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
+                redisLog(REDIS_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(server.dict); */
             }
         }
     }
 
     /* Show information about connected clients */
-    if (!server.sentinel_mode && 0) {
+    if (!server.sentinel_mode) {
         run_with_period(5000) {
 #ifdef _WIN32
             redisLog(REDIS_VERBOSE,

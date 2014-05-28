@@ -1,5 +1,12 @@
+foreach imr {yes no} {
+
+test "Testing with repl-inmemory $imr" { }
+
 start_server {tags {"repl"}} {
     start_server {} {
+        r 0 config set repl-inmemory $imr
+        r -1 config set repl-inmemory $imr
+
         test {First server should have role slave after SLAVEOF} {
             r -1 slaveof [srv 0 host] [srv 0 port]
             wait_for_condition 50 100 {
@@ -37,6 +44,8 @@ start_server {tags {"repl"}} {
     r set mykey foo
     
     start_server {} {
+        r 0 config set repl-inmemory $imr
+        r -1 config set repl-inmemory $imr
         test {Second server should have role master at first} {
             s role
         } {master}
@@ -87,6 +96,7 @@ proc stop_write_load {handle} {
 }
 
 start_server {tags {"repl"}} {
+    r 0 config set repl-inmemory $imr
     set master [srv 0 client]
     set master_host [srv 0 host]
     set master_port [srv 0 port]
@@ -103,7 +113,10 @@ start_server {tags {"repl"}} {
             start_server {} {
                 lappend slaves [srv 0 client]
                 test "Connect multiple slaves at the same time (issue #141)" {
-                    # Send SALVEOF commands to slaves
+                    [lindex $slaves 0] config set repl-inmemory $imr
+                    [lindex $slaves 1] config set repl-inmemory $imr
+                    [lindex $slaves 2] config set repl-inmemory $imr
+                     # Send SALVEOF commands to slaves
                     [lindex $slaves 0] slaveof $master_host $master_port
                     [lindex $slaves 1] slaveof $master_host $master_port
                     [lindex $slaves 2] slaveof $master_host $master_port
@@ -161,4 +174,5 @@ start_server {tags {"repl"}} {
            }
         }
     }
+}
 }

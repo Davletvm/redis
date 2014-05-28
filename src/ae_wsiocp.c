@@ -175,7 +175,7 @@ void aeDelSockState(void *apistate, aeSockState *sockState) {
         socklist = &(((aeApiState *)apistate)->closing);
         if (removeMatchFromList(socklist, sockState) == 1) {
             zfree(sockState);
-                return;
+            return;
         }
     } else {
         // not safe to delete. Move to closing

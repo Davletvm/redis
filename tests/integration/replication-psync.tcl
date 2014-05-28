@@ -1,3 +1,4 @@
+
 proc start_bg_complex_data {host port db ops} {
     set tclsh [info nameofexecutable]
     exec $tclsh tests/helpers/bg_complex_data.tcl $host $port $db $ops &
@@ -14,8 +15,15 @@ proc stop_bg_complex_data {handle} {
 # You can specifiy backlog size, ttl, delay before reconnection, test duration
 # in seconds, and an additional condition to verify at the end.
 proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
+
+foreach imr {yes no} {
+test "Testing with repl-inmemory $imr" { }
+
     start_server {tags {"repl"}} {
         start_server {} {
+
+            r 0 config set repl-inmemory $imr
+            r -1 config set repl-inmemory $imr
 
             set master [srv -1 client]
             set master_host [srv -1 host]
@@ -48,19 +56,12 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
                     if {($j % 20) == 0} {
                         catch {
                             if {$delay} {
-								#puts "in loop1"
                                 $slave multi
                                 $slave client kill MASTER:0
                                 $slave debug sleep $delay
                                 $slave exec
-								#puts "in loop2"
                             } else {
-								#puts "in loop3"
-								#puts [$slave client list]
-								#puts [$master client list]
-								#puts "in loop3a"
                                 $slave client kill MASTER:0
-								#puts "in loop4"
                             }
                         }
                     }
@@ -70,8 +71,6 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
                 stop_bg_complex_data $load_handle2
                 set retry 10
                 while {$retry && ([$master debug digest] ne [$slave debug digest])} {
-					
-					#catch { puts ">>>MASTER [$master dbsize] keys, SLAVE  keys" }
                     after 1000
                     incr retry -1
                 }
@@ -79,28 +78,27 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
                 if {[$master debug digest] ne [$slave debug digest]} {
                     set csv1 [csvdump r]
                     set csv2 [csvdump {r -1}]
-					if { $::tcl_platform(platform) == "windows" } {
-						set tmpdir $::env(TEMP)
-						set fd [open [file join $tmpdir repldump1.txt] w]
-					} else {
-						set fd [open /tmp/repldump1.txt w]
-					}
-				
+                    if { $::tcl_platform(platform) == "windows" } {
+                        set tmpdir $::env(TEMP)
+                        set fd [open [file join $tmpdir repldump1.txt] w]
+                    } else {
+                        set fd [open /tmp/repldump1.txt w]
+                    }
                     puts -nonewline $fd $csv1
                     close $fd
-					if { $::tcl_platform(platform) == "windows" } {
-						set fd [open [file join $tmpdir repldump2.txt] w]
-					} else {
-						set fd [open /tmp/repldump2.txt w]
-					}
+                    if { $::tcl_platform(platform) == "windows" } {
+                        set fd [open [file join $tmpdir repldump2.txt] w]
+                    } else {
+                        set fd [open /tmp/repldump2.txt w]
+                    }
                     puts -nonewline $fd $csv2
                     close $fd
                     puts "Master - Slave inconsistency"
-					if { $::tcl_platform(platform) == "windows" } {
-						puts "Run fc against repldump*.txt in $tmpdir for more info"
-					} else {
-						puts "Run diff -u against /tmp/repldump*.txt for more info"
-					}
+                    if { $::tcl_platform(platform) == "windows" } {
+                        puts "Run fc against repldump*.txt in $tmpdir for more info"
+                    } else {
+                        puts "Run diff -u against /tmp/repldump*.txt for more info"
+                    }
                 }
                 assert_equal [r debug digest] [r -1 debug digest]
                 eval $cond
@@ -108,23 +106,23 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
         }
     }
 }
-
+}
 test_psync {ok psync} 6 1000000 3600 0 {
-	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
+    #puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_ok] > 0}
 }
 
 test_psync {no backlog} 6 100 3600 0 {
-	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
+    #puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_err] > 0}
 }
 
 test_psync {ok after delay} 6 100000000 3600 3 {
-	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
+    #puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_ok] > 0}
 }
 
 test_psync {backlog expired} 6 100000000 1 3 {
-	#puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
+    #puts "[s -1 sync_partial_ok] [s 0 sync_partial_ok] [s -1 sync_partial_err] [s 0 sync_partial_err]"
     assert {[s -1 sync_partial_err] > 0}
 }

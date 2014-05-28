@@ -422,7 +422,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             } else {
                 /* Otherwise we can block */
                 tvp = NULL; /* wait forever */
-                if (defaultTimeout != -1) {
+                if (defaultTimeout > -1) {
                     tv.tv_sec = defaultTimeout;
                     tv.tv_usec = 0;
                     tvp = &tv;

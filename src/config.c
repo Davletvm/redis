@@ -887,14 +887,17 @@ void configSetCommand(redisClient *c) {
             disableWatchdog();
     } else if (!strcasecmp(c->argv[2]->ptr,"rdbcompression")) {
         int yn = yesnotoi(o->ptr);
+
         if (yn == -1) goto badfmt;
         server.rdb_compression = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"notify-keyspace-events")) {
         int flags = keyspaceEventsStringToFlags(o->ptr);
+
         if (flags == -1) goto badfmt;
         server.notify_keyspace_events = flags;
     } else if (!strcasecmp(c->argv[2]->ptr, "notify-keyspace-scripts")) {
         int flags = keyspaceEventsStringToFlags(o->ptr);
+
         if (flags == -1 || (flags & (REDIS_NOTIFY_KEYSPACE | REDIS_NOTIFY_KEYEVENT))) goto badfmt;
         server.notify_keyspace_scripts = flags;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory")) {
@@ -912,6 +915,7 @@ void configSetCommand(redisClient *c) {
         server.repl_inMemoryShortcutMin = ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
+
         if (yn == -1) goto badfmt;
         server.repl_disable_tcp_nodelay = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"slave-priority")) {

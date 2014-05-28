@@ -1,5 +1,9 @@
-start_server {tags {"aofrw"}} {
+foreach imr {yes no} {
 
+test "Testing with repl-inmemory $imr" { }
+
+start_server {tags {"aofrw"}} {
+    r config set repl-inmemory $imr
     test {Turning off AOF kills the background writing child if any} {
         r config set appendonly yes
         waitForBgrewriteaof r
@@ -145,4 +149,6 @@ start_server {tags {"aofrw"}} {
             after 100
         }
     }
+}
+
 }
