@@ -877,13 +877,16 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
     listNode *ln;
     int startbgsave = 0;
     listIter li;
+    redisClient * inMemorySlave = NULL;
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         redisClient *slave = ln->value;
 
         if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_START) {
-            startbgsave = 1;
+            startbgsave++;
+            if (startbgsave == 1 && server.repl_inMemoryUse && slave->slave_inmemoryVersion)
+                inMemorySlave = slave;
             slave->replstate = REDIS_REPL_WAIT_BGSAVE_END;
         } else if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_END) {
             struct redis_stat buf;
@@ -932,7 +935,15 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
          * new EVALSHA for the first time, since all the new slaves don't know
          * about previous scripts. */
         replicationScriptCacheFlush();
-        if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
+        if (startbgsave == 1 && inMemorySlave) {
+            if (rdbSaveBackground(NULL) != REDIS_OK) {
+                freeClient(inMemorySlave);
+            } else {
+                inMemorySlave->replstate = REDIS_REPL_TRANSFER;
+                if (!SetupInMemoryRepl(inMemorySlave))
+                    freeClient(inMemorySlave);
+            }
+        } else if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
             listIter li;
 
             listRewind(server.slaves,&li);
