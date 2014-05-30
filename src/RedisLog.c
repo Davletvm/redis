@@ -34,9 +34,11 @@
 static int verbosity = REDIS_WARNING;
 static char* logFile = NULL;
 
+DWORD MainTID;
 void setLogVerbosityLevel(int level)
 {
     verbosity = level;
+    MainTID = GetCurrentThreadId();
 }
 
 void setLogFile(const char* logFileName)
@@ -82,14 +84,20 @@ void redisLogRaw(int level, const char *msg) {
         now = localtime(&secs);
         off = (int)strftime(buf,sizeof(buf),"%d %b %H:%M:%S.",now);
         snprintf(buf+off,sizeof(buf)-off,"%03d",usecs/1000);
+        DWORD tid = GetCurrentThreadId();
+        if (tid != MainTID) {
+            fprintf(fp,"[%d,%d] %s %c %s\n",(int)getpid(), tid, buf,c[level],msg);
+        } else {
+            fprintf(fp, "[%d] %s %c %s\n", (int)getpid(), buf, c[level], msg);
+        }
 #else
         struct timeval tv;
 
         gettimeofday(&tv,NULL);
         off = strftime(buf,sizeof(buf),"%d %b %H:%M:%S.",localtime(&tv.tv_sec));
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
+        fprintf(fp, "[%d] %s %c %s\n", (int)getpid(), buf, c[level], msg);
 #endif
-        fprintf(fp,"[%d] %s %c %s\n",(int)getpid(),buf,c[level],msg);
     }
     fflush(fp);
 
