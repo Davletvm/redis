@@ -36,7 +36,6 @@ void SetupGlobals(LPVOID globalData, size_t globalDataSize, uint32_t dictHashSee
 int do_rdbSave(char* filename)
 {
 #ifndef NO_QFORKIMPL
-    DebugBreak();
     server.rdb_child_pid = GetCurrentProcessId();
     if( rdbSave(filename) != REDIS_OK ) {
         redisLog(REDIS_WARNING,"rdbSave failed in qfork: %s", strerror(errno));

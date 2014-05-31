@@ -129,9 +129,6 @@ const size_t pageSize = 4096;
 
 const char* maxvirtualmemoryflag = "maxvirtualmemory";
 
-ULONG64 bitIndexTable[64];
-ULONG64* pageCOWtable;
-
 typedef enum BlockState {
     bsINVALID = 0,
     bsUNMAPPED = 1,   
@@ -170,7 +167,6 @@ HANDLE g_hQForkControlFileMap = NULL;
 
 HANDLE g_hForkedProcess = NULL;
 HANDLE g_hEndForkThread = NULL;
-volatile BOOL g_bMemoryIsObservable = FALSE;
 SIZE_T g_win64maxmemory = 0;
 SIZE_T g_win64maxvirtualmemory = 0;
 BOOL g_isForkedProcess = FALSE;
@@ -183,47 +179,6 @@ extern "C"
 }
 
 
-LONG CALLBACK VectoredHeapMapper(PEXCEPTION_POINTERS info) {
-    if (!g_hEndForkThread && !g_hForkedProcess) 
-        return EXCEPTION_CONTINUE_SEARCH;
-
-    if (info->ExceptionRecord->ExceptionCode == STATUS_ACCESS_VIOLATION &&
-        info->ExceptionRecord->NumberParameters == 2) {
-        ULONG64 failingMemoryAddress = info->ExceptionRecord->ExceptionInformation[1];
-        ULONG64 heapStart = (ULONG64)g_pQForkControl->heapStart;
-        ULONG64 heapEnd = heapStart + ((SIZE_T)g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize);
-        if (failingMemoryAddress >= heapStart && failingMemoryAddress < heapEnd) {
-            if (g_bMemoryIsObservable) {
-                ULONG64 mmfOffset = failingMemoryAddress - heapStart;
-                mmfOffset = mmfOffset >> 12; // to get page # (same as /4096)
-                ULONG64 index = mmfOffset >> 6; // same as /64
-                ULONG64 bit = mmfOffset & 63;
-                ULONG64 oldMask = InterlockedOr64NoFence((LONG64*)&pageCOWtable[index], bitIndexTable[bit]);
-                if ((oldMask & bitIndexTable[bit]) == 0) {
-                    DWORD old;
-                    BOOL b = VirtualProtect((void*)failingMemoryAddress, 1, PAGE_WRITECOPY, &old);
-                    if (!b) {
-                        redisLog(REDIS_WARNING, "Unable to mark page COW:%d", GetLastError());
-                    }
-
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                } else {
-                    redisLog(REDIS_WARNING, "Exception on already COW protected page");
-                    return EXCEPTION_CONTINUE_SEARCH;
-                }
-            } else {
-                DWORD old;
-                BOOL b = VirtualProtect((void*)failingMemoryAddress, 1, PAGE_READWRITE, &old);
-                if (!b) {
-                    redisLog(REDIS_WARNING, "Unable to mark page COW:%d", GetLastError());
-                }
-                return EXCEPTION_CONTINUE_EXECUTION;
-            }
-        }
-    }
-
-    return EXCEPTION_CONTINUE_SEARCH;
-}
 
 
 
@@ -555,9 +510,6 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         CreateEventHandle(&g_pQForkControl->doSendBuffer[1]);
         CreateEventHandle(&g_pQForkControl->doneSentBuffer[0]);
         CreateEventHandle(&g_pQForkControl->doneSentBuffer[1]);
-
-        pageCOWtable = (ULONG64*)VirtualAlloc(NULL, (g_win64maxvirtualmemory / pageSize / 64) * sizeof(ULONG64), MEM_COMMIT, PAGE_READWRITE);
-        AddVectoredExceptionHandler(1, VectoredHeapMapper);
         
         return TRUE;
     }
@@ -575,16 +527,8 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
 
 
 
-void BitTableInit()
-{
-    for (unsigned long long i = 0; i < 64; i++) {
-        bitIndexTable[i] = ((ULONG64)1) << i;
-    }
-}
-
 // QFork API
 StartupStatus QForkStartup(int argc, char** argv) {
-    BitTableInit();
     bool foundSlaveFlag = false;
     HANDLE QForkConrolMemoryMapHandle = NULL;
     DWORD PPID = 0;
@@ -703,8 +647,6 @@ BOOL QForkShutdown() {
         }
         CloseEventHandle(&g_hQForkControlFileMap);
     }
-
-    RemoveVectoredExceptionHandler(VectoredHeapMapper);
     return TRUE;
 }
 
@@ -834,14 +776,13 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         if (VirtualProtect(
             g_pQForkControl->heapStart,
             g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
-            PAGE_READONLY,
+            PAGE_WRITECOPY,
             &oldProtect) == FALSE) {
             throw std::system_error(
                 GetLastError(),
                 system_category(),
                 "BeginForkOperation: VirtualProtect 2 failed");
         }
-        g_bMemoryIsObservable = TRUE;
         redisLog(REDIS_DEBUG, "Protected heap");
 
 
@@ -965,7 +906,6 @@ DWORD WINAPI EndForkThreadProc(void * param)
                 }
             }
         }
-        g_bMemoryIsObservable = FALSE;
         redisLog(REDIS_DEBUG, "Child exited");
 
         if (g_pQForkControl->inMemoryBuffersControl) {
@@ -992,11 +932,32 @@ DWORD WINAPI EndForkThreadProc(void * param)
                 "EndForkOperation: VirtualProtect 3 failed.");
         }
 
+        void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0, 0);
+        if (heapAltRegion == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "QueryWorkingSet failure");
+        }
+
         redisLog(REDIS_DEBUG, "Unprotecting heap");
-        for (int count = 0; count < g_pQForkControl->availableBlocksInHeap; count ++) {
+        HANDLE hProcess = GetCurrentProcess();
+        int pages = (int)(g_pQForkControl->heapBlockSize / pageSize);
+        PSAPI_WORKING_SET_EX_INFORMATION* pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[pages];
+        int copiedCount = 0;
+        if (pwsi == NULL) {
+            throw new system_error(
+                GetLastError(),
+                system_category(),
+                "pwsi == NULL");
+        }
+
+        const size_t ONEMB = g_pQForkControl->heapBlockSize;
+        size_t MBS = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize / ONEMB;
+        for (int count = 0; count < MBS; count++) {
             if (VirtualProtect(
-                (BYTE*)g_pQForkControl->heapStart + g_pQForkControl->heapBlockSize * count,
-                g_pQForkControl->heapBlockSize,
+                (BYTE*)g_pQForkControl->heapStart + ONEMB * count,
+                ONEMB,
                 PAGE_READWRITE,
                 &oldProtect) == FALSE) {
                 throw std::system_error(
@@ -1004,37 +965,33 @@ DWORD WINAPI EndForkThreadProc(void * param)
                     system_category(),
                     "EndForkOperation: VirtualProtect 4 failed.");
             }
-        }
-        redisLog(REDIS_DEBUG, "Unprotected heap");
+           
+            memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
+            for (int page = 0; page < pages; page++) {
+                pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + ONEMB * count;
+            }
+            if (QueryWorkingSetEx(
+                hProcess,
+                pwsi,
+                sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages) == FALSE) {
+                throw system_error(
+                    GetLastError(),
+                    system_category(),
+                    "QueryWorkingSet failure");
+            }
 
-        ULONG64 pages = g_win64maxvirtualmemory / pageSize;
-
-        redisLog(REDIS_DEBUG, "Calculated changed pages");
-
-        void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0, 0);
-        if (heapAltRegion == NULL) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: Remapping ForkControl block failed.");
-        }
-        redisLog(REDIS_DEBUG, "Mapped original heap view");
-
-        int count = 0;
-        for (ULONG64 b = 0; b < pages >> 6; b++) {
-            if (pageCOWtable[b]) {
-                ULONG64 page = pageCOWtable[b];
-                for (int x = 0; x < 63; x++) {
-                    if (page & bitIndexTable[x]) {
-                        count++;
-                        size_t offset = (int)(b * 64 + x) * pageSize;
-
+            for (int page = 0; page < pages; page++) {
+                if (pwsi[page].VirtualAttributes.Valid == 1) {
+                    // A 0 share count indicates a COW page
+                    if (pwsi[page].VirtualAttributes.ShareCount == 0) {
+                        copiedCount++;
+                        size_t offset = ONEMB * count + page * pageSize;
                         memcpy(
                             (BYTE*)heapAltRegion + offset,
                             (BYTE*)g_pQForkControl->heapStart + offset,
                             pageSize);
                         DWORD old;
-                        if (VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, 1, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &old) == FALSE) {
+                        if (VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &old) == FALSE) {
                             throw std::system_error(
                                 GetLastError(),
                                 system_category(),
@@ -1044,8 +1001,7 @@ DWORD WINAPI EndForkThreadProc(void * param)
                 }
             }
         }
-
-        redisLog(REDIS_DEBUG, "Copied changed pages: %d", count);
+        redisLog(REDIS_DEBUG, "Copied changed pages: %d", copiedCount);            
 
         if (UnmapViewOfFile(heapAltRegion) == FALSE) {
             throw std::system_error(
@@ -1054,10 +1010,6 @@ DWORD WINAPI EndForkThreadProc(void * param)
                 "EndForkOperation: UnmapViewOfFile failed.");
         }
         redisLog(REDIS_DEBUG, "Unmapped original heap");
-
-        memset(pageCOWtable, 0, g_win64maxvirtualmemory / pageSize / 64);
-
-        redisLog(REDIS_DEBUG, "Reset store of changed pages");
 
         // now do the same with qfork control
         LPVOID controlCopy = malloc(sizeof(QForkControl));
@@ -1092,6 +1044,7 @@ DWORD WINAPI EndForkThreadProc(void * param)
         controlCopy = NULL;
 
         redisLog(REDIS_NOTICE, "Fork operation async completed");
+        delete pwsi;
 
         return TRUE;
     }
