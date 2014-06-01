@@ -736,7 +736,7 @@ void freeClient(redisClient *c) {
 #endif
         }
         if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
-            AbortForkOperation();
+            AbortForkOperation(FALSE);
         }
         l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);

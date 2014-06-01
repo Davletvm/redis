@@ -38,8 +38,12 @@ typedef enum operationType {
 typedef enum operationStatus {
     osUNSTARTED = 0,
     osINPROGRESS = 1,
-    osCOMPLETE = 2,
-    osFAILED = 3
+    osCOMPLETE = 3,
+    osEXITED = 4,
+    osCLEANEDUP = 5,
+    osMASK = 0x0FFF,
+    osFAILED = 0x1000,
+    
 } OperationStatus;
 
 typedef enum startupStatus {
@@ -61,9 +65,9 @@ BOOL QForkShutdown();
 
 // For master process use only
 BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, unsigned __int32 dictHashSeed);
-OperationStatus GetForkOperationStatus();
+OperationStatus GetForkOperationStatus(BOOL cleanupIfDone);
 BOOL EndForkOperation(int * pExitCode);
-BOOL AbortForkOperation();
+BOOL AbortForkOperation(BOOL blockUntilCleanedUp);
 void ClearInMemoryBuffersMasterParent();
 
 // For DLMalloc use only

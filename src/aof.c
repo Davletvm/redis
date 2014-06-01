@@ -180,9 +180,7 @@ void stopAppendOnly(void) {
             (long) server.aof_child_pid);
 #ifdef _WIN32
         {
-            AbortForkOperation();
-            int ec;
-            EndForkOperation(&ec);
+            AbortForkOperation(TRUE);
         }
 #else
         {

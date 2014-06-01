@@ -852,39 +852,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
 }
 
 
-BOOL AbortForkOperation()
-{
-    try {
-        redisLog(REDIS_NOTICE, "Aborting child process");
-        ClearInMemoryBuffersMasterParent();
-        if( g_hForkedProcess != 0 )
-        {
-            if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
-                throw std::system_error(
-                    GetLastError(),
-                    system_category(),
-                    "AbortOperation: Killing forked process failed.");
-            }
-            CloseHandle(g_hForkedProcess);
-            g_hForkedProcess = 0;
-        }
-
-        SetEvent(g_pQForkControl->operationFailed);
-        return TRUE;
-    }
-    catch(std::system_error syserr) {
-        redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
-
-        // If we can not properly restore fork state, then another fork operation is not possible. 
-        exit(1);
-    }
-    catch( ... ) {
-        redisLog(REDIS_WARNING, "Some other exception caught in EndForkOperation().");
-        exit(1);
-    }
-    return FALSE;
-}
-
 
 
 
@@ -1105,24 +1072,25 @@ void StartEndForkProcess()
 }
 
 
-OperationStatus GetForkOperationStatus() {
-    BOOL childExited = (!g_hForkedProcess || WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0);
-    if (WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0) {
-        if (childExited)
-            return OperationStatus::osCOMPLETE;
-        StartEndForkProcess();
-        return OperationStatus::osINPROGRESS;
+OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
+    OperationStatus failed = (WaitForSingleObject(g_pQForkControl->operationFailed, 0) == WAIT_OBJECT_0) ? OperationStatus::osFAILED : (OperationStatus)0;
+
+    if (g_hEndForkThread && WaitForSingleObject(g_hEndForkThread, 0) == WAIT_OBJECT_0) {
+        return (OperationStatus) (OperationStatus::osCLEANEDUP | failed);
+    }
+    
+    if (g_hForkedProcess && WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0) {
+        return (OperationStatus)(OperationStatus::osEXITED | failed);
     }
 
-    if (WaitForSingleObject(g_pQForkControl->operationFailed, 0) == WAIT_OBJECT_0) {
-        if (childExited)
-            return OperationStatus::osFAILED;
-        StartEndForkProcess();
-        return OperationStatus::osINPROGRESS;
+    if (WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0 || failed) {
+        if (cleanupIfDone)
+            StartEndForkProcess();
+        return (OperationStatus)(OperationStatus::osCOMPLETE | failed);
     }
 
     if (WaitForSingleObject(g_pQForkControl->forkedProcessReady, 0) == WAIT_OBJECT_0) {
-        return OperationStatus::osINPROGRESS;
+        return (OperationStatus)(OperationStatus::osINPROGRESS | failed);
     }
 
     return OperationStatus::osUNSTARTED;
@@ -1157,6 +1125,47 @@ BOOL EndForkOperation(int * pExitCode)
     return TRUE;
 }
 
+
+BOOL AbortForkOperation(BOOL blockUntilCleanedup)
+{
+    try {
+        redisLog(REDIS_NOTICE, "Aborting child process");
+        ClearInMemoryBuffersMasterParent();
+        if (g_hForkedProcess != 0)
+        {
+            if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "AbortOperation: Killing forked process failed.");
+            }
+        }
+
+        SetEvent(g_pQForkControl->operationFailed);
+        if (blockUntilCleanedup) {
+            EndForkThreadProc(NULL);
+            if (g_hForkedProcess) {
+                CloseHandle(g_hForkedProcess);
+                g_hForkedProcess = 0;
+            }
+        } else {
+            StartEndForkProcess();
+        }
+
+        return TRUE;
+    }
+    catch (std::system_error syserr) {
+        redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
+
+        // If we can not properly restore fork state, then another fork operation is not possible. 
+        exit(1);
+    }
+    catch (...) {
+        redisLog(REDIS_WARNING, "Some other exception caught in EndForkOperation().");
+        exit(1);
+    }
+    return FALSE;
+}
 
 
 

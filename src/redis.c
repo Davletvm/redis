@@ -1104,11 +1104,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         int bysignal;
 
 #ifdef _WIN32
-        OperationStatus opStatus = GetForkOperationStatus();
-        if (opStatus == osCOMPLETE || opStatus == osFAILED) {
-            redisLog(REDIS_NOTICE, opStatus == osCOMPLETE ? "Child work completed" : "Child work failed");
+        OperationStatus opStatus = GetForkOperationStatus(TRUE);
+        BOOL failed = opStatus & osFAILED;
+        opStatus = opStatus & ~osFAILED;
+        if (opStatus == osCOMPLETE || opStatus == osEXITED || opStatus == osCLEANEDUP) {
+            redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
-            bysignal = (opStatus == osFAILED);
+            bysignal = failed;
             if (!bysignal && server.repl_inMemorySend && server.rdb_child_pid != -1) {
                 bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
                 FinishInMemoryRepl();
@@ -2173,7 +2175,8 @@ int prepareForShutdown(int flags) {
     if (server.rdb_child_pid != -1) {
         redisLog(REDIS_WARNING,"There is a child saving an .rdb. Killing it!");
 #ifdef _WIN32
-        AbortForkOperation();
+        AbortForkOperation(TRUE); // Best to block since we are shutting down anyway
+        server.rdb_child_pid = -1;
 #else
         kill(server.rdb_child_pid,SIGUSR1);
 #endif
@@ -2186,7 +2189,8 @@ int prepareForShutdown(int flags) {
             redisLog(REDIS_WARNING,
                 "There is a child rewriting the AOF. Killing it!");
 #ifdef _WIN32
-            AbortForkOperation();
+            AbortForkOperation(TRUE);
+            server.aof_child_pid = -1;
 #else
             kill(server.aof_child_pid,SIGUSR1);
 #endif
