@@ -345,6 +345,10 @@ void CreateEventHandle(HANDLE * out) {
 
 
 BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
+
+    // This will be reset to the correct value when config is processed
+    setLogVerbosityLevel(REDIS_WARNING);
+
     try {
         // allocate file map for qfork control so it can be passed to the forked process
         g_hQForkControlFileMap = CreateFileMappingW(
