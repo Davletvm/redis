@@ -674,6 +674,7 @@ void ForceEndForkProcess()
         WaitForSingleObject(g_hEndForkThread, INFINITE);
         redisLog(REDIS_DEBUG, "EndForkAsync thread completed");
     }
+    CloseHandle(g_hEndForkThread);
     g_hEndForkThread = NULL;
 }
 
@@ -785,7 +786,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             throw std::system_error(
                 GetLastError(),
                 system_category(),
-                "BeginForkOperation: VirtualProtect 2 failed");
+                "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         }
         redisLog(REDIS_DEBUG, "Protected heap");
 
@@ -817,7 +818,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 system_category(),
                 "Problem creating slave process" );
         }
-        (*childPID) = pi.dwProcessId;
         g_hForkedProcess = pi.hProcess; // must CloseHandle on this
         CloseHandle(pi.hThread);
 
@@ -839,6 +839,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
 
+        (*childPID) = pi.dwProcessId;
         redisLog(REDIS_NOTICE, "Forked successfully");
         return TRUE;
     }
@@ -851,7 +852,61 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
     catch(...) {
         redisLog(REDIS_WARNING, "BeginForkOperation: other exception caught.");
     }
-    ClearInMemoryBuffersMasterParent();
+    try {
+        ClearInMemoryBuffersMasterParent();
+        if (g_hForkedProcess != 0) {
+            if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "AbortOperation: Killing forked process failed.");
+            }
+            CloseHandle(g_hForkedProcess);
+            g_hForkedProcess = NULL;
+        }
+        DWORD oldProtect;
+        if (VirtualProtect(
+            g_pQForkControl->heapStart,
+            g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
+            PAGE_READWRITE,
+            &oldProtect) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "BeginForkOperation: Cannot reset back to read-write");
+        }
+        if (VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_READWRITE, &oldProtect) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "BeginForkOperation: Cannot reset control back to read-write");
+        }
+        if (g_pQForkControl->inMemoryBuffersControl) {
+            if (!UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControlHandle)) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "BeginForkOperation: UnMapViewOfFile failed");
+            }
+        }
+        if (g_pQForkControl->inMemoryBuffersControlHandle)
+            CloseHandle(g_pQForkControl->inMemoryBuffersControlHandle);
+    }
+    catch (std::system_error syserr) {
+        redisLog(REDIS_WARNING, "BeginForkOperation Revert: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
+        exit(1);
+    }
+    catch (std::runtime_error runerr) {
+        redisLog(REDIS_WARNING, "BeginForkOperation Revert: runtime error caught. message=%s", runerr.what());
+        exit(1);
+    }
+    catch (...) {
+        redisLog(REDIS_WARNING, "BeginForkOperation Revert: other exception caught.");
+        exit(1);
+    }
+
+
+
     return FALSE;
 }
 
@@ -1088,8 +1143,10 @@ OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
     }
 
     if (WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0 || failed) {
-        if (cleanupIfDone)
+        if (cleanupIfDone) {
             StartEndForkProcess();
+            ForceEndForkProcess();
+        }
         return (OperationStatus)(OperationStatus::osCOMPLETE | failed);
     }
 
@@ -1104,7 +1161,7 @@ OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
 BOOL EndForkOperation(int * pExitCode)
 {
     redisLog(REDIS_NOTICE, "Ending fork operation");
-    StartEndForkProcess();
+//    StartEndForkProcess();
     if (g_hForkedProcess) {
         WaitForSingleObject(g_hForkedProcess, INFINITE);
         if (pExitCode != NULL) {
@@ -1135,25 +1192,32 @@ BOOL AbortForkOperation(BOOL blockUntilCleanedup)
     try {
         redisLog(REDIS_NOTICE, "Aborting child process");
         ClearInMemoryBuffersMasterParent();
-        if (g_hForkedProcess != 0)
+        if (g_hForkedProcess != 0 && !g_hEndForkThread)
         {
-            if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
-                throw std::system_error(
-                    GetLastError(),
-                    system_category(),
-                    "AbortOperation: Killing forked process failed.");
+            SetEvent(g_pQForkControl->operationFailed);
+            if (WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0) {
+                // background process still running
+                if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
+                    throw std::system_error(
+                        GetLastError(),
+                        system_category(),
+                        "AbortOperation: Killing forked process failed.");
+                }
             }
-        }
-
-        SetEvent(g_pQForkControl->operationFailed);
-        if (blockUntilCleanedup) {
-            EndForkThreadProc(NULL);
-            if (g_hForkedProcess) {
-                CloseHandle(g_hForkedProcess);
-                g_hForkedProcess = 0;
+            if (blockUntilCleanedup) {
+                EndForkThreadProc(NULL);
+                if (g_hForkedProcess) {
+                    CloseHandle(g_hForkedProcess);
+                    g_hForkedProcess = 0;
+                }
+            } else {
+                StartEndForkProcess();
             }
-        } else {
-            StartEndForkProcess();
+        } else if (g_hEndForkThread) {
+            // background process in cleanup
+            if (blockUntilCleanedup) {
+                ForceEndForkProcess();
+            }
         }
 
         return TRUE;

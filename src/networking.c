@@ -644,6 +644,7 @@ void replicationHandleMasterDisconnection(void) {
 void freeClient(redisClient *c) {
     listNode *ln;
 
+    redisLog(REDIS_WARNING, "Freeing client %lld", (long long)c);
     /* If this is marked as current client unset it */
     if (server.current_client == c) server.current_client = NULL;
 
@@ -764,10 +765,10 @@ void freeClient(redisClient *c) {
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
-    if (c->name) decrRefCount(c->name);
-    zfree(c->argv);
-    freeClientMultiState(c);
-    zfree(c);
+    //if (c->name) decrRefCount(c->name);
+    //zfree(c->argv);
+    //freeClientMultiState(c);
+    //zfree(c);
 }
 
 /* Schedule a client to free it at a safe time in the serverCron() function.

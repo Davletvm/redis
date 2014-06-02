@@ -1,7 +1,7 @@
-foreach imr {yes no} {
+foreach imr {yes} {
 
 test "Testing with repl-inmemory $imr" { }
-
+if 0 {
 start_server {tags {"repl"}} {
     start_server {} {
         r 0 config set repl-inmemory $imr
@@ -14,6 +14,13 @@ start_server {tags {"repl"}} {
                 [string match {*master_link_status:up*} [r -1 info replication]]
             } else {
                 fail "Can't turn the instance into a slave"
+            }
+        }
+        test {Master should be done with bgsave} {
+            wait_for_condition 50 100 {
+                [s 0 rdb_bgsave_in_progress] eq {0}
+            } else {
+                fail "BGsave still not finished."
             }
         }
 
@@ -79,13 +86,14 @@ start_server {tags {"repl"}} {
         }
 
         test {FLUSHALL should replicate} {
+            r -1 set foo bar
             r -1 flushall
             if {$::valgrind} {after 2000}
             list [r -1 dbsize] [r 0 dbsize]
         } {0 0}
     }
 }
-
+}
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
     exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds &

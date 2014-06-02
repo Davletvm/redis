@@ -1104,16 +1104,19 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         int bysignal;
 
 #ifdef _WIN32
-        OperationStatus opStatus = GetForkOperationStatus(TRUE);
+        OperationStatus opStatus = GetForkOperationStatus(FALSE);
         BOOL failed = opStatus & osFAILED;
         opStatus = opStatus & ~osFAILED;
-        if (opStatus == osCOMPLETE || opStatus == osEXITED || opStatus == osCLEANEDUP) {
+        if (opStatus == osCOMPLETE && !failed && server.repl_inMemorySend) {
+            FinishInMemoryRepl();
+            GetForkOperationStatus(TRUE);  // Advance to cleanup now that we recorded success
+//        }
+//        if (opStatus == osCLEANEDUP || failed) {
             redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
             bysignal = failed;
             if (!bysignal && server.repl_inMemorySend && server.rdb_child_pid != -1) {
                 bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
-                FinishInMemoryRepl();
             }
             EndForkOperation(&exitcode);
 
