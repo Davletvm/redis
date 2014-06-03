@@ -1,4 +1,4 @@
-foreach imr {yes} {
+foreach imr {yes no} {
 
 test "Testing with repl-inmemory $imr" { }
 if 0 {

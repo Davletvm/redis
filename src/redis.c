@@ -1107,11 +1107,14 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         OperationStatus opStatus = GetForkOperationStatus(FALSE);
         BOOL failed = opStatus & osFAILED;
         opStatus = opStatus & ~osFAILED;
-        if (opStatus == osCOMPLETE && !failed && server.repl_inMemorySend) {
-            FinishInMemoryRepl();
+        if (opStatus == osCOMPLETE && !failed) {
+            if (server.repl_inMemorySend) {
+                redisLog(REDIS_DEBUG, "Finishing in memory repl");
+                FinishInMemoryRepl();
+            }
             GetForkOperationStatus(TRUE);  // Advance to cleanup now that we recorded success
-//        }
-//        if (opStatus == osCLEANEDUP || failed) {
+        }
+        if (opStatus == osCLEANEDUP || failed) {
             redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
             bysignal = failed;

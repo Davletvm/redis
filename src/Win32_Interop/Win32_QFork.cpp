@@ -676,6 +676,42 @@ void ForceEndForkProcess()
     }
     CloseHandle(g_hEndForkThread);
     g_hEndForkThread = NULL;
+
+    LPVOID controlCopy = malloc(sizeof(QForkControl));
+    if (controlCopy == NULL) {
+        throw std::system_error(
+            GetLastError(),
+            system_category(),
+            "EndForkOperation: allocation failed.");
+    }
+    memcpy(controlCopy, g_pQForkControl, sizeof(QForkControl));
+    if (UnmapViewOfFile(g_pQForkControl) == FALSE) {
+        throw std::system_error(
+            GetLastError(),
+            system_category(),
+            "EndForkOperation: UnmapViewOfFile failed.");
+    }
+    g_pQForkControl = (QForkControl*)
+        MapViewOfFileEx(
+        g_hQForkControlFileMap,
+        FILE_MAP_ALL_ACCESS,
+        0, 0,
+        0,
+        g_pQForkControl);
+    if (g_pQForkControl == NULL) {
+        throw std::system_error(
+            GetLastError(),
+            system_category(),
+            "EndForkOperation: Remapping ForkControl failed.");
+    }
+    memcpy(g_pQForkControl, controlCopy, sizeof(QForkControl));
+    delete controlCopy;
+    controlCopy = NULL;
+
+    if (g_hForkedProcess) {
+        CloseHandle(g_hForkedProcess);
+        g_hForkedProcess = NULL;
+    }
 }
 
 
@@ -924,6 +960,7 @@ DWORD WINAPI EndForkThreadProc(void * param)
         if( g_hForkedProcess != 0 )
         {
             if (WaitForSingleObject(g_hForkedProcess, cDeadForkWait) == WAIT_TIMEOUT) {
+                redisLog(REDIS_WARNING, "Force killing child");
                 if (TerminateProcess(g_hForkedProcess, 1) == FALSE) {
                     throw std::system_error(
                         GetLastError(),
@@ -958,119 +995,8 @@ DWORD WINAPI EndForkThreadProc(void * param)
                 "EndForkOperation: VirtualProtect 3 failed.");
         }
 
-        void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0, 0);
-        if (heapAltRegion == NULL) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "QueryWorkingSet failure");
-        }
-
-        redisLog(REDIS_DEBUG, "Unprotecting heap");
-        HANDLE hProcess = GetCurrentProcess();
-        int pages = (int)(g_pQForkControl->heapBlockSize / pageSize);
-        PSAPI_WORKING_SET_EX_INFORMATION* pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[pages];
-        int copiedCount = 0;
-        if (pwsi == NULL) {
-            throw new system_error(
-                GetLastError(),
-                system_category(),
-                "pwsi == NULL");
-        }
-
-        const size_t ONEMB = g_pQForkControl->heapBlockSize;
-        size_t MBS = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize / ONEMB;
-        for (int count = 0; count < MBS; count++) {
-            if (VirtualProtect(
-                (BYTE*)g_pQForkControl->heapStart + ONEMB * count,
-                ONEMB,
-                PAGE_READWRITE,
-                &oldProtect) == FALSE) {
-                throw std::system_error(
-                    GetLastError(),
-                    system_category(),
-                    "EndForkOperation: VirtualProtect 4 failed.");
-            }
-           
-            memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
-            for (int page = 0; page < pages; page++) {
-                pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + ONEMB * count;
-            }
-            if (QueryWorkingSetEx(
-                hProcess,
-                pwsi,
-                sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages) == FALSE) {
-                throw system_error(
-                    GetLastError(),
-                    system_category(),
-                    "QueryWorkingSet failure");
-            }
-
-            for (int page = 0; page < pages; page++) {
-                if (pwsi[page].VirtualAttributes.Valid == 1) {
-                    // A 0 share count indicates a COW page
-                    if (pwsi[page].VirtualAttributes.ShareCount == 0) {
-                        copiedCount++;
-                        size_t offset = ONEMB * count + page * pageSize;
-                        memcpy(
-                            (BYTE*)heapAltRegion + offset,
-                            (BYTE*)g_pQForkControl->heapStart + offset,
-                            pageSize);
-                        DWORD old;
-                        if (VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &old) == FALSE) {
-                            throw std::system_error(
-                                GetLastError(),
-                                system_category(),
-                                "EndForkOperation: Revert to file map failed.");
-                        }
-                    }
-                }
-            }
-        }
-        redisLog(REDIS_DEBUG, "Copied changed pages: %d", copiedCount);            
-
-        if (UnmapViewOfFile(heapAltRegion) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: UnmapViewOfFile failed.");
-        }
-        redisLog(REDIS_DEBUG, "Unmapped original heap");
-
-        // now do the same with qfork control
-        LPVOID controlCopy = malloc(sizeof(QForkControl));
-        if(controlCopy == NULL) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: allocation failed.");
-        }
-        memcpy(controlCopy, g_pQForkControl, sizeof(QForkControl));
-        if (UnmapViewOfFile(g_pQForkControl) == FALSE) {
-            throw std::system_error(
-                GetLastError(),
-                system_category(),
-                "EndForkOperation: UnmapViewOfFile failed.");
-        }
-        g_pQForkControl = (QForkControl*)
-            MapViewOfFileEx(
-                g_hQForkControlFileMap,
-                FILE_MAP_ALL_ACCESS,
-                0,0,                            
-                0,  
-                g_pQForkControl);
-        if (g_pQForkControl == NULL) {
-            throw std::system_error(
-                GetLastError(), 
-                system_category(), 
-                "EndForkOperation: Remapping ForkControl failed.");
-        }
-        memcpy(g_pQForkControl, controlCopy,sizeof(QForkControl));
-        delete controlCopy;
-        controlCopy = NULL;
 
         redisLog(REDIS_NOTICE, "Fork operation async completed");
-        delete pwsi;
 
         return TRUE;
     }
@@ -1134,6 +1060,10 @@ void StartEndForkProcess()
 OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
     OperationStatus failed = (WaitForSingleObject(g_pQForkControl->operationFailed, 0) == WAIT_OBJECT_0) ? OperationStatus::osFAILED : (OperationStatus)0;
 
+    if (cleanupIfDone) {
+        StartEndForkProcess();
+    }
+
     if (g_hEndForkThread && WaitForSingleObject(g_hEndForkThread, 0) == WAIT_OBJECT_0) {
         return (OperationStatus) (OperationStatus::osCLEANEDUP | failed);
     }
@@ -1143,10 +1073,6 @@ OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
     }
 
     if (WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0 || failed) {
-        if (cleanupIfDone) {
-            StartEndForkProcess();
-            ForceEndForkProcess();
-        }
         return (OperationStatus)(OperationStatus::osCOMPLETE | failed);
     }
 
@@ -1160,30 +1086,159 @@ OperationStatus GetForkOperationStatus(BOOL cleanupIfDone) {
 
 BOOL EndForkOperation(int * pExitCode)
 {
-    redisLog(REDIS_NOTICE, "Ending fork operation");
-//    StartEndForkProcess();
-    if (g_hForkedProcess) {
-        WaitForSingleObject(g_hForkedProcess, INFINITE);
-        if (pExitCode != NULL) {
-            GetExitCodeProcess(g_hForkedProcess, (DWORD*)pExitCode);
+    try {
+        redisLog(REDIS_NOTICE, "Ending fork operation");
+        StartEndForkProcess();
+        if (g_hForkedProcess) {
+            WaitForSingleObject(g_hForkedProcess, INFINITE);
+            if (pExitCode != NULL) {
+                GetExitCodeProcess(g_hForkedProcess, (DWORD*)pExitCode);
+            }
+            CloseHandle(g_hForkedProcess);
+            g_hForkedProcess = NULL;
         }
-        CloseHandle(g_hForkedProcess);
-        g_hForkedProcess = NULL;
-    }
-    // ensure events are in the correct state
-    ResetEventHandle(g_pQForkControl->operationComplete);
-    ResetEventHandle(g_pQForkControl->operationFailed);
-    ResetEventHandle(g_pQForkControl->startOperation);
-    ResetEventHandle(g_pQForkControl->forkedProcessReady);
-    ResetEventHandle(g_pQForkControl->terminateForkedProcess);
-    ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
-    ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
-    ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
-    ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
-    
-    redisLog(REDIS_NOTICE, "Ended fork operation");
+        // ensure events are in the correct state
+        ResetEventHandle(g_pQForkControl->operationComplete);
+        ResetEventHandle(g_pQForkControl->operationFailed);
+        ResetEventHandle(g_pQForkControl->startOperation);
+        ResetEventHandle(g_pQForkControl->forkedProcessReady);
+        ResetEventHandle(g_pQForkControl->terminateForkedProcess);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
+        ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
 
-    return TRUE;
+
+        redisLog(REDIS_DEBUG, "Unprotecting heap");
+
+        void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, 0, 0, 0, 0);
+        if (heapAltRegion == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "MapViewOfFileEx failure");
+        }
+
+        HANDLE hProcess = GetCurrentProcess();
+        const size_t ONEMB = 1024 * pageSize;
+        size_t MBS = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize / ONEMB;
+        int pages = (int)(ONEMB / pageSize);
+        int copiedCount = 0;
+        PSAPI_WORKING_SET_EX_INFORMATION pwsi[1024]; //= new PSAPI_WORKING_SET_EX_INFORMATION[pages];
+        if (pwsi == NULL) {
+            throw new system_error(
+                GetLastError(),
+                system_category(),
+                "pwsi == NULL");
+        }
+
+        for (int count = 0; count < MBS; count++) {
+            DWORD oldProtect;
+            if (VirtualProtect(
+                (BYTE*)g_pQForkControl->heapStart + ONEMB * count,
+                ONEMB,
+                PAGE_READWRITE,
+                &oldProtect) == FALSE) {
+                throw std::system_error(
+                    GetLastError(),
+                    system_category(),
+                    "EndForkOperation: VirtualProtect 4 failed.");
+            }
+
+            memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * 1024);
+            for (int page = 0; page < pages; page++) {
+                pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + ONEMB * count;
+            }
+            if (QueryWorkingSetEx(
+                hProcess,
+                pwsi,
+                sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages) == FALSE) {
+                throw system_error(
+                    GetLastError(),
+                    system_category(),
+                    "QueryWorkingSet failure");
+            }
+
+            for (int page = 0; page < pages; page++) {
+                if (pwsi[page].VirtualAttributes.Valid == 1) {
+                    // A 0 share count indicates a COW page
+                    if (pwsi[page].VirtualAttributes.ShareCount == 0) {
+                        copiedCount++;
+                        size_t offset = ONEMB * count + page * pageSize;
+                        memcpy(
+                            (BYTE*)heapAltRegion + offset,
+                            (BYTE*)g_pQForkControl->heapStart + offset,
+                            pageSize);
+                        DWORD old;
+                        if (VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &old) == FALSE) {
+                            throw std::system_error(
+                                GetLastError(),
+                                system_category(),
+                                "EndForkOperation: Revert to file map failed.");
+                        }
+                    }
+                }
+            }            
+        }
+        redisLog(REDIS_DEBUG, "Copied changed pages: %d", copiedCount);
+
+        if (UnmapViewOfFile(heapAltRegion) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "EndForkOperation: UnmapViewOfFile failed.");
+        }
+        redisLog(REDIS_DEBUG, "Unmapped original heap");
+//        delete pwsi;
+
+
+
+        LPVOID controlCopy = malloc(sizeof(QForkControl));
+        if (controlCopy == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "EndForkOperation: allocation failed.");
+        }
+        memcpy(controlCopy, g_pQForkControl, sizeof(QForkControl));
+        if (UnmapViewOfFile(g_pQForkControl) == FALSE) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "EndForkOperation: UnmapViewOfFile failed.");
+        }
+        g_pQForkControl = (QForkControl*)
+            MapViewOfFileEx(
+            g_hQForkControlFileMap,
+            FILE_MAP_ALL_ACCESS,
+            0, 0,
+            0,
+            g_pQForkControl);
+        if (g_pQForkControl == NULL) {
+            throw std::system_error(
+                GetLastError(),
+                system_category(),
+                "EndForkOperation: Remapping ForkControl failed.");
+        }
+        memcpy(g_pQForkControl, controlCopy, sizeof(QForkControl));
+        delete controlCopy;
+        controlCopy = NULL;
+
+        redisLog(REDIS_NOTICE, "Ended fork operation");
+
+        return TRUE;
+    }
+    catch (std::system_error syserr) {
+        redisLog(REDIS_WARNING, "0x%08x - %s", syserr.code().value(), syserr.what());
+
+        // If we can not properly restore fork state, then another fork operation is not possible. 
+        exit(1);
+    }
+    catch (...) {
+        redisLog(REDIS_WARNING, "Some other exception caught in EndForkOperation().");
+        exit(1);
+    }
+    return FALSE;
 }
 
 
@@ -1192,7 +1247,7 @@ BOOL AbortForkOperation(BOOL blockUntilCleanedup)
     try {
         redisLog(REDIS_NOTICE, "Aborting child process");
         ClearInMemoryBuffersMasterParent();
-        if (g_hForkedProcess != 0 && !g_hEndForkThread)
+        if (g_hForkedProcess && !g_hEndForkThread)
         {
             SetEvent(g_pQForkControl->operationFailed);
             if (WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0) {
@@ -1206,6 +1261,37 @@ BOOL AbortForkOperation(BOOL blockUntilCleanedup)
             }
             if (blockUntilCleanedup) {
                 EndForkThreadProc(NULL);
+                // now do the same with qfork control
+                LPVOID controlCopy = malloc(sizeof(QForkControl));
+                if (controlCopy == NULL) {
+                    throw std::system_error(
+                        GetLastError(),
+                        system_category(),
+                        "EndForkOperation: allocation failed.");
+                }
+                memcpy(controlCopy, g_pQForkControl, sizeof(QForkControl));
+                if (UnmapViewOfFile(g_pQForkControl) == FALSE) {
+                    throw std::system_error(
+                        GetLastError(),
+                        system_category(),
+                        "EndForkOperation: UnmapViewOfFile failed.");
+                }
+                g_pQForkControl = (QForkControl*)
+                    MapViewOfFileEx(
+                    g_hQForkControlFileMap,
+                    FILE_MAP_ALL_ACCESS,
+                    0, 0,
+                    0,
+                    g_pQForkControl);
+                if (g_pQForkControl == NULL) {
+                    throw std::system_error(
+                        GetLastError(),
+                        system_category(),
+                        "EndForkOperation: Remapping ForkControl failed.");
+                }
+                memcpy(g_pQForkControl, controlCopy, sizeof(QForkControl));
+                delete controlCopy;
+                controlCopy = NULL;
                 if (g_hForkedProcess) {
                     CloseHandle(g_hForkedProcess);
                     g_hForkedProcess = 0;
@@ -1217,6 +1303,10 @@ BOOL AbortForkOperation(BOOL blockUntilCleanedup)
             // background process in cleanup
             if (blockUntilCleanedup) {
                 ForceEndForkProcess();
+                if (g_hForkedProcess) {
+                    CloseHandle(g_hForkedProcess);
+                    g_hForkedProcess = 0;
+                }
             }
         }
 

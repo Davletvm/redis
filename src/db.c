@@ -221,10 +221,7 @@ void flushallCommand(redisClient *c) {
     addReply(c,shared.ok);
     if (server.rdb_child_pid != -1) {
 #ifdef _WIN32
-        AbortForkOperation(FALSE); // We don't need to block until cleanup complete
-        server.rdb_child_pid = -1;  // But we don't want to prevent startup of new forks
-                                    // If need be, they will block in BeginForkOperation
-                                    // Until clean up is done
+        AbortForkOperation(FALSE); 
 #else
         kill(server.rdb_child_pid,SIGUSR1);
 #endif
