@@ -68,27 +68,15 @@ static pthread_t bio_threads[REDIS_BIO_NUM_OPS];
 static pthread_mutex_t bio_mutex[REDIS_BIO_NUM_OPS];
 static pthread_cond_t bio_condvar[REDIS_BIO_NUM_OPS];
 static list *bio_jobs[REDIS_BIO_NUM_OPS];
-#define REDIS_MAX_BIO_FREESLOTS 4
-static volatile DWORD countOccupied;
-static void *freeSlots[REDIS_MAX_BIO_FREESLOTS];
+static int bio_jobs_skip[REDIS_BIO_NUM_OPS];
 
-void** findFreeSlot()
-{
-    InterlockedIncrement(&countOccupied);
-    for (int x = 0; x < REDIS_MAX_BIO_FREESLOTS; x++) {
-        if (!freeSlots[x]) return &(freeSlots[x]);
-    }
-    redisLog(REDIS_WARNING, "Fatal: Out of BIO free slots.");
-    exit(1);
-}
 void releaseFreeSlots()
 {
-    if (!countOccupied) return;
-    for (int x = 0; x < REDIS_MAX_BIO_FREESLOTS; x++) {
-        if (freeSlots[x]) {
-            zfree(freeSlots[x]);
-            freeSlots[x] = NULL;
-            if (!InterlockedDecrement(&countOccupied)) break;
+    for (int j = 0; j < REDIS_BIO_NUM_OPS; j++) {
+        while (bio_jobs_skip[j]) {
+            zfree(listFirst(bio_jobs[j])->value);
+            listDelNode(bio_jobs[j], listFirst(bio_jobs[j]));
+            bio_jobs_skip[j]--;
         }
     }
 }
@@ -129,8 +117,8 @@ void bioInit(void) {
         pthread_cond_init(&bio_condvar[j],NULL);
         bio_jobs[j] = listCreate();
         bio_pending[j] = 0;
+        bio_jobs_skip[j] = 0;
     }
-    memset(freeSlots, 0, sizeof(freeSlots));
     /* Set the stack size as by default it may be small in some system */
     pthread_attr_init(&attr);
     pthread_attr_getstacksize(&attr,&stacksize);
@@ -159,13 +147,19 @@ void bioCreateBackgroundJob(int type, void *arg1, void *arg2, void *arg3) {
     job->arg2 = arg2;
     job->arg3 = arg3;
     pthread_mutex_lock(&bio_mutex[type]);
-    listAddNodeTail(bio_jobs[type],job);
-    bio_pending[type]++;
     releaseFreeSlots();
+    listAddNodeTail(bio_jobs[type], job);
+    bio_pending[type]++;
     pthread_cond_signal(&bio_condvar[type]);
     pthread_mutex_unlock(&bio_mutex[type]);
 }
 
+
+
+// WINDOWS:
+// This function cannot write to the shared forkable heap
+// as wny writes can be skipped when we merge the heap
+// back after a fork
 void *bioProcessBackgroundJobs(void *arg) {
     struct bio_job *job;
 #ifdef _WIN32
@@ -198,12 +192,17 @@ void *bioProcessBackgroundJobs(void *arg) {
         listNode *ln;
 
         /* The loop always starts with the lock hold. */
-        if (listLength(bio_jobs[type]) == 0) {
+        if (listLength(bio_jobs[type]) - bio_jobs_skip[type] == 0) {
             pthread_cond_wait(&bio_condvar[type],&bio_mutex[type]);
             continue;
         }
         /* Pop the job from the queue. */
         ln = listFirst(bio_jobs[type]);
+        int skip = bio_jobs_skip[type];
+        while (skip) {
+            ln = listNextNode(ln);
+        }
+        bio_jobs_skip[type]++;
         job = ln->value;
         /* It is now possible to unlock the background system as we know have
          * a stand alone job structure to process.*/
@@ -221,8 +220,6 @@ void *bioProcessBackgroundJobs(void *arg) {
         /* Lock again before reiterating the loop, if there are no longer
          * jobs to process we'll block again in pthread_cond_wait(). */
         pthread_mutex_lock(&bio_mutex[type]);
-        *(findFreeSlot()) = job;
-        listDelNodeNoFree(bio_jobs[type], ln, findFreeSlot());
         bio_pending[type]--;
     }
 }
