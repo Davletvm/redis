@@ -1606,7 +1606,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         sdsfree(err);
     }
 
-    {
+    if (server.repl_inMemoryUse) {
         err = sendSynchronousCommand(fd, "REPLCONF", "repl-inmemory", "1", NULL);
         if (err[0] == '-') {
             redisLog(REDIS_NOTICE, "(Non critical) Master does not understand REPLCONF repl-inmemory 1: %s", err);
