@@ -181,19 +181,6 @@ void listDelNode(list *list, listNode *node)
     zfree(node);
     list->len--;
 }
-void listDelNodeNoFree(list *lst, listNode *node, void ** freeSpace)
-{
-    if (node->prev)
-        node->prev->next = node->next;
-    else
-        lst->head = node->next;
-    if (node->next)
-        node->next->prev = node->prev;
-    else
-        lst->tail = node->prev;
-    *freeSpace = node;
-    lst->len--;
-}
 
 /* Returns a list iterator 'iter'. After the initialization every
  * call to listNext() will return the next element of the list.
