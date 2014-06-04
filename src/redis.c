@@ -636,7 +636,7 @@ int incrementallyRehash(int dbid) {
  * for dict.c to resize the hash tables accordingly to the fact we have o not
  * running childs. */
 void updateDictResizePolicy(void) {
-    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+    if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 && !server.forkcleanup)
         dictEnableResize();
     else
         dictDisableResize();
@@ -985,6 +985,27 @@ void FinishInMemoryRepl()
 
 }
 
+int forkCleanupCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    if (server.forkcleanup) {
+        OperationStatus opStatus = GetForkOperationStatus(FALSE);
+        opStatus = opStatus & ~(osFAILED | osINMEMORY);
+
+        if (opStatus == osCLEANING) {
+            AdvanceCleanupForkOperation(FALSE, NULL);
+        } else if (opStatus == osCLEANEDUP) {
+            EndForkOperation(NULL);
+            server.forkcleanup = 0;
+        } else {
+            server.forkcleanup = 0;
+        }
+    }
+    if (server.forkcleanup) return 0;
+    updateDictResizePolicy();
+    return AE_NOMORE;
+}
+
+
+
 /* This is our timer interrupt, called server.hz times per second.
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
@@ -1106,22 +1127,27 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 #ifdef _WIN32
         OperationStatus opStatus = GetForkOperationStatus(FALSE);
         BOOL failed = opStatus & osFAILED;
-        opStatus = opStatus & ~osFAILED;
+        BOOL inMemory = opStatus & osINMEMORY;
+        opStatus = opStatus & ~(osFAILED | osINMEMORY);
         if (opStatus == osCOMPLETE && !failed) {
-            if (server.repl_inMemorySend) {
+            if (inMemory) {
                 redisLog(REDIS_DEBUG, "Finishing in memory repl");
                 FinishInMemoryRepl();
             }
-            GetForkOperationStatus(TRUE);  // Advance to cleanup now that we recorded success
         }
-        if (opStatus == osCLEANEDUP || failed) {
+        if (opStatus == osEXITED) {
             redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
             bysignal = failed;
-            if (!bysignal && server.repl_inMemorySend && server.rdb_child_pid != -1) {
+            if (!bysignal && inMemory && server.rdb_child_pid != -1) {
                 bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
             }
-            EndForkOperation(&exitcode);
+            AdvanceCleanupForkOperation(FALSE, &exitcode);
+            server.forkcleanup = 1;
+            if (aeCreateTimeEvent(server.el, 1, forkCleanupCron, NULL, NULL) == AE_ERR) {
+                redisPanic("Can't create the serverCron time event.");
+                exit(1);
+            }
 
             pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
         }
@@ -1683,6 +1709,7 @@ void initServer() {
     server.cronloops = 0;
     server.rdb_child_pid = -1;
     server.aof_child_pid = -1;
+    server.forkcleanup = 0;
     aofRewriteBufferReset();
     server.aof_buf = sdsempty();
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */

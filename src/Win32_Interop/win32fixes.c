@@ -401,12 +401,28 @@ struct timezone
   int  tz_dsttime;     /* type of dst correction */
 };
 
+
+typedef void(WINAPI* GetSystemTimeTemplate)(FILETIME * ft);
+static GetSystemTimeTemplate GetSystemTimeBest;
+
+void WINAPI GetSystemTimeAsFileTimeImpl(FILETIME *ft)
+{
+    if (!GetSystemTimeBest) {
+        HANDLE kernel32_module = GetModuleHandleA("kernel32.dll");
+        GetSystemTimeBest = (GetSystemTimeTemplate)GetProcAddress(kernel32_module, "GetSystemTimePreciseAsFileTime");
+        if (!GetSystemTimeBest) {
+            GetSystemTimeBest = (GetSystemTimeTemplate)GetProcAddress(kernel32_module, "GetSystemTimeAsFileTime");
+        }
+    }
+    GetSystemTimeBest(ft);
+}
+
 time_t gettimeofdaysecs(unsigned int *usec)
 {
   FILETIME ft;
   time_t tmpres = 0;
 
-    GetSystemTimeAsFileTime(&ft);
+    GetSystemTimeAsFileTimeImpl(&ft);
 
     tmpres |= ft.dwHighDateTime;
     tmpres <<= 32;
@@ -427,7 +443,7 @@ int gettimeofday(struct timeval *tv, struct timezone *tz)
 
   if (NULL != tv)
   {
-    GetSystemTimeAsFileTime(&ft);
+    GetSystemTimeAsFileTimeImpl(&ft);
 
     tmpres |= ft.dwHighDateTime;
     tmpres <<= 32;
