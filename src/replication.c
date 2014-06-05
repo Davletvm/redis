@@ -434,7 +434,7 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
         * operations) will never be smaller than the few bytes we need. */
         sds bulkcount;
 
-        redisLog(REDIS_DEBUG, "Sending in memory prefix");
+        redisLog(REDIS_VERBOSE, "Sending in memory prefix");
         bulkcount = sdscatprintf(sdsempty(), "$%lld\r\n", (long long) -2);
 
         result = aeWinSocketSend(fd, bulkcount, (int)sdslen(bulkcount),
@@ -460,18 +460,20 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
     REDIS_NOTUSED(fd);
     redisInMemorySendCookie * cookie = (redisInMemorySendCookie*)(req->data);
     if (server.repl_inMemorySend && server.repl_inMemorySend->id == cookie->id) {
-        redisLog(REDIS_DEBUG, "Successfully sent buffer to Slave");
+        redisLog(REDIS_DEBUG, "Successfully sent buffer to Slave. Cookie: %d Seq:%d Which:%d", cookie->id, cookie->sequence, cookie->which);
         SetEvent(cookie->sentDoneEvent);
     }
     zfree(cookie);
 }
 
-void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int id, int which) {
+void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int id, int which, int sequence) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     redisInMemorySendCookie * cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
+    cookie->sequence = sequence;
+    cookie->which = which;
     cookie->sentDoneEvent = inm->sentDoneEvents[which];
-    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld", inm->sizeFilled[which][0], inm->totalSent + inm->sizeFilled[which][0]);
+    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld, cookie:%d", inm->sizeFilled[which][0], inm->totalSent + inm->sizeFilled[which][0], cookie->id);
     ssize_t result = aeWinSocketSend(inm->slave->fd, inm->sizeFilled[which], inm->sizeFilled[which][0] + sizeof(int),
         el, inm->slave, cookie, sendInMemoryBuffersToSlaveDone);
     if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
@@ -486,45 +488,44 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int id, int which) {
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     ssize_t result;
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
-    int send1Ready = 0, send2Ready = 0;
+    int sendReady[MAXSENDBUFFERS];
+    memset(sendReady, 0, sizeof(int) * MAXSENDBUFFERS);
     if (!inm || id != inm->id) {
-        redisLog(REDIS_DEBUG, "Signaled stale inmemory buffer send %d %d", id, inm->id);
+        redisLog(REDIS_VERBOSE, "Signaled stale inmemory buffer send %d %d", id, inm->id);
         return;
     }
     redisClient * slave = inm->slave;
-    DWORD rval = WaitForSingleObject(inm->doSendEvents[0], 0);
-    send1Ready = rval == WAIT_OBJECT_0;
-    if (!send1Ready && rval != WAIT_TIMEOUT) {
-        redisLog(REDIS_NOTICE, "Cannot send in memmory data to slave on Handle 0");
-        freeClient(inm->slave);
-        return;
-    }
-    rval = WaitForSingleObject(inm->doSendEvents[1], 0);
-    send2Ready = rval == WAIT_OBJECT_0;
-    if (!send2Ready && rval != WAIT_TIMEOUT) {
-        redisLog(REDIS_NOTICE, "Cannot send in memmory data to slave on Handle 1");
-        freeClient(inm->slave);
-        return;
-    }
-    redisAssert(send1Ready || send2Ready);
-    if (!send1Ready && !send2Ready) return;
-    if (send1Ready)
-        ResetEvent(inm->doSendEvents[0]);
-    if (send2Ready)
-        ResetEvent(inm->doSendEvents[1]);
-    aeSetReadyForCallback(el);
-    if (send1Ready && send2Ready) {
-        if (inm->sequence[0] < inm->sequence[1]) {
-            sendInMemoryBuffersToSlaveSpecific(el, id, 0);
-            sendInMemoryBuffersToSlaveSpecific(el, id, 1);
-        } else {
-            sendInMemoryBuffersToSlaveSpecific(el, id, 1);
-            sendInMemoryBuffersToSlaveSpecific(el, id, 0);
+    int howManyReady = 0;
+    for (int x = 0; x < MAXSENDBUFFERS; x++) {
+        DWORD rval = WaitForSingleObject(inm->doSendEvents[x], 0);
+        sendReady[x] = rval == WAIT_OBJECT_0;
+        if (sendReady[x]) {
+            howManyReady++;
+            ResetEvent(inm->doSendEvents[x]);
         }
-    } else if (send1Ready) {
-        sendInMemoryBuffersToSlaveSpecific(el, id, 0);
-    } else {
-        sendInMemoryBuffersToSlaveSpecific(el, id, 1);
+        if (!sendReady[x] && rval != WAIT_TIMEOUT) {
+            redisLog(REDIS_NOTICE, "Cannot send in memmory data to slave on Handle %d", x);
+            freeClient(inm->slave);
+            return;
+        }
+    }
+    if (!howManyReady) return; 
+    aeSetReadyForCallback(el);
+    while (howManyReady) {
+        int minId = INT_MAX;
+        for (int x = 0; x < MAXSENDBUFFERS; x++) {
+            if (sendReady[x] && inm->sequence[x] < minId) {
+                minId = inm->sequence[x];
+            }
+        }
+        for (int x = 0; x < MAXSENDBUFFERS; x++) {
+            if (sendReady[x] && inm->sequence[x] == minId) {
+                sendInMemoryBuffersToSlaveSpecific(el, id, x, inm->sequence[x]);
+                sendReady[x] = 0;
+                howManyReady--;
+                break;
+            }
+        }
     }
 }
 

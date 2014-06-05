@@ -22,17 +22,17 @@
 
 #pragma once
 
-
+#define MAXSENDBUFFER 4
 typedef struct SPBuffer {
     int s;
     char b[1024];
 }SPBuffer;
 typedef struct InMemoryBuffersControl {
-    int bufferSequence[2];
-    int bufferState[2];
+    int bufferSequence[MAXSENDBUFFER];
+    int bufferState[MAXSENDBUFFER];
     int id;
     int bufferSize;
-    SPBuffer * buffer[2];
+    SPBuffer * buffer[MAXSENDBUFFER];
 } InMemoryBuffersControl;
 
 

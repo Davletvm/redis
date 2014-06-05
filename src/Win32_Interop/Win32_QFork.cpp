@@ -159,8 +159,8 @@ struct QForkControl {
     HANDLE inMemoryBuffersControlHandle;
     InMemoryBuffersControl * inMemoryBuffersControl;
     int inMemoryBuffersControlOffset;
-    HANDLE doSendBuffer[2];
-    HANDLE doneSentBuffer[2];
+    HANDLE doSendBuffer[MAXSENDBUFFER];
+    HANDLE doneSentBuffer[MAXSENDBUFFER];
 
     // global data pointers to be passed to the forked process
     QForkBeginInfo globalData;
@@ -216,10 +216,8 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     SmartFileView<byte> sfvHeap;
     SmartHandle sfMMFileInMemoryControlHandle;
     SmartFileView<InMemoryBuffersControl> sfvInMemory;
-    SmartHandle dupSendBuffer0;
-    SmartHandle dupSendBuffer1;
-    SmartHandle dupSentBuffer0;
-    SmartHandle dupSentBuffer1;
+    SmartHandle dupSendBuffer[MAXSENDBUFFER];
+    SmartHandle dupSentBuffer[MAXSENDBUFFER];
 
     try {
         g_isForkedProcess = TRUE;
@@ -275,26 +273,19 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             sfvInMemory.Assign(g_pQForkControl->inMemoryBuffersControlHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0, string("QForkSlaveInit: Could not map inmemory buffers in forked process. Is system swap file large enough?"));
             g_pQForkControl->inMemoryBuffersControl = sfvInMemory;
 
-            g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
-            g_pQForkControl->inMemoryBuffersControl->buffer[1] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset);
+            for (int x = 0; x < MAXSENDBUFFER; x++) {
+                g_pQForkControl->inMemoryBuffersControl->buffer[x] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset * x);
+            }
         }
-        dupSendBuffer0.Assign(shParent, sfvMasterQForkControl->doSendBuffer[0]);
-        g_pQForkControl->doSendBuffer[0] = dupSendBuffer0;
-        dupSendBuffer1.Assign(shParent, sfvMasterQForkControl->doSendBuffer[1]);
-        g_pQForkControl->doSendBuffer[1] = dupSendBuffer1;
-        dupSentBuffer0.Assign(shParent, sfvMasterQForkControl->doneSentBuffer[0]);
-        g_pQForkControl->doneSentBuffer[0] = dupSentBuffer0;
-        dupSentBuffer1.Assign(shParent, sfvMasterQForkControl->doneSentBuffer[1]);
-        g_pQForkControl->doneSentBuffer[1] = dupSentBuffer1;
-
-
+        for (int x = 0; x < MAXSENDBUFFER; x++) {
+            dupSendBuffer[x].Assign(shParent, sfvMasterQForkControl->doSendBuffer[x]);
+            g_pQForkControl->doSendBuffer[x] = dupSendBuffer[x];
+            dupSentBuffer[x].Assign(shParent, sfvMasterQForkControl->doneSentBuffer[x]);
+            g_pQForkControl->doneSentBuffer[x] = dupSentBuffer[x];
+        }
 
         IFFAILTHROW(dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
-        
         IFFAILTHROW(dlmallopt(M_GRANULARITY, cAllocationGranularity), "QForkmasterinit: DLMalloc failed initializing allocation granularity.");
-        
-
-
         
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
@@ -479,10 +470,10 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         CreateEventHandle(&g_pQForkControl->operationComplete);
         CreateEventHandle(&g_pQForkControl->operationFailed);
         CreateEventHandle(&g_pQForkControl->terminateForkedProcess);
-        CreateEventHandle(&g_pQForkControl->doSendBuffer[0]);
-        CreateEventHandle(&g_pQForkControl->doSendBuffer[1]);
-        CreateEventHandle(&g_pQForkControl->doneSentBuffer[0]);
-        CreateEventHandle(&g_pQForkControl->doneSentBuffer[1]);
+        for (int x = 0; x < MAXSENDBUFFER; x++) {
+            CreateEventHandle(&g_pQForkControl->doSendBuffer[x]);
+            CreateEventHandle(&g_pQForkControl->doneSentBuffer[x]);
+        }
         
         return TRUE;
     }
@@ -601,10 +592,10 @@ BOOL QForkShutdown() {
         CloseEventHandle(&g_pQForkControl->operationFailed);
         CloseEventHandle(&g_pQForkControl->terminateForkedProcess);
         CloseEventHandle(&g_pQForkControl->heapMemoryMap);
-        CloseEventHandle(&g_pQForkControl->doneSentBuffer[0]);
-        CloseEventHandle(&g_pQForkControl->doneSentBuffer[1]);
-        CloseEventHandle(&g_pQForkControl->doSendBuffer[0]);
-        CloseEventHandle(&g_pQForkControl->doSendBuffer[1]);
+        for (int x = 0; x < MAXSENDBUFFER; x++) {
+            CloseEventHandle(&g_pQForkControl->doneSentBuffer[x]);
+            CloseEventHandle(&g_pQForkControl->doSendBuffer[x]);
+        }
 
         if (g_pQForkControl->heapMemoryMapFile != INVALID_HANDLE_VALUE) {
             CloseHandle(g_pQForkControl->heapMemoryMapFile);
@@ -636,11 +627,11 @@ void ResetEventHandle(HANDLE event) {
 void ForceCleanupOfPreviousFork()
 {
     if (g_CleanupState.currentState != osUNSTARTED) {
-        redisLog(REDIS_DEBUG, "Cleaning up old fork.");
+        redisLog(REDIS_VERBOSE, "Cleaning up old fork.");
         GetForkOperationStatus(TRUE); // this will kill the child
         AdvanceCleanupForkOperation(TRUE, NULL);
         EndForkOperation(NULL);
-        redisLog(REDIS_DEBUG, "Cleaned up old fork.");
+        redisLog(REDIS_VERBOSE, "Cleaned up old fork.");
     }
 }
 
@@ -670,10 +661,10 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         ResetEventHandle(g_pQForkControl->startOperation);
         ResetEventHandle(g_pQForkControl->forkedProcessReady);
         ResetEventHandle(g_pQForkControl->terminateForkedProcess);
-        ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
-        ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
-        ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
-        ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
+        for (int x = 0; x < MAXSENDBUFFER; x++) {
+            ResetEventHandle(g_pQForkControl->doSendBuffer[x]);
+            ResetEventHandle(g_pQForkControl->doneSentBuffer[x]);
+        }
 
         if (type == otRDBINMEMORY) {
 
@@ -681,8 +672,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             if (sendBufferSize < 1024) sendBufferSize = 1024;
             size_t SPBufferSize = offsetof(SPBuffer, b) + sendBufferSize;
             SPBufferSize = (SPBufferSize + 0x0f) & ~0x0f;
-            size += SPBufferSize * 2;
-            g_pQForkControl->inMemoryBuffersControlOffset = sizeof(InMemoryBuffersControl)+SPBufferSize;
+            size += SPBufferSize * MAXSENDBUFFER;
+            g_pQForkControl->inMemoryBuffersControlOffset = SPBufferSize;
 
             if (g_pQForkControl->inMemoryBuffersControl) {
                 IFFAILTHROW(UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl), "BeginForkOperation: UnmapViewOfFile failed");
@@ -709,8 +700,9 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 0);
             IFFAILTHROW(g_pQForkControl->inMemoryBuffersControl, "BeginForkOperation: MapViewOfFile failed");
             
-            g_pQForkControl->inMemoryBuffersControl->buffer[0] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl));
-            g_pQForkControl->inMemoryBuffersControl->buffer[1] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + g_pQForkControl->inMemoryBuffersControlOffset);
+            for (int x = 0; x < MAXSENDBUFFER; x++) {
+                g_pQForkControl->inMemoryBuffersControl->buffer[x] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl) + SPBufferSize * x);
+            }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
 
             SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
@@ -723,7 +715,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         DWORD oldProtect = 0;
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect), "BeginForkOperation: VirtualProtect 1 failed");
         
-        redisLog(REDIS_DEBUG, "Protecting heap");
+        redisLog(REDIS_VERBOSE, "Protecting heap");
         IFFAILTHROW(VirtualProtect(
                     g_pQForkControl->heapStart,
                     g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
@@ -731,7 +723,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                     &oldProtect),
                 "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         
-        redisLog(REDIS_DEBUG, "Protected heap");
+        redisLog(REDIS_VERBOSE, "Protected heap");
 
         // Launch the "forked" process
         char fileName[MAX_PATH];
@@ -748,13 +740,13 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         sprintf_s(arguments, _MAX_PATH, "%s %ld %ld", qforkFlag, g_hQForkControlFileMap, GetCurrentProcessId());
-        redisLog(REDIS_DEBUG, "launching child");
+        redisLog(REDIS_VERBOSE, "Launching child");
         IFFAILTHROW(CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi), "Problem creating slave process" );
         
         g_hForkedProcess = pi.hProcess; // must CloseHandle on this
         CloseHandle(pi.hThread);
 
-        redisLog(REDIS_DEBUG, "Waiting on forked process");
+        redisLog(REDIS_VERBOSE, "Waiting on forked process");
 
         HANDLE handles[2];
         handles[0] = g_pQForkControl->forkedProcessReady;
@@ -861,7 +853,7 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
                     GetExitCodeProcess(g_hForkedProcess, (DWORD*)&g_CleanupState.exitCode);
                     CloseHandle(g_hForkedProcess);
                     g_hForkedProcess = NULL;
-                    redisLog(REDIS_DEBUG, "Child exited");
+                    redisLog(REDIS_VERBOSE, "Child exited");
                 }
                 g_CleanupState.currentState = osEXITED;
             }
@@ -900,7 +892,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
         if (g_CleanupState.currentState == osEXITED) {
 
-            redisLog(REDIS_DEBUG, "Reseting Global state.");
+            redisLog(REDIS_VERBOSE, "Reseting Global state.");
 
             // ensure events are in the correct state
             ResetEventHandle(g_pQForkControl->operationComplete);
@@ -908,10 +900,10 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
             ResetEventHandle(g_pQForkControl->startOperation);
             ResetEventHandle(g_pQForkControl->forkedProcessReady);
             ResetEventHandle(g_pQForkControl->terminateForkedProcess);
-            ResetEventHandle(g_pQForkControl->doSendBuffer[0]);
-            ResetEventHandle(g_pQForkControl->doSendBuffer[1]);
-            ResetEventHandle(g_pQForkControl->doneSentBuffer[0]);
-            ResetEventHandle(g_pQForkControl->doneSentBuffer[1]);
+            for (int x = 0; x < MAXSENDBUFFER; x++) {
+                ResetEventHandle(g_pQForkControl->doSendBuffer[x]);
+                ResetEventHandle(g_pQForkControl->doneSentBuffer[x]);
+            }
 
             if (g_pQForkControl->inMemoryBuffersControl) {
                 if (!UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl)) {
@@ -954,15 +946,17 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
             g_CleanupState.copyBatchSize = 1024;
 
             g_CleanupState.currentState = osCLEANING;
-            redisLog(REDIS_DEBUG, "Reseting Global state finished");
+            redisLog(REDIS_VERBOSE, "Reseting Global state finished");
             if (!forceEnd)
                 return;
         }
 
         if (g_CleanupState.currentState == osCLEANING) {
 
+            PSAPI_WORKING_SET_EX_INFORMATION *pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[g_CleanupState.copyBatchSize];
+            IFFAILTHROW(pwsi, "pwsi == NULL");
+            size_t size = g_CleanupState.copyBatchSize * pageSize;
             do {
-                size_t size = g_CleanupState.copyBatchSize * pageSize;
                 if (g_CleanupState.offsetCopied + size > g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize) {
                     size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
                 }
@@ -972,8 +966,6 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
                 HANDLE hProcess = GetCurrentProcess();
                 int pages = (int)(size / pageSize);
-                PSAPI_WORKING_SET_EX_INFORMATION *pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[pages];
-                IFFAILTHROW(pwsi, "pwsi == NULL");
                 
                 DWORD oldProtect;
                 IFFAILTHROW(VirtualProtect(
@@ -984,7 +976,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                         "EndForkOperation: VirtualProtect 4 failed.");
                 
 
-                memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * 1024);
+                memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
                 for (int page = 0; page < pages; page++) {
                     pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + g_CleanupState.offsetCopied;
                 }
@@ -1008,7 +1000,6 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                         }
                     }
                 }
-                delete pwsi;
 
                 IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "EndForkOperation: UnmapViewOfFile failed.");
                 g_CleanupState.offsetCopied += size;
@@ -1017,6 +1008,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                     break;
                 }
             } while (forceEnd);
+            delete pwsi;
 
             if (g_CleanupState.currentState == osCLEANEDUP) {
                 ClearInMemoryBuffersMasterParent();

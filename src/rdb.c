@@ -1307,7 +1307,7 @@ eoferr: /* unexpected end of file is handled here with a fatal exit, unless we a
 
 /* A background saving child (BGSAVE) terminated its work. Handle this. */
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
-    if (!bysignal && exitcode == 0) {
+    if (!bysignal && exitcode == 0 && !server.repl_inMemoryReceive) {
         redisLog(REDIS_NOTICE,
             "Background saving terminated with success");
         server.dirty = server.dirty - server.dirty_before_bgsave;
@@ -1316,7 +1316,7 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     } else if (!bysignal && exitcode != 0) {
         redisLog(REDIS_WARNING, "Background saving error");
         server.lastbgsave_status = REDIS_ERR;
-    } else {
+    } else if (bysignal) {
         redisLog(REDIS_WARNING,
             "Background saving terminated by signal %d", bysignal);
         rdbRemoveTempFile(server.rdb_child_pid);
@@ -1324,6 +1324,11 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
          * tirggering an error conditon. */
         if (bysignal != SIGUSR1)
             server.lastbgsave_status = REDIS_ERR;
+    } else {
+        redisLog(REDIS_NOTICE,
+            "Background saving for in-memory transfer terminated with success");
+        rdbRemoveTempFile(server.rdb_child_pid);
+        server.lastbgsave_status = REDIS_OK;
     }
     server.rdb_child_pid = -1;
     server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;

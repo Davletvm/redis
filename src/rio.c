@@ -121,26 +121,21 @@ static int WaitForFreeBuffer(rio * r)
 {
     redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    WaitForMultipleObjects(2, inm->sentDoneEvents, FALSE, INFINITE);
-    DWORD rval = WaitForSingleObject(inm->sentDoneEvents[0], 0);
-    if (rval == WAIT_OBJECT_0) {
-        redisLog(REDIS_DEBUG, "Got free buffer 0");
-        ResetEvent(inm->sentDoneEvents[0]);
-        *(inm->sizeFilled[0]) = 0;
-        inm->sendState[0] = INMEMORY_STATE_READYTOFILL;
-    } else if (rval != WAIT_TIMEOUT) {
-        return 0;
+    WaitForMultipleObjects(MAXSENDBUFFERS, inm->sentDoneEvents, FALSE, INFINITE);
+    BOOL found = FALSE;
+    for (int x = 0; x < MAXSENDBUFFERS; x++) {
+        DWORD rval = WaitForSingleObject(inm->sentDoneEvents[x], 0);
+        if (rval == WAIT_OBJECT_0) {
+            redisLog(REDIS_DEBUG, "Got free buffer %d", x);
+            ResetEvent(inm->sentDoneEvents[x]);
+            *(inm->sizeFilled[x]) = 0;
+            found = TRUE;
+            inm->sendState[x] = INMEMORY_STATE_READYTOFILL;
+        } else if (rval != WAIT_TIMEOUT) {
+            return 0;
+        }
     }
-    rval = WaitForSingleObject(inm->sentDoneEvents[1], 0);
-    if (rval == WAIT_OBJECT_0) {
-        redisLog(REDIS_DEBUG, "Got free buffer 1");
-        ResetEvent(inm->sentDoneEvents[1]);
-        *(inm->sizeFilled[1]) = 0;
-        inm->sendState[1] = INMEMORY_STATE_READYTOFILL;
-    } else if (rval != WAIT_TIMEOUT) {
-        return 0;
-    }
-    return !inm->sizeFilled[0][0] || !inm->sizeFilled[1][0];
+    return found;
 }
 
 /* Returns 1 or 0 for success/failure.
@@ -156,9 +151,14 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     while (server.repl_inMemorySend == inm) {
         leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
         if (leftInActiveBuffer == 0) {
-            inm->activeBuffer++;
-            if (inm->activeBuffer == 2) inm->activeBuffer = 0;
-            leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
+            int activeBufferPrev = inm->activeBuffer;
+            while (1) {
+                inm->activeBuffer++;
+                if (inm->activeBuffer == MAXSENDBUFFERS) inm->activeBuffer = 0;
+                leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
+                if (leftInActiveBuffer != 0 || inm->activeBuffer == activeBufferPrev)
+                    break;
+            }
         }
         if (leftInActiveBuffer == 0) {
             if (!WaitForFreeBuffer(r))
@@ -229,15 +229,15 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
             }
         }
         if (PollForRead() < 0) {
-            redisLog(REDIS_DEBUG, "Error while reading: timeout");
+            redisLog(REDIS_WARNING, "Error while reading: timeout");
             return 0;
         }
         if (server.repl_inMemoryReceive != inm) {
-            redisLog(REDIS_DEBUG, "Disconnected while reading");
+            redisLog(REDIS_WARNING, "Disconnected while reading");
             return 0;
         }
         if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROROREND) {
-            redisLog(REDIS_DEBUG, "Error while reading: %d", inm->endStateFlags);
+            redisLog(REDIS_WARNING, "Error while reading: %d", inm->endStateFlags);
             return 0;
         }
         if (inm->shortcutBuffer && inm->shortcutBufferSize == 0) {

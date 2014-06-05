@@ -624,14 +624,14 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOSEND 1
 #define INMEMORY_STATE_READYTOFILL 4
 
-
+#define MAXSENDBUFFERS 4
 typedef struct redisInMemoryReplSend {
     int id;
-    char * buffer[2];
+    char * buffer[MAXSENDBUFFERS];
     ssize_t bufferSize;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
-    int * sizeFilled[2];
+    int * sizeFilled[MAXSENDBUFFERS];
     int * sequence;
     int * sendState;
     int activeBuffer;
@@ -642,6 +642,8 @@ typedef struct redisInMemoryReplSend {
 typedef struct redisInMemorySendCookie
 {
     int id;
+    int sequence;
+    int which;
     HANDLE sentDoneEvent;
 } redisInMemorySendCookie;
 

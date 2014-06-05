@@ -353,6 +353,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
              * another linked list). */
             if (retval != AE_NOMORE) {
                 aeAddMillisecondsToNow(retval,&te->when_sec,&te->when_ms);
+                te->id = eventLoop->timeEventNextId++;
             } else {
                 aeDeleteTimeEvent(eventLoop, id);
             }
@@ -402,16 +403,13 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             /* Calculate the time missing for the nearest
              * timer to fire. */
             aeGetTime(&now_sec, &now_ms);
+            long long now = now_sec * 1000 + now_ms;
+            long long when = shortest->when_sec * 1000 + shortest->when_ms;
+            when = when - now;
+            if (when < 0) when = 0;
             tvp = &tv;
-            tvp->tv_sec = shortest->when_sec - now_sec;
-            if (shortest->when_ms < now_ms) {
-                tvp->tv_usec = ((shortest->when_ms+1000) - now_ms)*1000;
-                tvp->tv_sec --;
-            } else {
-                tvp->tv_usec = (shortest->when_ms - now_ms)*1000;
-            }
-            if (tvp->tv_sec < 0) tvp->tv_sec = 0;
-            if (tvp->tv_usec < 0) tvp->tv_usec = 0;
+            tv.tv_sec = when / 1000;
+            tv.tv_usec = (when % 1000) * 1000;
         } else {
             /* If we have to check for events but need to return
              * ASAP because of AE_DONT_WAIT we need to set the timeout

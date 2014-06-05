@@ -1131,17 +1131,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         opStatus = opStatus & ~(osFAILED | osINMEMORY);
         if (opStatus == osCOMPLETE && !failed) {
             if (inMemory) {
-                redisLog(REDIS_DEBUG, "Finishing in memory repl");
+                redisLog(REDIS_VERBOSE, "Finishing in memory repl");
                 FinishInMemoryRepl();
             }
-        }
-        if (opStatus == osEXITED) {
+        } else if (failed && (opStatus == osCOMPLETE || opStatus == osWAITINGFOREXIT)) {
+            redisLog(REDIS_NOTICE, "Child failed. Forcing exit.");
+            GetForkOperationStatus(TRUE); // this will cause child to exit
+        } else if (opStatus == osEXITED) {
             redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
             bysignal = failed;
-            if (!bysignal && inMemory && server.rdb_child_pid != -1) {
-                bysignal = SIGUSR1; // This will make sure we don't expect a rdb file to have been written on disk
-            }
+ 
             AdvanceCleanupForkOperation(FALSE, &exitcode);
             server.forkcleanup = 1;
             if (aeCreateTimeEvent(server.el, 1, forkCleanupCron, NULL, NULL) == AE_ERR) {

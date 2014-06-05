@@ -11,31 +11,12 @@ source tests/support/tmpfile.tcl
 source tests/support/test.tcl
 source tests/support/util.tcl
 
-set ::all_tests {
-    integration/replication
-    integration/replication-2
-    integration/replication-3
-    integration/replication-4
-    integration/replication-psync
-    integration/aof
-    integration/rdb
-    integration/convert-zipmap-hash-on-load
-    unit/pubsub
-    unit/slowlog
-    unit/scripting
-    unit/eventscripting
-    unit/maxmemory
-    unit/protect
-    unit/introspection
-    unit/limits
-    unit/obuf-limits
-    unit/dump
-    unit/bitops
-    unit/memefficiency
+set ::all_tests_1 {
+    unit/aofrw
 }
 
 
-set ::all_tests_1 {
+set ::all_tests {
     unit/printver
     unit/auth
     unit/protocol
@@ -185,8 +166,8 @@ proc s {args} {
 proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
-#    catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
-#    catch {exec rm -rf {*}[glob tests/tmp/server.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/server.*]}
     if {!$::quiet} {puts "OK"}
 }
 

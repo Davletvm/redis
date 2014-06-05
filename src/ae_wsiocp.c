@@ -50,7 +50,7 @@ sGetQueuedCompletionStatusEx pGetQueuedCompletionStatusEx;
   * and then find matching structure in list */
 
 #define MAX_SOCKET_LOOKUP   65535
-#define MAX_WATCHED_ITEMS 2
+#define MAX_WATCHED_ITEMS 4
 
 typedef struct aeWatchedItem {
     HANDLE watchedHandle;
@@ -211,23 +211,23 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             for (int x = 0; x < watchedCount; x++) {
                 watchArray[x + 1] = watchedItems[x].watchedHandle;
             }
-            redisLog(REDIS_DEBUG, "Waiting for events %d", watchedCount);
+            redisLog(REDIS_DEBUG, "WT: Waiting for events %d", watchedCount);
             DWORD rval = WaitForMultipleObjects(watchedCount + 1, watchArray, FALSE, INFINITE);
             EnterCriticalSection(&(state->threadCS));
             if (rval == WAIT_OBJECT_0) {
                 ResetEvent(watchArray[0]);
                 if (state->cWatchedItems == -1) {
-                    redisLog(REDIS_DEBUG, "exit requested");
+                    redisLog(REDIS_DEBUG, "WT: exit requested");
                     exitRequested = 1;
                 } else {
-                    redisLog(REDIS_DEBUG, "control requested");
+                    redisLog(REDIS_DEBUG, "WT: control requested");
                     memcpy(watchedItems, state->watchedItems, sizeof(aeWatchedItem) * state->cWatchedItems);
                     watchedCount = state->cWatchedItems;
                     if (!watchedCount) postAllowed = 0;
                 }
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
-                redisLog(REDIS_DEBUG, "completion requested %d", id);
+                redisLog(REDIS_DEBUG, "WT: completion requested %d", id);
                 PostQueuedCompletionStatus(state->iocp, 0, -1, (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
@@ -235,21 +235,21 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             if (exitRequested) break;
         } else {
             watchArray[1] = state->watcherContinueEvent;
-            redisLog(REDIS_DEBUG, "Waiting for control");
+            redisLog(REDIS_DEBUG, "WT: Waiting for control");
             DWORD rval = WaitForMultipleObjects(2, watchArray, FALSE, INFINITE);
             EnterCriticalSection(&(state->threadCS));
             if (rval == WAIT_OBJECT_0) {
                 ResetEvent(watchArray[0]);
                 if (state->cWatchedItems == -1) {
-                    redisLog(REDIS_DEBUG, "exit requested");
+                    redisLog(REDIS_DEBUG, "WT: exit requested");
                     exitRequested = 1;
                 } else {
-                    redisLog(REDIS_DEBUG, "control requested");
+                    redisLog(REDIS_DEBUG, "WT: control requested");
                     memcpy(watchedItems, state->watchedItems, sizeof(aeWatchedItem) * state->cWatchedItems);
                     watchedCount = state->cWatchedItems;
                 }
             } else if (rval == WAIT_OBJECT_0 + 1) {
-                redisLog(REDIS_DEBUG, "post requested");
+                redisLog(REDIS_DEBUG, "WT: post requested");
                 postAllowed = 1;
                 ResetEvent(state->watcherContinueEvent);
             }
@@ -410,14 +410,14 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
 
 int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int id)
 {
-    redisLog(REDIS_DEBUG, "set callbacks count: %d", count);
+    redisLog(REDIS_DEBUG, "WT: Set callbacks count: %d", count);
     aeApiState *state = (aeApiState *)eventLoop->apidata;
     if (count > MAX_WATCHED_ITEMS || count < 0) 
         return -1;
     EnterCriticalSection(&(state->threadCS));
     state->cWatchedItems = count;
     for (int x = 0; x < count; x++) {
-        redisLog(REDIS_DEBUG, "set callbacks id: %d", id);
+        redisLog(REDIS_DEBUG, "WT: set callbacks id: %d", id);
         state->watchedItems[x].id = id;
         state->watchedItems[x].proc = proc;
         state->watchedItems[x].watchedHandle = handles[x];
@@ -431,7 +431,7 @@ int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int coun
 int aeClearCallbacks(aeEventLoop *eventLoop)
 {
     aeApiState *state = (aeApiState *)eventLoop->apidata;
-    redisLog(REDIS_DEBUG, "Clearing callbacks");
+    redisLog(REDIS_DEBUG, "WT: Clearing callbacks");
     EnterCriticalSection(&(state->threadCS));
     state->cWatchedItems = 0;
     SetEvent(state->watcherSignalEvent);
@@ -443,7 +443,7 @@ int aeClearCallbacks(aeEventLoop *eventLoop)
 int aeSetReadyForCallback(aeEventLoop *eventLoop)
 {
     aeApiState *state = (aeApiState *)eventLoop->apidata;
-    redisLog(REDIS_DEBUG, "SetReadyForContinue");
+    redisLog(REDIS_DEBUG, "WT: SetReadyForContinue");
     SetEvent(state->watcherContinueEvent);
     return 0;
 }
@@ -451,7 +451,7 @@ int aeSetReadyForCallback(aeEventLoop *eventLoop)
 
 void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
 {
-    redisLog(REDIS_DEBUG, "EventSignaled %d", id);
+    redisLog(REDIS_DEBUG, "WT: EventSignaled %d", id);
     aeApiState *state = (aeApiState *)eventLoop->apidata;
     if (state->cWatchedItems > 0 && id == state->watchedItems[0].id) {
         state->watchedItems[0].proc(eventLoop, (void*)id);
@@ -574,7 +574,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                         }
                     }
                     if (matched == 0) {
-                        redisLog(REDIS_DEBUG, "Sec:%lld Unknown complete (closed) on %d", gettimeofdaysecs(NULL), rfd);
+                        redisLog(REDIS_VERBOSE, "Sec:%lld Unknown complete (closed) on %d", gettimeofdaysecs(NULL), rfd);
                         sockstate = NULL;
                     }
                 }

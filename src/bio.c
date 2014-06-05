@@ -199,7 +199,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         /* Pop the job from the queue. */
         ln = listFirst(bio_jobs[type]);
         int skip = bio_jobs_skip[type];
-        while (skip) {
+        while (skip--) {
             ln = listNextNode(ln);
         }
         bio_jobs_skip[type]++;
