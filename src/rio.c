@@ -129,6 +129,8 @@ static int WaitForFreeBuffer(rio * r)
             redisLog(REDIS_DEBUG, "Got free buffer %d", x);
             ResetEvent(inm->sentDoneEvents[x]);
             *(inm->sizeFilled[x]) = 0;
+            inm->processedOffset[x] = 0;
+            inm->offsetofLastInline[x] = -1;
             found = TRUE;
             inm->sendState[x] = INMEMORY_STATE_READYTOFILL;
         } else if (rval != WAIT_TIMEOUT) {
@@ -145,39 +147,63 @@ static int WaitForFreeBuffer(rio * r)
     when signaled to do so.
 */
 static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
+    char * buffer;
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
+    leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
     while (server.repl_inMemorySend == inm) {
-        leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
-        if (leftInActiveBuffer == 0) {
+        if (inm->sendState[inm->activeBuffer] == INMEMORY_STATE_READYTOSEND) {
             int activeBufferPrev = inm->activeBuffer;
             while (1) {
                 inm->activeBuffer++;
                 if (inm->activeBuffer == MAXSENDBUFFERS) inm->activeBuffer = 0;
-                leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
-                if (leftInActiveBuffer != 0 || inm->activeBuffer == activeBufferPrev)
+                if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOSEND || inm->activeBuffer == activeBufferPrev)
                     break;
             }
         }
-        if (leftInActiveBuffer == 0) {
+        if (inm->sendState[inm->activeBuffer] == INMEMORY_STATE_READYTOSEND) {
             if (!WaitForFreeBuffer(r))
                 return 0;
             continue;
         }
-        inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
-        if (len > leftInActiveBuffer)
-            lenToCopy = leftInActiveBuffer;
-        else
-            lenToCopy = len;
-        memcpy(inm->buffer[inm->activeBuffer] + *(inm->sizeFilled[inm->activeBuffer]), buf, lenToCopy);
-        len -= lenToCopy;
-        leftInActiveBuffer -= lenToCopy;
-        *(inm->sizeFilled[inm->activeBuffer]) += lenToCopy;
-        buf = ((char*)buf) + lenToCopy;
-        if (leftInActiveBuffer == 0)
+        leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
+        if (len > MINLENGTHOOB) {
+            lenToCopy = 1 + 8 + 8;
+        } else {
+            lenToCopy = 1 + 4 + len;
+        }
+        if (lenToCopy > leftInActiveBuffer) {
             SendActiveBuffer(r);
-        if (len == 0) return 1;
+            continue;
+        }
+        inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
+        buffer = inm->buffer[inm->activeBuffer] + *(inm->sizeFilled[inm->activeBuffer]);
+        int l = (int)len;
+        if (len > MINLENGTHOOB) {
+            buffer[0] = SENDOOB; 
+            memcpy(buffer + 1, &l, 4);
+            unsigned long long offset = (char*)buf - inm->heapStart;
+            memcpy(buffer + 1 + 4, &offset, 8);
+            *(inm->sizeFilled[inm->activeBuffer]) += 1 + 4 + 8;
+            inm->offsetofLastInline[inm->activeBuffer] = -1;
+        } else {
+            if (inm->offsetofLastInline[inm->activeBuffer] < 0) {
+                inm->offsetofLastInline[inm->activeBuffer] = *(inm->sizeFilled[inm->activeBuffer]) + 1;
+                buffer[0] = SENDINLINE;
+                memcpy(buffer + 1, &l, 4);
+                buffer += 1 + 4;
+                *(inm->sizeFilled[inm->activeBuffer]) += 1 + 4;
+            } else {
+                int prevlen;
+                memcpy(&prevlen, inm->buffer[inm->activeBuffer] + inm->offsetofLastInline[inm->activeBuffer], 4);
+                prevlen += len;
+                memcpy(inm->buffer[inm->activeBuffer] + inm->offsetofLastInline[inm->activeBuffer], &prevlen, 4);
+            }
+            *(inm->sizeFilled[inm->activeBuffer]) += len;
+            memcpy(buffer, buf, len);
+        }
+        return 1;
     }
     return 0;
 }

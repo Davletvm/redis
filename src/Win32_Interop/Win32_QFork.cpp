@@ -148,6 +148,7 @@ struct QForkControl {
     SIZE_T heapBlockSize;           
     BlockState heapBlockMap[cMaxBlocks];
     LPVOID heapStart;
+    LPVOID altHeapStart;
 
     OperationType typeOfOperation;
     HANDLE forkedProcessReady;
@@ -197,9 +198,6 @@ extern "C"
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
 }
-
-
-
 
 
 BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
@@ -300,7 +298,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
             exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otRDBINMEMORY) {
-            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->heapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
             throw runtime_error("unexpected operation type");
         }
@@ -456,6 +454,13 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 pHigh);
         IFFAILTHROW(g_pQForkControl->heapStart, "QForkMasterInit: MapViewOfFileEx failed.");
         
+        g_pQForkControl->altHeapStart =
+            MapViewOfFile(
+            g_pQForkControl->heapMemoryMap,
+            FILE_MAP_ALL_ACCESS,
+            0, 0,
+            0);
+        IFFAILTHROW(g_pQForkControl->altHeapStart, "QForkMasterInit: MapViewOfFileEx 2 failed.");
 
         for (int n = 0; n < cMaxBlocks; n++) {
             g_pQForkControl->heapBlockMap[n] = 
@@ -502,7 +507,7 @@ StartupStatus QForkStartup(int argc, char** argv) {
         // slave command line looks like: --QFork [QForkConrolMemoryMap handle] [parent process id]
         foundSlaveFlag = true;
         char* endPtr;
-        QForkConrolMemoryMapHandle = (HANDLE)strtoul(argv[1],&endPtr,10);
+        QForkConrolMemoryMapHandle = (HANDLE)strtoul(argv[1], &endPtr, 10);
         char* end = NULL;
         PPID = strtoul(argv[2], &end, 10);
     } else {
@@ -605,7 +610,11 @@ BOOL QForkShutdown() {
             UnmapViewOfFile(g_pQForkControl->heapStart);
             g_pQForkControl->heapStart = NULL;
         }
-        if(g_pQForkControl != NULL) {
+        if (g_pQForkControl->altHeapStart != NULL) {
+            UnmapViewOfFile(g_pQForkControl->altHeapStart);
+            g_pQForkControl->altHeapStart = NULL;
+        }
+        if (g_pQForkControl != NULL) {
             UnmapViewOfFile(g_pQForkControl);
             g_pQForkControl = NULL;
         }
@@ -705,7 +714,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
 
-            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->altHeapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
             g_pQForkControl->inMemoryBuffersControlHandle = NULL;
             g_pQForkControl->inMemoryBuffersControl = NULL;
@@ -748,12 +757,13 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
 
         redisLog(REDIS_VERBOSE, "Waiting on forked process");
 
-        HANDLE handles[2];
+        HANDLE handles[3];
         handles[0] = g_pQForkControl->forkedProcessReady;
         handles[1] = g_pQForkControl->operationFailed;
+        handles[2] = g_hForkedProcess;
 
         // wait for "forked" process to map memory
-        IFFAILTHROW(WaitForMultipleObjects(2, handles, FALSE, 1000000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
+        IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 1000000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
         
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
@@ -778,7 +788,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
     try {
         ClearInMemoryBuffersMasterParent();
         if (g_hForkedProcess != 0) {
-            IFFAILTHROW(TerminateProcess(g_hForkedProcess, 1), "AbortOperation: Killing forked process failed.");            
+            TerminateProcess(g_hForkedProcess, 1);
             CloseHandle(g_hForkedProcess);
             g_hForkedProcess = NULL;
         }
@@ -848,7 +858,7 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
                 if (g_hForkedProcess) {
                     if (rval != WAIT_OBJECT_0 && (now > g_CleanupState.forkExitTimeout || forceEnd)) {
                         redisLog(REDIS_WARNING, "Force killing child");
-                        IFFAILTHROW(TerminateProcess(g_hForkedProcess, 1), "EndForkOperation: Killing forked process failed.");                        
+                        TerminateProcess(g_hForkedProcess, 1);
                     } // otherwise we know it exited
                     GetExitCodeProcess(g_hForkedProcess, (DWORD*)&g_CleanupState.exitCode);
                     CloseHandle(g_hForkedProcess);

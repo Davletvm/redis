@@ -625,6 +625,9 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOFILL 4
 
 #define MAXSENDBUFFERS 4
+#define MINLENGTHOOB 128
+#define SENDINLINE 1
+#define SENDOOB 2
 typedef struct redisInMemoryReplSend {
     int id;
     char * buffer[MAXSENDBUFFERS];
@@ -632,11 +635,14 @@ typedef struct redisInMemoryReplSend {
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
     int * sizeFilled[MAXSENDBUFFERS];
+    int processedOffset[MAXSENDBUFFERS];
+    int offsetofLastInline[MAXSENDBUFFERS];
     int * sequence;
     int * sendState;
     int activeBuffer;
     redisClient * slave;
     size_t totalSent;
+    void * heapStart;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie

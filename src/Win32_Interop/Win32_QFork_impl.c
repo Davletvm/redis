@@ -81,7 +81,7 @@ void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 }
 
 
-void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER])
+void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * heapStart, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER])
 {
 #ifndef NO_QFORKIMPL
     control->id = control_id++;
@@ -93,6 +93,7 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->sentDoneEvents = doneSent;
     server.repl_inMemorySend->sequence = control->bufferSequence;
     server.repl_inMemorySend->sendState = control->bufferState;
+    server.repl_inMemorySend->heapStart = heapStart;
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b;
         server.repl_inMemorySend->sizeFilled[x] = &(control->buffer[x][0].s);
@@ -116,7 +117,7 @@ void SendBuffer(redisInMemoryReplSend * inm, int which, int sequence)
     SetEvent(inm->doSendEvents[which]);
 }
 
-int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2])
+int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDLE doSend[2], HANDLE doneSent[2])
 {
 #ifndef NO_QFORKIMPL
     redisInMemoryReplSend inMemoryRepl;
@@ -127,11 +128,13 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         inMemoryRepl.buffer[x] = buffers->buffer[x][0].b;
         inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
+        inMemoryRepl.offsetofLastInline[x] = -1;
     }
     inMemoryRepl.doSendEvents = doSend;
     inMemoryRepl.sentDoneEvents = doneSent;
     inMemoryRepl.sequence = buffers->bufferSequence;
     inMemoryRepl.sendState = buffers->bufferState;
+    inMemoryRepl.heapStart = heapStart;
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
     redisLog(REDIS_VERBOSE, "Child: Save inmemory starting");
@@ -141,14 +144,9 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     }
     redisLog(REDIS_VERBOSE, "Child: Save inmemory finished");
     int sentEmpty = 0;
-    // If the buffer had been full, it would have been sent already.
     for (int x = 0; x < MAXSENDBUFFER; x++) {
-        if (inMemoryRepl.sizeFilled[x][0] != inMemoryRepl.bufferSize) {
-            if (inMemoryRepl.sizeFilled[x][0] || !sentEmpty) {
-                SendBuffer(&inMemoryRepl, x, INT32_MAX - 10);
-                if (!inMemoryRepl.sizeFilled[x][0])
-                    sentEmpty = 1;
-            }
+        if (inMemoryRepl.sendState[x] != INMEMORY_STATE_READYTOSEND && inMemoryRepl.sizeFilled[x][0]) {
+            SendBuffer(&inMemoryRepl, x, INT32_MAX - 10);
         }
     }
     // do we have an available empty buffer to send?

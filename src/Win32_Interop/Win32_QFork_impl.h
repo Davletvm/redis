@@ -43,8 +43,8 @@ extern "C" {
     void SetupGlobals(LPVOID globalData, size_t globalDataSize, unsigned __int32 dictHashKey);
     int do_rdbSave(char* filename);
     int do_aofSave(char* filename);
-    int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2]);
-    void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[2], HANDLE doneSent[2]);
+    int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDLE doSend[2], HANDLE doneSent[2]);
+    void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void* heapStart, HANDLE doSend[2], HANDLE doneSent[2]);
     void ClearInMemoryBuffersMasterParent();
 
 #ifdef __cplusplus
