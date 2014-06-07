@@ -1033,6 +1033,9 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("min-slaves-to-write",server.repl_min_slaves_to_write);
     config_get_numerical_field("min-slaves-max-lag",server.repl_min_slaves_max_lag);
     config_get_numerical_field("hz",server.hz);
+    config_get_numerical_field("repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer);
+    config_get_numerical_field("repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer);
+    config_get_numerical_field("repl-inmemory-shortcut-min-size", server.repl_inMemoryShortcutMin);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1051,6 +1054,9 @@ void configGetCommand(redisClient *c) {
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",
             server.aof_rewrite_incremental_fsync);
+    config_get_bool_field("repl-inmemory",
+        server.repl_inMemoryUse);
+
 
     /* Everything we can't handle with macros follows. */
 

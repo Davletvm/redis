@@ -156,6 +156,7 @@ struct QForkControl {
     HANDLE operationComplete;
     HANDLE operationFailed;
     HANDLE terminateForkedProcess;
+    HANDLE pingHandle;
 
     HANDLE inMemoryBuffersControlHandle;
     InMemoryBuffersControl * inMemoryBuffersControl;
@@ -210,6 +211,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     SmartHandle dupOperationComplete;
     SmartHandle dupOperationFailed;
     SmartHandle dupTerminateProcess;
+    SmartHandle dupPingHandle;
     SmartFileMapHandle sfmhMapFile;
     SmartFileView<byte> sfvHeap;
     SmartHandle sfMMFileInMemoryControlHandle;
@@ -243,6 +245,8 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         g_pQForkControl->operationFailed = dupOperationFailed;
         dupTerminateProcess.Assign(shParent, sfvMasterQForkControl->terminateForkedProcess);
         g_pQForkControl->terminateForkedProcess = dupTerminateProcess;
+        dupPingHandle.Assign(shParent, sfvMasterQForkControl->pingHandle);
+        g_pQForkControl->pingHandle = dupPingHandle;
 
         // signal parent that we are ready.  We can do the rest later.
         SetEvent(g_pQForkControl->forkedProcessReady);
@@ -298,7 +302,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
             exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otRDBINMEMORY) {
-            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->heapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->heapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
         } else {
             throw runtime_error("unexpected operation type");
         }
@@ -475,6 +479,7 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         CreateEventHandle(&g_pQForkControl->operationComplete);
         CreateEventHandle(&g_pQForkControl->operationFailed);
         CreateEventHandle(&g_pQForkControl->terminateForkedProcess);
+        CreateEventHandle(&g_pQForkControl->pingHandle);
         for (int x = 0; x < MAXSENDBUFFER; x++) {
             CreateEventHandle(&g_pQForkControl->doSendBuffer[x]);
             CreateEventHandle(&g_pQForkControl->doneSentBuffer[x]);
@@ -597,6 +602,7 @@ BOOL QForkShutdown() {
         CloseEventHandle(&g_pQForkControl->operationFailed);
         CloseEventHandle(&g_pQForkControl->terminateForkedProcess);
         CloseEventHandle(&g_pQForkControl->heapMemoryMap);
+        CloseEventHandle(&g_pQForkControl->pingHandle);
         for (int x = 0; x < MAXSENDBUFFER; x++) {
             CloseEventHandle(&g_pQForkControl->doneSentBuffer[x]);
             CloseEventHandle(&g_pQForkControl->doSendBuffer[x]);
@@ -670,6 +676,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         ResetEventHandle(g_pQForkControl->startOperation);
         ResetEventHandle(g_pQForkControl->forkedProcessReady);
         ResetEventHandle(g_pQForkControl->terminateForkedProcess);
+        ResetEventHandle(g_pQForkControl->pingHandle);
         for (int x = 0; x < MAXSENDBUFFER; x++) {
             ResetEventHandle(g_pQForkControl->doSendBuffer[x]);
             ResetEventHandle(g_pQForkControl->doneSentBuffer[x]);
@@ -714,7 +721,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
 
-            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->altHeapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
+            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->altHeapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
         } else {
             g_pQForkControl->inMemoryBuffersControlHandle = NULL;
             g_pQForkControl->inMemoryBuffersControl = NULL;
@@ -910,6 +917,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
             ResetEventHandle(g_pQForkControl->startOperation);
             ResetEventHandle(g_pQForkControl->forkedProcessReady);
             ResetEventHandle(g_pQForkControl->terminateForkedProcess);
+            ResetEventHandle(g_pQForkControl->pingHandle);
             for (int x = 0; x < MAXSENDBUFFER; x++) {
                 ResetEventHandle(g_pQForkControl->doSendBuffer[x]);
                 ResetEventHandle(g_pQForkControl->doneSentBuffer[x]);

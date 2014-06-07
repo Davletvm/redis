@@ -70,18 +70,22 @@ void ClearInMemoryBuffersMasterParent()
     }
 #endif
 }
-static int control_id = 0;
+static int control_id = 2;
 
 void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 {
 #ifndef NO_QFORKIMPL
     int id = (int)param;
-    sendInMemoryBuffersToSlave(el, id);
+    if (id < 0) {
+        sendInMemoryBuffersToSlavePing(el, -id);
+    } else {
+        sendInMemoryBuffersToSlave(el, id);
+    }
 #endif
 }
 
 
-void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * heapStart, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER])
+void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * heapStart, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER], HANDLE pingHandle)
 {
 #ifndef NO_QFORKIMPL
     control->id = control_id++;
@@ -94,15 +98,21 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * h
     server.repl_inMemorySend->sequence = control->bufferSequence;
     server.repl_inMemorySend->sendState = control->bufferState;
     server.repl_inMemorySend->heapStart = heapStart;
+    server.repl_inMemorySend->pingHandle = pingHandle;
+    HANDLE sendHandles[MAXSENDBUFFER + 1];
+    int IDs[MAXSENDBUFFER + 1];
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b;
         server.repl_inMemorySend->sizeFilled[x] = &(control->buffer[x][0].s);
         server.repl_inMemorySend->sizeFilled[x][0] = 0;
         server.repl_inMemorySend->sendState[x] = INMEMORY_STATE_INVALID;
         server.repl_inMemorySend->sequence[x] = -1;
+        IDs[x] = server.repl_inMemorySend->id;
+        sendHandles[x] = doSend[x];
     }
-
-    aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER, doSend, server.repl_inMemorySend->id);
+    IDs[MAXSENDBUFFER] = -server.repl_inMemorySend->id;
+    sendHandles[MAXSENDBUFFER] = pingHandle;    
+    aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER + 1, sendHandles, IDs);
 #endif
 }
 
@@ -117,7 +127,7 @@ void SendBuffer(redisInMemoryReplSend * inm, int which, int sequence)
     SetEvent(inm->doSendEvents[which]);
 }
 
-int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDLE doSend[2], HANDLE doneSent[2])
+int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDLE doSend[2], HANDLE doneSent[2], HANDLE pingHandle)
 {
 #ifndef NO_QFORKIMPL
     redisInMemoryReplSend inMemoryRepl;
@@ -130,6 +140,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDL
         inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
         inMemoryRepl.offsetofLastInline[x] = -1;
     }
+    inMemoryRepl.pingHandle = pingHandle;
     inMemoryRepl.doSendEvents = doSend;
     inMemoryRepl.sentDoneEvents = doneSent;
     inMemoryRepl.sequence = buffers->bufferSequence;
@@ -159,7 +170,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDL
     }
     // If all buffers are in flight, we need to wait for the first one
     if (!sentEmpty) {
-        redisLog(REDIS_DEBUG, "Waiting for send complete on both buffers");
+        redisLog(REDIS_DEBUG, "Waiting for send complete on all buffers");
         rval = WaitForMultipleObjects(MAXSENDBUFFER, doneSent, FALSE, INFINITE);
         if (rval < WAIT_OBJECT_0 || rval > WAIT_OBJECT_0 + MAXSENDBUFFER - 1)
             return REDIS_ERR;
@@ -168,12 +179,12 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDL
         SendBuffer(&inMemoryRepl, rval - WAIT_OBJECT_0, INT32_MAX);
     }
     // Now just wait for all to have been sent
-    for (int x = 0; x < MAXSENDBUFFER && !sentEmpty; x++) {
+    for (int x = 0; x < MAXSENDBUFFER; x++) {
         if (inMemoryRepl.sendState[x] == INMEMORY_STATE_READYTOSEND) {
-            redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", 0);
+            redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", x);
             rval = WaitForSingleObject(doneSent[x], INFINITE);
             if (rval != WAIT_OBJECT_0) return REDIS_ERR;
-            redisLog(REDIS_DEBUG, "Send complete received on %d", 0);
+            redisLog(REDIS_DEBUG, "Send complete received on %d", x);
         }
     }
 #endif

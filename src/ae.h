@@ -117,7 +117,7 @@ char *aeGetApiName(void);
 void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
-int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int id);
+int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int * id);
 int aeClearCallbacks(aeEventLoop *eventLoop);
 int aeSetReadyForCallback(aeEventLoop *eventLoop);
 #endif

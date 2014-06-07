@@ -50,7 +50,7 @@ sGetQueuedCompletionStatusEx pGetQueuedCompletionStatusEx;
   * and then find matching structure in list */
 
 #define MAX_SOCKET_LOOKUP   65535
-#define MAX_WATCHED_ITEMS 4
+#define MAX_WATCHED_ITEMS 5
 
 typedef struct aeWatchedItem {
     HANDLE watchedHandle;
@@ -228,7 +228,7 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
                 redisLog(REDIS_DEBUG, "WT: completion requested %d", id);
-                PostQueuedCompletionStatus(state->iocp, 0, -1, (LPOVERLAPPED) id);
+                PostQueuedCompletionStatus(state->iocp, 0, -(rval - WAIT_OBJECT_0), (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
             LeaveCriticalSection(&(state->threadCS));
@@ -408,7 +408,7 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
 }
 
 
-int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int id)
+int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int count, HANDLE * handles, int * id)
 {
     redisLog(REDIS_DEBUG, "WT: Set callbacks count: %d", count);
     aeApiState *state = (aeApiState *)eventLoop->apidata;
@@ -417,8 +417,8 @@ int aeSetCallbacks(aeEventLoop *eventLoop, aeHandleEventCallback *proc, int coun
     EnterCriticalSection(&(state->threadCS));
     state->cWatchedItems = count;
     for (int x = 0; x < count; x++) {
-        redisLog(REDIS_DEBUG, "WT: set callbacks id: %d", id);
-        state->watchedItems[x].id = id;
+        redisLog(REDIS_DEBUG, "WT: set callbacks id: %d", id[x]);
+        state->watchedItems[x].id = id[x];
         state->watchedItems[x].proc = proc;
         state->watchedItems[x].watchedHandle = handles[x];
     }
@@ -451,10 +451,10 @@ int aeSetReadyForCallback(aeEventLoop *eventLoop)
 
 void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
 {
-    redisLog(REDIS_DEBUG, "WT: EventSignaled %d", id);
+    redisLog(REDIS_DEBUG, "WT: EventSignaled %d %d", id, rfd);
     aeApiState *state = (aeApiState *)eventLoop->apidata;
-    if (state->cWatchedItems > 0 && id == state->watchedItems[0].id) {
-        state->watchedItems[0].proc(eventLoop, (void*)id);
+    if (rfd < state->cWatchedItems && id == state->watchedItems[rfd].id) {
+        state->watchedItems[rfd].proc(eventLoop, (void*)id);
     }
 }
 
@@ -512,13 +512,13 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     if (rc && numComplete > 0) {
         LPOVERLAPPED_ENTRY entry = state->entries;
         for (j = 0; j < numComplete && numevents < state->setsize; j++, entry++) {
-            /* the competion key is the socket */
             int rfd = (int)entry->lpCompletionKey;
             if (rfd < 0) {
                 int id = (int)entry->lpOverlapped;
-                aeEventSignaled(eventLoop, 0, id);
+                aeEventSignaled(eventLoop, -rfd -1, id);
                 continue;
             }
+            /* the completion key is the socket */
             sockstate = aeGetExistingSockState(state, rfd);
 
             if (sockstate != NULL) {

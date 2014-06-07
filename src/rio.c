@@ -115,15 +115,17 @@ static void SendActiveBuffer(rio * r)
     inm->sequence[inm->activeBuffer] = r->io.memorySend.sequence++;
     ResetEvent(inm->sentDoneEvents[inm->activeBuffer]);
     SetEvent(inm->doSendEvents[inm->activeBuffer]);
+    server.unixtime = time(NULL);
+    inm->lastPingMS = server.unixtime;
 }
 
 static int WaitForFreeBuffer(rio * r)
 {
     redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    WaitForMultipleObjects(MAXSENDBUFFERS, inm->sentDoneEvents, FALSE, INFINITE);
+    WaitForMultipleObjects(MAXSENDBUFFER, inm->sentDoneEvents, FALSE, INFINITE);
     BOOL found = FALSE;
-    for (int x = 0; x < MAXSENDBUFFERS; x++) {
+    for (int x = 0; x < MAXSENDBUFFER; x++) {
         DWORD rval = WaitForSingleObject(inm->sentDoneEvents[x], 0);
         if (rval == WAIT_OBJECT_0) {
             redisLog(REDIS_DEBUG, "Got free buffer %d", x);
@@ -140,6 +142,18 @@ static int WaitForFreeBuffer(rio * r)
     return found;
 }
 
+static void InMemoryPing(redisInMemoryReplSend * inm, size_t len)
+{
+    if (((inm->sizeFilled[inm->activeBuffer][0] + len) >> 0) != ((inm->sizeFilled[inm->activeBuffer][0]) >> 0)) {
+        server.unixtime = time(NULL);
+        if (server.unixtime - inm->lastPingMS > server.repl_ping_slave_period) {
+            inm->lastPingMS = server.unixtime;
+            redisLog(REDIS_DEBUG, "Seting ping event");
+            SetEvent(inm->pingHandle);
+        }
+    }
+}
+
 /* Returns 1 or 0 for success/failure.
     This is only called by the forked child
     It writes to all r members.
@@ -151,13 +165,12 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    leftInActiveBuffer = inm->bufferSize - *(inm->sizeFilled[inm->activeBuffer]);
     while (server.repl_inMemorySend == inm) {
         if (inm->sendState[inm->activeBuffer] == INMEMORY_STATE_READYTOSEND) {
             int activeBufferPrev = inm->activeBuffer;
             while (1) {
                 inm->activeBuffer++;
-                if (inm->activeBuffer == MAXSENDBUFFERS) inm->activeBuffer = 0;
+                if (inm->activeBuffer == MAXSENDBUFFER) inm->activeBuffer = 0;
                 if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOSEND || inm->activeBuffer == activeBufferPrev)
                     break;
             }
@@ -177,6 +190,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
             SendActiveBuffer(r);
             continue;
         }
+        InMemoryPing(inm, lenToCopy);
         inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
         buffer = inm->buffer[inm->activeBuffer] + *(inm->sizeFilled[inm->activeBuffer]);
         int l = (int)len;

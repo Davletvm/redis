@@ -624,19 +624,21 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOSEND 1
 #define INMEMORY_STATE_READYTOFILL 4
 
-#define MAXSENDBUFFERS 4
-#define MINLENGTHOOB 128
+#define MAXSENDBUFFER 4
+#define MINLENGTHOOB (1024*1024*1024)
 #define SENDINLINE 1
 #define SENDOOB 2
 typedef struct redisInMemoryReplSend {
     int id;
-    char * buffer[MAXSENDBUFFERS];
+    char * buffer[MAXSENDBUFFER];
     ssize_t bufferSize;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
-    int * sizeFilled[MAXSENDBUFFERS];
-    int processedOffset[MAXSENDBUFFERS];
-    int offsetofLastInline[MAXSENDBUFFERS];
+    HANDLE pingHandle;
+    long long lastPingMS;
+    int * sizeFilled[MAXSENDBUFFER];
+    int processedOffset[MAXSENDBUFFER];
+    int offsetofLastInline[MAXSENDBUFFER];
     int * sequence;
     int * sendState;
     int activeBuffer;
@@ -1160,6 +1162,7 @@ void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void replicationSendNewlineToMaster(void);
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
+void sendInMemoryBuffersToSlavePing(aeEventLoop *el, int id);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
