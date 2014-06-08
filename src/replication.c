@@ -491,8 +491,9 @@ void sendInMemoryBuffersToSlavePing(aeEventLoop *el, int which)
 {
     redisLog(REDIS_DEBUG, "Cookie: %d Seq:%d Which:%d", server.repl_inMemorySend->id, 0, which);
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave || inm->id != which) return;
-    redisInMemorySendCookie * cookie = zmalloc(sizeof(redisInMemorySendCookie));
+    cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
     cookie->sequence = -1;
     cookie->which = 0;
@@ -513,8 +514,9 @@ void sendInMemoryBuffersToSlavePing(aeEventLoop *el, int which)
 
 void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
-    redisInMemorySendCookie * cookie = zmalloc(sizeof(redisInMemorySendCookie));
+    cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
     cookie->sequence = inm->sequence[which];
     cookie->which = which;
@@ -539,11 +541,11 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
         redisLog(REDIS_DEBUG, "Sending terminal buffer");
         return;
     }
+    char c = buffer[0];
+    buffer++;
     while (1) {
-        char c = buffer[0];
-        buffer++;
         memcpy(&len, buffer, 4);
-        if (c == SENDOOB) {
+        if (c == SENDOOB && buffer == inm->buffer[which]+1) {
             buffer += 4;
             unsigned long long offset;
             memcpy(&offset, buffer, 8);
@@ -558,10 +560,18 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
                 return;
             }
             inm->totalSent += 4;
+            c = SENDINLINE;
+        } else if (c == SENDOOB) {
+            unsigned long long offset;
+            memcpy(&offset, buffer, 8);
+            buf = (char*)inm->heapStart + offset;
+            buffer += 8;
+            c = SENDINLINE;
         } else if (c == SENDINLINE) {
             buf = buffer;
             buffer += 4 + len;
             len += 4;
+            c = SENDOOB;
         } else {
             redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. Bad buffer control");
             zfree(cookie);
@@ -570,6 +580,10 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
             return;
         }
         last = (buffer == inm->buffer[which] + size);
+        if (!last && c == SENDOOB) {
+            len += 4;
+            buffer += 4;
+        }
         ssize_t result = aeWinSocketSend(inm->slave->fd, buf, len, el, inm->slave, last ? cookie : NULL, sendInMemoryBuffersToSlaveDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
             redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. %d", errno);
@@ -602,7 +616,6 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
         sendReady[x] = rval == WAIT_OBJECT_0;
         if (sendReady[x]) {
             howManyReady++;
-            inm->processedOffset[x] = 0;
             ResetEvent(inm->doSendEvents[x]);
         }
         if (!sendReady[x] && rval != WAIT_TIMEOUT) {

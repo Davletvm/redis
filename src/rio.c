@@ -131,7 +131,7 @@ static int WaitForFreeBuffer(rio * r)
             redisLog(REDIS_DEBUG, "Got free buffer %d", x);
             ResetEvent(inm->sentDoneEvents[x]);
             *(inm->sizeFilled[x]) = 0;
-            inm->processedOffset[x] = 0;
+            inm->virtualSize[x] = 0;
             inm->offsetofLastInline[x] = -1;
             found = TRUE;
             inm->sendState[x] = INMEMORY_STATE_READYTOFILL;
@@ -186,7 +186,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
         } else {
             lenToCopy = 1 + 4 + len;
         }
-        if (lenToCopy > leftInActiveBuffer) {
+        if (lenToCopy > leftInActiveBuffer || inm->virtualSize[inm->activeBuffer] > inm->bufferSize) {
             SendActiveBuffer(r);
             continue;
         }
@@ -201,6 +201,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
             memcpy(buffer + 1 + 4, &offset, 8);
             *(inm->sizeFilled[inm->activeBuffer]) += 1 + 4 + 8;
             inm->offsetofLastInline[inm->activeBuffer] = -1;
+            inm->virtualSize[inm->activeBuffer] += 1 + 4 + 8 + len;
         } else {
             if (inm->offsetofLastInline[inm->activeBuffer] < 0) {
                 inm->offsetofLastInline[inm->activeBuffer] = *(inm->sizeFilled[inm->activeBuffer]) + 1;
@@ -208,6 +209,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
                 memcpy(buffer + 1, &l, 4);
                 buffer += 1 + 4;
                 *(inm->sizeFilled[inm->activeBuffer]) += 1 + 4;
+                inm->virtualSize[inm->activeBuffer] += 1 + 4;
             } else {
                 int prevlen;
                 memcpy(&prevlen, inm->buffer[inm->activeBuffer] + inm->offsetofLastInline[inm->activeBuffer], 4);
@@ -215,6 +217,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
                 memcpy(inm->buffer[inm->activeBuffer] + inm->offsetofLastInline[inm->activeBuffer], &prevlen, 4);
             }
             *(inm->sizeFilled[inm->activeBuffer]) += len;
+            inm->virtualSize[inm->activeBuffer] += len;
             memcpy(buffer, buf, len);
         }
         return 1;

@@ -625,7 +625,7 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOFILL 4
 
 #define MAXSENDBUFFER 4
-#define MINLENGTHOOB (1024*1024*1024)
+#define MINLENGTHOOB (128)
 #define SENDINLINE 1
 #define SENDOOB 2
 typedef struct redisInMemoryReplSend {
@@ -637,7 +637,7 @@ typedef struct redisInMemoryReplSend {
     HANDLE pingHandle;
     long long lastPingMS;
     int * sizeFilled[MAXSENDBUFFER];
-    int processedOffset[MAXSENDBUFFER];
+    int virtualSize[MAXSENDBUFFER];
     int offsetofLastInline[MAXSENDBUFFER];
     int * sequence;
     int * sendState;
