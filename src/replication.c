@@ -417,7 +417,7 @@ void sendBulkToSlaveLenDone(aeEventLoop *el, int fd, void *privdata, int written
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
-    sdsfree((sds)req->buf);
+    sdsfree((sds)req->data);
 }
 
 
@@ -439,23 +439,7 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
 
         int len, len4 = 4;
         int rval;
-        /*
-        rval = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, &len4);
-        redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-        len = 0; len4 = 4;
-        rval = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, 4);
-        redisLog(REDIS_VERBOSE, "Set send buf %d", rval); 
-        rval = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, &len4);
-        redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-        len4 = 4;
-        rval = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, &len4);
-        redisLog(REDIS_VERBOSE, "get rec buf %d %d", rval, len);
-        len = 1024 * 1024 * 1024; len4 = 4;
-        rval = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, 4);
-        redisLog(REDIS_VERBOSE, "Set send buf %d", rval);
-        rval = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, &len4);
-        redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-        */
+
         result = aeWinSocketSend(fd, bulkcount, (int)sdslen(bulkcount),
             el, slave, bulkcount, sendBulkToSlaveLenDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
@@ -521,97 +505,40 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     cookie->sequence = inm->sequence[which];
     cookie->which = which;
     cookie->sentDoneEvent = inm->sentDoneEvents[which];
-    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld, cookie:%d", inm->sizeFilled[which][0], inm->totalSent + inm->sizeFilled[which][0], cookie->id);
+    DWORD oobCount = inm->controlAlias[which]->countOfOOB;
+    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld, cookie:%d", inm->sizeFilled[which][0], inm->totalSent + inm->virtualSize[which], cookie->id);
 
-    char * buffer = inm->buffer[which];
-    int size = inm->sizeFilled[which][0];
-    BOOL last = FALSE;
-    void * buf;
-    int len;
-    if (size == 0) {
-        len = 0;
-        ssize_t result = aeWinSocketSend(inm->slave->fd, &len, 4, el, inm->slave, cookie, sendInMemoryBuffersToSlaveDone);
-        if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-            redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. %d", errno);
-            zfree(cookie);
-            freeClient(inm->slave);
-            inm->slave = NULL;
-            return;
-        }
-        redisLog(REDIS_DEBUG, "Sending terminal buffer");
+    WSABUF * buffer = inm->buffer[which] + inm->bufferSize - (1 + oobCount) * sizeof(WSABUF); 
+    buffer[0].buf = inm->buffer[which];
+    buffer[0].len = inm->controlAlias[which]->sizeOfThis;
+    
+    ssize_t result = aeWinSocketSendMulti(inm->slave->fd, buffer, (1 + oobCount), el, inm->slave, cookie, sendInMemoryBuffersToSlaveDone);
+    if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
+        redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. %d", errno);
+        zfree(cookie);
+        freeClient(inm->slave);
+        inm->slave = NULL;
         return;
     }
-    char c = buffer[0];
-    buffer++;
-    while (1) {
-        memcpy(&len, buffer, 4);
-        if (c == SENDOOB && buffer == inm->buffer[which]+1) {
-            buffer += 4;
-            unsigned long long offset;
-            memcpy(&offset, buffer, 8);
-            buf = (char*)inm->heapStart + offset;
-            buffer += 8;
-            ssize_t result = aeWinSocketSend(inm->slave->fd, &len, 4, el, inm->slave, NULL, sendInMemoryBuffersToSlaveDone);
-            if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-                redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. %d", errno);
-                zfree(cookie);
-                freeClient(inm->slave);
-                inm->slave = NULL;
-                return;
-            }
-            inm->totalSent += 4;
-            c = SENDINLINE;
-        } else if (c == SENDOOB) {
-            unsigned long long offset;
-            memcpy(&offset, buffer, 8);
-            buf = (char*)inm->heapStart + offset;
-            buffer += 8;
-            c = SENDINLINE;
-        } else if (c == SENDINLINE) {
-            buf = buffer;
-            buffer += 4 + len;
-            len += 4;
-            c = SENDOOB;
-        } else {
-            redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. Bad buffer control");
-            zfree(cookie);
-            freeClient(inm->slave);
-            inm->slave = NULL;
-            return;
-        }
-        last = (buffer == inm->buffer[which] + size);
-        if (!last && c == SENDOOB) {
-            len += 4;
-            buffer += 4;
-        }
-        ssize_t result = aeWinSocketSend(inm->slave->fd, buf, len, el, inm->slave, last ? cookie : NULL, sendInMemoryBuffersToSlaveDone);
-        if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-            redisLog(REDIS_WARNING, "Cannot send in memmory data to slave. %d", errno);
-            zfree(cookie);
-            freeClient(inm->slave);
-            inm->slave = NULL;
-            return;
-        }
-        if (inm->totalSent / ((long long)1024 * 1024 * 128) != (inm->totalSent + len) / ((long long)1024 * 1024 * 128)) {
-            redisLog(REDIS_DEBUG,"Total sent: %lld", inm->totalSent + len);
-        }
-        inm->totalSent += len;
-        if (last) break;
+
+    if (inm->totalSent / ((long long)1024 * 1024 * 128) != (inm->totalSent + inm->virtualSize[which]) / ((long long)1024 * 1024 * 128)) {
+        redisLog(REDIS_DEBUG, "Total sent: %lld", inm->totalSent + inm->virtualSize[which]);
     }
+    inm->totalSent += inm->virtualSize[which];
 }
 
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     ssize_t result;
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
-    int sendReady[MAXSENDBUFFER];
-    memset(sendReady, 0, sizeof(int) * MAXSENDBUFFER);
+    int sendReady[INMEMORY_SEND_MAXSENDBUFFER];
+    memset(sendReady, 0, sizeof(int)* INMEMORY_SEND_MAXSENDBUFFER);
     if (!inm || id != inm->id) {
         redisLog(REDIS_VERBOSE, "Signaled stale inmemory buffer send %d %d", id, inm->id);
         return;
     }
     redisClient * slave = inm->slave;
     int howManyReady = 0;
-    for (int x = 0; x < MAXSENDBUFFER; x++) {
+    for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
         DWORD rval = WaitForSingleObject(inm->doSendEvents[x], 0);
         sendReady[x] = rval == WAIT_OBJECT_0;
         if (sendReady[x]) {
@@ -628,12 +555,12 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     aeSetReadyForCallback(el);
     while (howManyReady) {
         int minId = INT_MAX;
-        for (int x = 0; x < MAXSENDBUFFER; x++) {
+        for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
             if (sendReady[x] && inm->sequence[x] < minId) {
                 minId = inm->sequence[x];
             }
         }
-        for (int x = 0; x < MAXSENDBUFFER; x++) {
+        for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
             if (sendReady[x] && inm->sequence[x] == minId) {
                 sendInMemoryBuffersToSlaveSpecific(el, x);
                 sendReady[x] = 0;
@@ -1080,8 +1007,7 @@ void clearInMemoryReplBuffersSlave()
 {
     if (server.repl_inMemoryReceive)
     {
-        zfree(server.repl_inMemoryReceive->buffer[0]);
-        zfree(server.repl_inMemoryReceive->buffer[1]);
+        zfree(server.repl_inMemoryReceive->buffer);
         zfree(server.repl_inMemoryReceive);
         server.repl_inMemoryReceive = NULL;
     }
@@ -1093,9 +1019,10 @@ void initInMemoryBuffersSlave()
         int size = server.repl_inMemoryReceiveBuffer;
         if (size < 1024) size = 1024;
         server.repl_inMemoryReceive = zcalloc(sizeof(redisInMemoryReplReceive));
-        server.repl_inMemoryReceive->buffer[0] = zmalloc(size);
-        server.repl_inMemoryReceive->buffer[1] = zmalloc(size);
+        server.repl_inMemoryReceive->buffer = zmalloc(size);
         server.repl_inMemoryReceive->bufferSize = size;
+        server.repl_inMemoryReceive->posBufferRead = sizeof(redisInMemoryReplSendControl);
+        server.repl_inMemoryReceive->sizeOfCurrentPacket = -1;
     }
 }
 
@@ -1155,85 +1082,59 @@ void replicationEmptyDbCallback(void *privdata) {
 
 void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata, int mask) {
     ssize_t nread, readlen;
-    char * buf;
     redisInMemoryReplReceive * inm = server.repl_inMemoryReceive;
 
     if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROROREND)
         return;
 
-    if (inm->inPacket) {
-        if (inm->endStateFlags & INMEMORY_ENDSTATE_ENDREQUESTED) {
-            inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
-            return;
-        }
-        if (inm->shortcutBuffer) {
-            redisLog(REDIS_DEBUG, "reading into shortcut buffer");
-            readlen = inm->shortcutBufferSize;
-            buf = inm->shortcutBuffer;
-        } else {
-            redisLog(REDIS_DEBUG, "reading into buffer %d", inm->activeBufferWrite);
+    if (inm->endStateFlags & INMEMORY_ENDSTATE_ENDREQUESTED) {
+        inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
+        return;
+    }
 
-            readlen = inm->bufferSize - inm->posBufferWritten[inm->activeBufferWrite];
-            buf = inm->buffer[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite];
-        }
-        if (readlen > inm->currentPacketSize)
-            readlen = inm->currentPacketSize;
-        redisAssert(readlen > 0);
-        nread = read(fd, buf, readlen);
-        redisLog(REDIS_DEBUG, "read %d, total: %lld", nread, inm->totalRead + nread);
-        if (nread <= 0) {
-            errno = WSAGetLastError();
-            redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
-                errno,
-                (nread == -1) ? wsa_strerror(errno) : "connection lost");
-            inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
-            replicationAbortSyncTransfer();
-            return;
-        }
-        server.repl_transfer_lastio = server.unixtime;
-        inm->currentPacketSize -= nread;
-        if (!inm->currentPacketSize) 
-            inm->inPacket = 0;
-        inm->totalRead += nread;
-        if (inm->shortcutBuffer) {
-            inm->shortcutBuffer += nread;
-            inm->shortcutBufferSize -= nread;
-        } else {
-            inm->posBufferWritten[inm->activeBufferWrite] += nread;
-            if (inm->posBufferWritten[inm->activeBufferWrite] == inm->bufferSize) {
-                inm->activeBufferWrite++;
-                if (inm->activeBufferWrite == 2) inm->activeBufferWrite = 0;
-            }
-        }
+    char * buffer;
+
+    if (inm->shortcutBuffer) {
+        readlen = inm->shortCutBufferSize;
+        buffer = inm->shortcutBuffer;
+    } else if (inm->sizeOfCurrentPacket == -1) {
+        readlen = sizeof(redisInMemoryReplSendControl);
+        buffer = inm->buffer + inm->posBufferWritten;
     } else {
-        nread = read(fd, ((char*)&(inm->currentPacketSize)) + inm->packetSizeValid, 4 - inm->packetSizeValid);
-        redisLog(REDIS_DEBUG, "read %d", nread);
-        if (nread <= 0) {
-            errno = WSAGetLastError();
-            redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
-                errno,
-                (nread == -1) ? wsa_strerror(errno) : "connection lost");
-            inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
-            replicationAbortSyncTransfer();
-            return;
+        readlen = inm->sizeOfCurrentPacket - inm->posBufferWritten;
+        buffer = inm->buffer + inm->posBufferWritten;
+    }
+
+    nread = read(fd, buffer, readlen);
+    redisLog(REDIS_DEBUG, "read %d, total: %lld", nread, inm->totalRead + nread);
+    if (nread <= 0) {
+        errno = WSAGetLastError();
+        redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
+            errno,
+            (nread == -1) ? wsa_strerror(errno) : "connection lost");
+        inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
+        replicationAbortSyncTransfer();
+        return;
+    }
+    server.repl_transfer_lastio = server.unixtime;
+
+    if (inm->shortcutBuffer) {
+        inm->shortcutBuffer += nread;
+        inm->shortCutBufferSize -= nread;
+    } else {
+        inm->posBufferWritten += nread;
+        if (inm->sizeOfCurrentPacket == -1 && inm->posBufferWritten >= sizeof(redisInMemoryReplSendControl)) {
+            inm->sendControl = (redisInMemoryReplSendControl*)inm->buffer;
+            inm->sizeOfCurrentPacket = inm->sendControl->sizeOfThis;
         }
-        server.repl_transfer_lastio = server.unixtime;
-        inm->packetSizeValid += nread;
-        if (inm->packetSizeValid == sizeof(inm->currentPacketSize)) {
-            redisLog(REDIS_DEBUG, "next packet size %d", inm->currentPacketSize);
-            if (!inm->currentPacketSize) { // terminal packet
-                inm->endStateFlags |= INMEMORY_ENDSTATE_ENDFOUND;
-                return;
-            } else if (inm->currentPacketSize == -1) { // ping packet
-                // nothing to do, just return and wait for next packet
-                inm->packetSizeValid = 0;
-            } else {
-                // real packet
-                inm->inPacket = 1;
-                inm->packetSizeValid = 0;
+        if (inm->sizeOfCurrentPacket != -1) {
+            if (inm->posBufferWritten == inm->sizeOfCurrentPacket) {
+                inm->sizeOfCurrentPacket = inm->sendControl->sizeOfNext;
+                inm->endStateFlags |= INMEMORY_ENDSTATE_ENDINLINE;
+                if (inm->sizeOfCurrentPacket == 0)
+                    inm->endStateFlags |= INMEMORY_ENDSTATE_ENDFOUND;
             }
         }
-
     }
     aeWinReceiveDone(fd);
 }
@@ -1260,39 +1161,19 @@ int readSyncBulkPayloadInMemory(int fd)
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
     initInMemoryBuffersSlave();
     server.repl_transfer_lastio = server.unixtime;
-    /*
-    int len, len4 = 4;
-    int rval;
-    rval = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, &len4);
-    redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-    len = 0; len4 = 4;
-    rval = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, 4);
-    redisLog(REDIS_VERBOSE, "Set send buf %d", rval);
-    rval = getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &len, &len4);
-    redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-    len4 = 4;
-    rval = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, &len4);
-    redisLog(REDIS_VERBOSE, "get rec buf %d %d", rval, len);
-    len = 1024 * 1024 * 1024; len4 = 4;
-    rval = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, 4);
-    redisLog(REDIS_VERBOSE, "Set send buf %d", rval);
-    rval = getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &len, &len4);
-    redisLog(REDIS_VERBOSE, "get send buf %d %d", rval, len);
-    */
 
     if (rdbLoad(NULL) != REDIS_OK) {  // now read, which will keep blocking on incoming data
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         if (server.repl_inMemoryReceive) 
             replicationAbortSyncTransfer();
         return REDIS_ERR;
-    }
-    server.repl_inMemoryReceive->endStateFlags |= INMEMORY_ENDSTATE_ENDREQUESTED;
-    while (!(server.repl_inMemoryReceive->endStateFlags & INMEMORY_ENDSTATE_ERROROREND)) {
-        int timeout = server.repl_timeout - (time(NULL) - server.repl_transfer_lastio);
-        if (timeout <= 0) break;
-        aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
-    }
-    if (server.repl_inMemoryReceive->endStateFlags & INMEMORY_ENDSTATE_ERROR) {
+    } else if (!(server.repl_inMemoryReceive->posBufferRead == server.repl_inMemoryReceive->posBufferWritten &&
+        server.repl_inMemoryReceive->posBufferWritten == server.repl_inMemoryReceive->sendControl->sizeOfThis && 
+        server.repl_inMemoryReceive->sendControl->countOfOOB == server.repl_inMemoryReceive->numOOBItems)) {
+        redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network.  Failed to find data end.");
+        replicationAbortSyncTransfer();
+        return REDIS_ERR;
+    } else if (server.repl_inMemoryReceive->endStateFlags & INMEMORY_ENDSTATE_ERROR) {
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network.  Failed to find data end.");
         replicationAbortSyncTransfer();
         return REDIS_ERR;

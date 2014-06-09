@@ -22,6 +22,7 @@
 
 #include "..\redis.h"
 #include "..\rdb.h"
+#include "..\rio.h"
 #include "Win32_QFork_impl.h"
 
 void SetupGlobals(LPVOID globalData, size_t globalDataSize, uint32_t dictHashSeed)
@@ -85,7 +86,7 @@ void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 }
 
 
-void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * heapStart, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER], HANDLE pingHandle)
+void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER], HANDLE pingHandle)
 {
 #ifndef NO_QFORKIMPL
     control->id = control_id++;
@@ -97,21 +98,20 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, void * h
     server.repl_inMemorySend->sentDoneEvents = doneSent;
     server.repl_inMemorySend->sequence = control->bufferSequence;
     server.repl_inMemorySend->sendState = control->bufferState;
-    server.repl_inMemorySend->heapStart = heapStart;
     server.repl_inMemorySend->pingHandle = pingHandle;
     HANDLE sendHandles[MAXSENDBUFFER + 1];
     int IDs[MAXSENDBUFFER + 1];
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b;
         server.repl_inMemorySend->sizeFilled[x] = &(control->buffer[x][0].s);
-        server.repl_inMemorySend->sizeFilled[x][0] = 0;
-        server.repl_inMemorySend->sendState[x] = INMEMORY_STATE_INVALID;
+        server.repl_inMemorySend->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
+        server.repl_inMemorySend->sendState[x] = INMEMORY_STATE_READYTOFILL;
         server.repl_inMemorySend->sequence[x] = -1;
         IDs[x] = server.repl_inMemorySend->id;
         sendHandles[x] = doSend[x];
     }
     IDs[MAXSENDBUFFER] = -server.repl_inMemorySend->id;
-    sendHandles[MAXSENDBUFFER] = pingHandle;    
+    sendHandles[MAXSENDBUFFER] = pingHandle;
     aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER + 1, sendHandles, IDs);
 #endif
 }
@@ -136,16 +136,16 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDL
     inMemoryRepl.id = buffers->id;
     inMemoryRepl.bufferSize = buffers->bufferSize;
     for (int x = 0; x < MAXSENDBUFFER; x++) {
-        inMemoryRepl.buffer[x] = buffers->buffer[x][0].b;
-        inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
-        inMemoryRepl.offsetofLastInline[x] = -1;
+        inMemoryRepl.controlAlias[x] = inMemoryRepl.buffer[x] = buffers->buffer[x][0].b;
+        inMemoryRepl.virtualSize[x] = inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
     }
     inMemoryRepl.pingHandle = pingHandle;
     inMemoryRepl.doSendEvents = doSend;
     inMemoryRepl.sentDoneEvents = doneSent;
     inMemoryRepl.sequence = buffers->bufferSequence;
     inMemoryRepl.sendState = buffers->bufferState;
-    inMemoryRepl.heapStart = heapStart;
+    inMemoryRepl.heapOffset = buffers->heapOffset;
+    inMemoryRepl.prevActiveBuffer = -1;
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
     redisLog(REDIS_VERBOSE, "Child: Save inmemory starting");
@@ -154,31 +154,9 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, void * heapStart, HANDL
         return REDIS_ERR;
     }
     redisLog(REDIS_VERBOSE, "Child: Save inmemory finished");
-    int sentEmpty = 0;
-    for (int x = 0; x < MAXSENDBUFFER; x++) {
-        if (inMemoryRepl.sendState[x] != INMEMORY_STATE_READYTOSEND && inMemoryRepl.sizeFilled[x][0]) {
-            SendBuffer(&inMemoryRepl, x, INT32_MAX - 10);
-        }
-    }
-    // do we have an available empty buffer to send?
-    for (int x = 0; x < MAXSENDBUFFER && !sentEmpty; x++) {
-        if (inMemoryRepl.sendState[x] != INMEMORY_STATE_READYTOSEND) {
-            redisAssert(!inMemoryRepl.sizeFilled[x][0]);
-            SendBuffer(&inMemoryRepl, x, INT32_MAX - 9 + x);
-            sentEmpty = 1;
-        }
-    }
-    // If all buffers are in flight, we need to wait for the first one
-    if (!sentEmpty) {
-        redisLog(REDIS_DEBUG, "Waiting for send complete on all buffers");
-        rval = WaitForMultipleObjects(MAXSENDBUFFER, doneSent, FALSE, INFINITE);
-        if (rval < WAIT_OBJECT_0 || rval > WAIT_OBJECT_0 + MAXSENDBUFFER - 1)
-            return REDIS_ERR;
-        redisLog(REDIS_DEBUG, "Send complete received on %d", rval - WAIT_OBJECT_0);
-        inMemoryRepl.sizeFilled[rval - WAIT_OBJECT_0][0] = 0;
-        SendBuffer(&inMemoryRepl, rval - WAIT_OBJECT_0, INT32_MAX);
-    }
-    // Now just wait for all to have been sent
+    SendActiveBufferIM(&inMemoryRepl);
+    inMemoryRepl.activeBuffer = -1;
+    SendActiveBufferIM(&inMemoryRepl);
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         if (inMemoryRepl.sendState[x] == INMEMORY_STATE_READYTOSEND) {
             redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", x);

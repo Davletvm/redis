@@ -601,50 +601,60 @@ typedef struct redisOpArray {
 #define INMEMORY_ENDSTATE_ENDREQUESTED 1
 #define INMEMORY_ENDSTATE_ENDFOUND 2
 #define INMEMORY_ENDSTATE_ERROR 4
+#define INMEMORY_ENDSTATE_ENDINLINE 8
 #define INMEMORY_ENDSTATE_ERROROREND (INMEMORY_ENDSTATE_ERROR | INMEMORY_ENDSTATE_ENDFOUND)
 
+typedef struct redisInMemoryReplSendControl{
+    int sizeOfThis;
+    int sizeOfNext;
+    int sizeOfInline;
+    int countOfOOB;
+}redisInMemoryReplSendControl;
+
+
 typedef struct redisInMemoryReplReceive {
-    char * buffer[2];
-    ssize_t bufferSize;
+    char * buffer;
     off_t totalRead;
     char * shortcutBuffer;
-    ssize_t shortcutBufferSize;
-    ssize_t posBufferRead[2];
-    ssize_t posBufferWritten[2];
-    int inPacket;
-    int packetSizeValid;
-    ssize_t currentPacketSize;
-    int activeBufferRead;
-    int activeBufferWrite;
+    redisInMemoryReplSendControl * sendControl;
+    unsigned long shortCutBufferSize;
+    unsigned long bufferSize;
+    unsigned long posBufferRead;
+    unsigned long posBufferWritten;
+    unsigned long sizeOfCurrentPacket;
+    unsigned long numOOBItems;
     int endStateFlags;
 } redisInMemoryReplReceive;
 
 #define INMEMORY_STATE_INVALID -1
-#define INMEMORY_STATE_BEINGFILLED 0
-#define INMEMORY_STATE_READYTOSEND 1
-#define INMEMORY_STATE_READYTOFILL 4
+#define INMEMORY_STATE_READYTOFILL 0
+#define INMEMORY_STATE_BEINGFILLED 1
+#define INMEMORY_STATE_FILLED      2 
+#define INMEMORY_STATE_READYTOSEND 3
 
-#define MAXSENDBUFFER 4
-#define MINLENGTHOOB (128)
-#define SENDINLINE 1
-#define SENDOOB 2
+#define INMEMORY_SEND_MAXSENDBUFFER 4
+#define INMEMORY_SEND_MINLENGTHOOB (16 * 1024)
+
+
 typedef struct redisInMemoryReplSend {
     int id;
-    char * buffer[MAXSENDBUFFER];
+    char * buffer[INMEMORY_SEND_MAXSENDBUFFER];
+    redisInMemoryReplSendControl * controlAlias[INMEMORY_SEND_MAXSENDBUFFER];
     ssize_t bufferSize;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
     HANDLE pingHandle;
     long long lastPingMS;
-    int * sizeFilled[MAXSENDBUFFER];
-    int virtualSize[MAXSENDBUFFER];
-    int offsetofLastInline[MAXSENDBUFFER];
+    int * sizeFilled[INMEMORY_SEND_MAXSENDBUFFER];
+    int virtualSize[INMEMORY_SEND_MAXSENDBUFFER];
     int * sequence;
     int * sendState;
     int activeBuffer;
+    int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
     void * heapStart;
+    size_t heapOffset;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie

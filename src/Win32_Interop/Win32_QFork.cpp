@@ -302,7 +302,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         } else if (g_pQForkControl->typeOfOperation == OperationType::otAOF) {
             exitCode = do_aofSave(g_pQForkControl->globalData.filename);
         } else if (g_pQForkControl->typeOfOperation == OperationType::otRDBINMEMORY) {
-            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->heapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
+            exitCode = do_rdbSaveInMemory(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
         } else {
             throw runtime_error("unexpected operation type");
         }
@@ -720,8 +720,9 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 g_pQForkControl->inMemoryBuffersControl->buffer[x] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl) + SPBufferSize * x);
             }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
+            g_pQForkControl->inMemoryBuffersControl->heapOffset = (char*)g_pQForkControl->altHeapStart - g_pQForkControl->heapStart;
 
-            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl, g_pQForkControl->altHeapStart, g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
+            SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl,g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer, g_pQForkControl->pingHandle);
         } else {
             g_pQForkControl->inMemoryBuffersControlHandle = NULL;
             g_pQForkControl->inMemoryBuffersControl = NULL;

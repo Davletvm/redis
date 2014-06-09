@@ -223,8 +223,17 @@ int aeWinReceiveDone(int fd) {
 /* wrapper for send
  * enables use of WSA Send to get IOCP notification of completion.
  * returns -1  with errno = WSA_IO_PENDING if callback will be invoked later */
-int aeWinSocketSend(int fd, char *buf, int len, 
-                    void *eventLoop, void *client, void *data, void *proc) {
+int aeWinSocketSend(int fd, char *buf, int len,
+    void *eventLoop, void *client, void *data, void *proc) {
+    WSABUF temp;
+    temp.buf = buf;
+    temp.len = len;
+    return aeWinSocketSendMulti(fd, &temp, 1, eventLoop, client, data, proc);
+}
+
+int aeWinSocketSendMulti(int fd, WSABUF * bufs, DWORD count,
+    void *eventLoop, void *client, void *data, void *proc) {
+
     aeSockState *sockstate;
     int result;
     asendreq *areq;
@@ -237,12 +246,13 @@ int aeWinSocketSend(int fd, char *buf, int len,
     }
 
     /* if not an async socket, do normal send */
-    if (sockstate == NULL ||
-        (sockstate->masks & SOCKET_ATTACHED) == 0 ||
-        proc == NULL) {
-        result = write(fd, buf, len);
-        if (result == SOCKET_ERROR) {
-            errno = WSAGetLastError();
+    if (sockstate == NULL || (sockstate->masks & SOCKET_ATTACHED) == 0 || proc == NULL) {
+        for (DWORD x = 0; x < count; x++){
+            result = write(fd, bufs[x].buf, bufs[x].len);
+            if (result == SOCKET_ERROR) {
+                errno = WSAGetLastError();
+                return result;
+            }
         }
         return result;
     }
@@ -250,18 +260,21 @@ int aeWinSocketSend(int fd, char *buf, int len,
     /* use overlapped structure to send using IOCP */
     areq = (asendreq *)zmalloc(sizeof(asendreq));
     memset(areq, 0, sizeof(asendreq));
-    areq->wbuf.len = len;
-    areq->wbuf.buf = buf;
     areq->eventLoop = (aeEventLoop *)eventLoop;
     areq->req.client = client;
     areq->req.data = data;
-    areq->req.len = len;
-    areq->req.buf = buf;
+    if (count == 1) {
+        areq->req.len = bufs[0].len;
+        areq->req.buf = bufs[0].buf;
+    } else {
+        areq->req.len = 0;
+        areq->req.buf = NULL;
+    }
     areq->proc = (aeFileProc *)proc;
 
     result = WSASend(fd,
-                    &areq->wbuf,
-                    1,
+                    bufs,
+                    count,
                     NULL,
                     0,
                     &areq->ov,
