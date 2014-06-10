@@ -107,20 +107,20 @@ static off_t rioFileTell(rio *r) {
 }
 
 static void SendActiveBuffer(rio * r) {
-    SendActiveBuffer(r->io.memorySend.inMemory);
+    SendActiveBufferIM(r->io.memorySend.inMemory);
 }
 
 
 void SendActiveBufferIM(redisInMemoryReplSend * inm)
 {
-    redisLog(REDIS_DEBUG, "Sending buffer %d", inm->activeBuffer);
     if (inm->prevActiveBuffer != -1) {
         if (inm->activeBuffer != -1)
             inm->controlAlias[inm->prevActiveBuffer]->sizeOfNext = inm->sizeFilled[inm->activeBuffer][0];
         else
             inm->controlAlias[inm->prevActiveBuffer]->sizeOfNext = 0;
         inm->sendState[inm->prevActiveBuffer] = INMEMORY_STATE_READYTOSEND;
-        inm->sequence[inm->prevActiveBuffer] = inm->sequence++;
+        inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
+        redisLog(REDIS_DEBUG, "Ready to send buffer %d, sequence:%d", inm->prevActiveBuffer, inm->sequence[inm->prevActiveBuffer]);
         ResetEvent(inm->sentDoneEvents[inm->prevActiveBuffer]);
         SetEvent(inm->doSendEvents[inm->prevActiveBuffer]);
         server.unixtime = time(NULL);
@@ -158,6 +158,7 @@ static int WaitForFreeBuffer(rio * r)
             inm->virtualSize[x] = inm->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
             found = TRUE;
             inm->sendState[x] = INMEMORY_STATE_READYTOFILL;
+            inm->controlAlias[x]->countOfOOB = 0;
         } else if (rval != WAIT_TIMEOUT) {
             return 0;
         }
@@ -178,7 +179,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
     size_t lenToCopy;
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
     while (server.repl_inMemorySend == inm) {
-        if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOFILL) {
+        if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOFILL && inm->sendState[inm->activeBuffer] != INMEMORY_STATE_BEINGFILLED) {
             int activeBufferPrev = inm->activeBuffer;
             while (1) {
                 inm->activeBuffer++;
@@ -187,7 +188,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
                     break;
             }
         }
-        if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOFILL) {
+        if (inm->sendState[inm->activeBuffer] != INMEMORY_STATE_READYTOFILL && inm->sendState[inm->activeBuffer] != INMEMORY_STATE_BEINGFILLED) {
             if (!WaitForFreeBuffer(r))
                 return 0;
             continue;
@@ -273,6 +274,7 @@ static int ReadOOBItems(redisInMemoryReplReceive * inm)
     }
     inm->numOOBItems = 0;
     inm->posBufferWritten = 0;
+    inm->endStateFlags &= ~INMEMORY_ENDSTATE_ENDINLINE;
     inm->posBufferRead = sizeof(redisInMemoryReplSendControl);
     return 1;
 }
@@ -296,7 +298,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
                 continue;
             } else { // Inline items
                 leftInActiveBuffer = inm->posBufferWritten - inm->posBufferRead;
-                if (len < leftInActiveBuffer) {
+                if (len <= leftInActiveBuffer) {
                     memcpy(buf, inm->buffer + inm->posBufferRead, len);
                     inm->posBufferRead += len;
                     handled = 1;
@@ -309,7 +311,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
                 return 1;
             }
         }
-        if (PollForRead(inm) < 0) {
+        if (!PollForRead(inm)) {
             return 0;
         }
     }

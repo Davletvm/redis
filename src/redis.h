@@ -633,7 +633,7 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOSEND 3
 
 #define INMEMORY_SEND_MAXSENDBUFFER 4
-#define INMEMORY_SEND_MINLENGTHOOB (16 * 1024)
+#define INMEMORY_SEND_MINLENGTHOOB (1024 * 1024 * 1024)
 
 
 typedef struct redisInMemoryReplSend {
@@ -641,6 +641,7 @@ typedef struct redisInMemoryReplSend {
     char * buffer[INMEMORY_SEND_MAXSENDBUFFER];
     redisInMemoryReplSendControl * controlAlias[INMEMORY_SEND_MAXSENDBUFFER];
     ssize_t bufferSize;
+    int curSequence;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
     HANDLE pingHandle;
@@ -653,7 +654,7 @@ typedef struct redisInMemoryReplSend {
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
-    void * heapStart;
+//    void * heapStart;
     size_t heapOffset;
 } redisInMemoryReplSend;
 

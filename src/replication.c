@@ -506,7 +506,7 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     cookie->which = which;
     cookie->sentDoneEvent = inm->sentDoneEvents[which];
     DWORD oobCount = inm->controlAlias[which]->countOfOOB;
-    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld, cookie:%d", inm->sizeFilled[which][0], inm->totalSent + inm->virtualSize[which], cookie->id);
+    redisLog(REDIS_DEBUG, "Sending buffer to Slave. size: %d, total: %lld, cookie:%d, sequence:%d", inm->sizeFilled[which][0], inm->totalSent + inm->virtualSize[which], cookie->id, cookie->sequence);
 
     WSABUF * buffer = inm->buffer[which] + inm->bufferSize - (1 + oobCount) * sizeof(WSABUF); 
     buffer[0].buf = inm->buffer[which];
@@ -1102,11 +1102,13 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         buffer = inm->buffer + inm->posBufferWritten;
     } else {
         readlen = inm->sizeOfCurrentPacket - inm->posBufferWritten;
+        if ((int)readlen < 0) DebugBreak();
         buffer = inm->buffer + inm->posBufferWritten;
     }
 
     nread = read(fd, buffer, readlen);
-    redisLog(REDIS_DEBUG, "read %d, total: %lld", nread, inm->totalRead + nread);
+    if (readlen < 16 * 1024) 
+        redisLog(REDIS_DEBUG, "requested %d, read %d, total: %lld", readlen, nread, inm->totalRead + nread);
     if (nread <= 0) {
         errno = WSAGetLastError();
         redisLog(REDIS_WARNING, "I/O error %d trying to sync in memory with MASTER: %s",
@@ -1117,7 +1119,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         return;
     }
     server.repl_transfer_lastio = server.unixtime;
-
+    inm->totalRead += nread;
     if (inm->shortcutBuffer) {
         inm->shortcutBuffer += nread;
         inm->shortCutBufferSize -= nread;
@@ -1167,8 +1169,8 @@ int readSyncBulkPayloadInMemory(int fd)
         if (server.repl_inMemoryReceive) 
             replicationAbortSyncTransfer();
         return REDIS_ERR;
-    } else if (!(server.repl_inMemoryReceive->posBufferRead == server.repl_inMemoryReceive->posBufferWritten &&
-        server.repl_inMemoryReceive->posBufferWritten == server.repl_inMemoryReceive->sendControl->sizeOfThis && 
+    } else if (!(server.repl_inMemoryReceive->posBufferRead == sizeof(redisInMemoryReplSendControl) &&
+        server.repl_inMemoryReceive->posBufferWritten == 0 && 
         server.repl_inMemoryReceive->sendControl->countOfOOB == server.repl_inMemoryReceive->numOOBItems)) {
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network.  Failed to find data end.");
         replicationAbortSyncTransfer();
