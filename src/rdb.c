@@ -1279,7 +1279,7 @@ readagain:
 
 
     /* Verify the checksum if RDB version is >= 5 */
-    if (rdbver >= 5 && server.rdb_checksum) {
+    if (rdbver >= 5 && (server.rdb_checksum || !fp)) {
         uint64_t cksum, expected = rdb.cksum;
 
         if (rioRead(&rdb,&cksum,8) == 0) goto eoferr;

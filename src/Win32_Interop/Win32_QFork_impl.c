@@ -77,11 +77,7 @@ void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 {
 #ifndef NO_QFORKIMPL
     int id = (int)param;
-    if (id < 0) {
-        sendInMemoryBuffersToSlavePing(el, -id);
-    } else {
-        sendInMemoryBuffersToSlave(el, id);
-    }
+    sendInMemoryBuffersToSlave(el, id);
 #endif
 }
 
@@ -98,22 +94,16 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->sentDoneEvents = doneSent;
     server.repl_inMemorySend->sequence = control->bufferSequence;
     server.repl_inMemorySend->sendState = control->bufferState;
-    server.repl_inMemorySend->pingHandle = pingHandle;
-    HANDLE sendHandles[MAXSENDBUFFER + 1];
-    int IDs[MAXSENDBUFFER + 1];
+    int IDs[MAXSENDBUFFER];
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         server.repl_inMemorySend->controlAlias[x] = server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b;
-        server.repl_inMemorySend->controlAlias[x]->countOfOOB = 0;
         server.repl_inMemorySend->sizeFilled[x] = &(control->buffer[x][0].s);
         server.repl_inMemorySend->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
         server.repl_inMemorySend->sendState[x] = INMEMORY_STATE_READYTOFILL;
         server.repl_inMemorySend->sequence[x] = -1;
         IDs[x] = server.repl_inMemorySend->id;
-        sendHandles[x] = doSend[x];
     }
-    IDs[MAXSENDBUFFER] = -server.repl_inMemorySend->id;
-    sendHandles[MAXSENDBUFFER] = pingHandle;
-    aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER + 1, sendHandles, IDs);
+    aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER, doSend, IDs);
 #endif
 }
 
@@ -139,9 +129,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         inMemoryRepl.controlAlias[x] = inMemoryRepl.buffer[x] = buffers->buffer[x][0].b;
         inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
-        inMemoryRepl.virtualSize[x] = 0;
     }
-    inMemoryRepl.pingHandle = pingHandle;
     inMemoryRepl.doSendEvents = doSend;
     inMemoryRepl.sentDoneEvents = doneSent;
     inMemoryRepl.sequence = buffers->bufferSequence;

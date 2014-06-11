@@ -598,7 +598,6 @@ typedef struct redisOpArray {
 } redisOpArray;
 
 #define INMEMORY_ENDSTATE_NONE 0
-#define INMEMORY_ENDSTATE_ENDREQUESTED 1
 #define INMEMORY_ENDSTATE_ENDFOUND 2
 #define INMEMORY_ENDSTATE_ERROR 4
 #define INMEMORY_ENDSTATE_ENDINLINE 8
@@ -607,22 +606,31 @@ typedef struct redisOpArray {
 typedef struct redisInMemoryReplSendControl{
     int sizeOfThis;
     int sizeOfNext;
-    int sizeOfInline;
-    int countOfOOB;
+    off_t offset;
 }redisInMemoryReplSendControl;
+
+typedef struct redisInMemoryVirtualBuffer
+{
+    int size;
+    int sourceBuffer;
+    int sourceOffset;
+}redisInMemoryVirtualBuffer;
 
 
 typedef struct redisInMemoryReplReceive {
-    char * buffer;
+    char * buffer[2];
+    redisInMemoryVirtualBuffer virtualBuffer;
+    int activeBufferRead;
+    int activeBufferWrite;
     off_t totalRead;
     char * shortcutBuffer;
-    redisInMemoryReplSendControl * sendControl;
+    redisInMemoryReplSendControl sendControlWrite;
+    redisInMemoryReplSendControl sendControlRead;
     unsigned long shortCutBufferSize;
     unsigned long bufferSize;
-    unsigned long posBufferRead;
-    unsigned long posBufferWritten;
-    unsigned long sizeOfCurrentPacket;
-    unsigned long numOOBItems;
+    unsigned long posBufferRead[2];
+    unsigned long posBufferWritten[2];
+    size_t posBufferStartOffset[2];
     int endStateFlags;
 } redisInMemoryReplReceive;
 
@@ -633,8 +641,7 @@ typedef struct redisInMemoryReplReceive {
 #define INMEMORY_STATE_READYTOSEND 3
 
 #define INMEMORY_SEND_MAXSENDBUFFER 4
-#define INMEMORY_SEND_MINLENGTHOOB (1024 * 1024 * 1024)
-
+#define INMEMORY_MIN_READ (17 * 1024)
 
 typedef struct redisInMemoryReplSend {
     int id;
@@ -644,17 +651,13 @@ typedef struct redisInMemoryReplSend {
     int curSequence;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
-    HANDLE pingHandle;
-    long long lastPingMS;
     int * sizeFilled[INMEMORY_SEND_MAXSENDBUFFER];
-    int virtualSize[INMEMORY_SEND_MAXSENDBUFFER];
     int * sequence;
     int * sendState;
     int activeBuffer;
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
-//    void * heapStart;
     size_t heapOffset;
 } redisInMemoryReplSend;
 
@@ -1173,7 +1176,6 @@ void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void replicationSendNewlineToMaster(void);
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
-void sendInMemoryBuffersToSlavePing(aeEventLoop *el, int id);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);

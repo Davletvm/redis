@@ -119,28 +119,17 @@ void SendActiveBufferIM(redisInMemoryReplSend * inm)
         else
             inm->controlAlias[inm->prevActiveBuffer]->sizeOfNext = 0;
         inm->sendState[inm->prevActiveBuffer] = INMEMORY_STATE_READYTOSEND;
+        inm->controlAlias[inm->prevActiveBuffer]->offset = 0;
         inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
         redisLog(REDIS_DEBUG, "Ready to send buffer %d, sequence:%d", inm->prevActiveBuffer, inm->sequence[inm->prevActiveBuffer]);
         ResetEvent(inm->sentDoneEvents[inm->prevActiveBuffer]);
         SetEvent(inm->doSendEvents[inm->prevActiveBuffer]);
         server.unixtime = time(NULL);
-        inm->lastPingMS = server.unixtime;
     }
     if (inm->activeBuffer != -1) {
         inm->prevActiveBuffer = inm->activeBuffer;
         inm->sendState[inm->activeBuffer] = INMEMORY_STATE_FILLED;
-        inm->controlAlias[inm->activeBuffer]->sizeOfInline = inm->sizeFilled[inm->activeBuffer][0] - sizeof(redisInMemoryReplSendControl);
         inm->controlAlias[inm->activeBuffer]->sizeOfThis = inm->sizeFilled[inm->activeBuffer][0];
-        int x = 0; int y = inm->controlAlias[inm->activeBuffer]->countOfOOB - 1;
-        WSABUF * buffer = inm->buffer[inm->activeBuffer] + inm->bufferSize - inm->controlAlias[inm->activeBuffer]->countOfOOB * sizeof(WSABUF);
-        while (x < y) {
-            WSABUF temp;
-            temp = buffer[x];
-            buffer[x] = buffer[y];
-            buffer[y] = temp;
-            x++;
-            y--;
-        }
     }
 }
 
@@ -155,10 +144,9 @@ static int WaitForFreeBuffer(rio * r)
         if (rval == WAIT_OBJECT_0) {
             redisLog(REDIS_DEBUG, "Got free buffer %d", x);
             ResetEvent(inm->sentDoneEvents[x]);
-            inm->virtualSize[x] = inm->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
             found = TRUE;
             inm->sendState[x] = INMEMORY_STATE_READYTOFILL;
-            inm->controlAlias[x]->countOfOOB = 0;
+            inm->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
         } else if (rval != WAIT_TIMEOUT) {
             return 0;
         }
@@ -174,7 +162,6 @@ static int WaitForFreeBuffer(rio * r)
     when signaled to do so.
 */
 static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
-    char * buffer;
     ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
@@ -193,33 +180,24 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
                 return 0;
             continue;
         }
-        leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer][0] - (inm->controlAlias[inm->activeBuffer]->countOfOOB  + 1) * sizeof(WSABUF);
-        if (len > INMEMORY_SEND_MINLENGTHOOB) {
-            lenToCopy = sizeof(WSABUF);
-        } else {
+        leftInActiveBuffer = inm->bufferSize - inm->sizeFilled[inm->activeBuffer][0];
+        if (len > leftInActiveBuffer)
+            lenToCopy = leftInActiveBuffer;
+        else
             lenToCopy = len;
-        }
-        if (lenToCopy > leftInActiveBuffer || inm->virtualSize[inm->activeBuffer] > inm->bufferSize) {
-            SendActiveBuffer(r);
-            continue;
-        }
         inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
-        buffer = inm->buffer[inm->activeBuffer] + *(inm->sizeFilled[inm->activeBuffer]);
-        int l = (int)len;
-        if (len >= INMEMORY_SEND_MINLENGTHOOB) {
-            inm->virtualSize[inm->activeBuffer] += l;
-            WSABUF temp;
-            temp.len = (ULONG) l;
-            temp.buf = (CHAR*)buf + inm->heapOffset;
-            l = (int) (buffer - inm->buffer[inm->activeBuffer]);
-            buffer = inm->buffer[inm->activeBuffer] - ++(inm->controlAlias[inm->activeBuffer]->countOfOOB) * sizeof(WSABUF);
-            memcpy(buffer, &temp, sizeof(WSABUF));
-        } else {
-            inm->virtualSize[inm->activeBuffer] +=  len;
-            inm->sizeFilled[inm->activeBuffer][0] += len;
-            memcpy(buffer, buf, len);
+        inm->sizeFilled[inm->activeBuffer][0] += lenToCopy;
+        memcpy(inm->buffer[inm->activeBuffer] + inm->sizeFilled[inm->activeBuffer][0], buf, lenToCopy);
+        if (leftInActiveBuffer == lenToCopy) {
+            SendActiveBuffer(r);
         }
-        return 1;
+        if (len > leftInActiveBuffer) {
+            len -= lenToCopy;
+            buf = (char*) buf + lenToCopy;
+            continue;
+        } else {
+            return 1;
+        }
     }
     return 0;
 }
@@ -249,70 +227,101 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 }
 
 
-static int ReadOOBItems(redisInMemoryReplReceive * inm)
-{
-    if (inm->posBufferRead != inm->posBufferWritten || inm->posBufferWritten != inm->sendControl->sizeOfThis) {
-        redisLog(REDIS_WARNING, "Error while reading: Too many OOB items");
-        return 0;
-    }
-    if (!(inm->endStateFlags & INMEMORY_ENDSTATE_ENDINLINE)) {
-        redisLog(REDIS_WARNING, "Error while reading: long inline buffer");
-        return 0;
-    }
-    if (inm->numOOBItems != inm->sendControl->countOfOOB) {
-        redisLog(REDIS_WARNING, "Error while reading: OOB count mismatch");
-        return 0;
-    }
-    for (int x = 0; x < inm->numOOBItems; x++) {
-        WSABUF * wsa = inm->buffer + inm->bufferSize - sizeof(WSABUF)* x;
-        inm->shortcutBuffer = wsa->buf;
-        inm->shortCutBufferSize = wsa->len;
-        while (inm->shortCutBufferSize) {
+static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
+    while (1) {
+
+        if (!inm->sendControlRead.sizeOfThis) {
             if (!PollForRead(inm))
                 return 0;
+            continue;
         }
+
+        off_t offsetWritten = inm->posBufferWritten[inm->activeBufferRead] + inm->posBufferStartOffset[inm->activeBufferRead];
+        off_t offsetRead = inm->posBufferRead[inm->activeBufferRead] + inm->posBufferStartOffset[inm->activeBufferRead];
+        off_t offsetNextControl = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis;
+
+        if (offsetRead == offsetWritten) {
+            int nextBuffer = (inm->activeBufferRead + 1) % 2;
+            if (inm->posBufferWritten[nextBuffer]) {
+                inm->posBufferRead[inm->activeBufferRead] = 0;
+                inm->posBufferWritten[inm->activeBufferRead] = 0;
+                inm->activeBufferRead = nextBuffer;
+                continue;
+            } else {
+                if (!PollForRead(inm))
+                    return 0;
+                continue;
+            }
+        }
+        if (offsetRead >= offsetNextControl && inm->sendControlRead.sizeOfThis && inm->sendControlRead.sizeOfNext) {
+            if (offsetWritten >= offsetNextControl + sizeof(redisInMemoryReplSendControl)) {
+                inm->posBufferRead[inm->activeBufferRead] = offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset[inm->activeBufferRead];
+                memcpy(&inm->sendControlRead,
+                    inm->buffer[inm->activeBufferRead] + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset[inm->activeBufferRead],
+                    sizeof(redisInMemoryReplSendControl));
+                inm->sendControlRead.offset = offsetNextControl;
+            } else {
+                inm->posBufferRead[inm->activeBufferRead] = offsetWritten - inm->posBufferStartOffset[inm->activeBufferRead];
+            }
+            continue;
+        }
+
+        if (offsetNextControl < offsetWritten) {
+            inm->virtualBuffer.size = offsetNextControl - offsetRead;
+        } else {
+            inm->virtualBuffer.size = offsetWritten- offsetRead;
+        }
+        inm->virtualBuffer.sourceBuffer = inm->activeBufferRead;
+        inm->virtualBuffer.sourceOffset = inm->posBufferRead[inm->activeBufferRead];
+        inm->posBufferRead[inm->activeBufferRead] += inm->virtualBuffer.size;
+        return 1;
     }
-    inm->numOOBItems = 0;
-    inm->posBufferWritten = 0;
-    inm->endStateFlags &= ~INMEMORY_ENDSTATE_ENDINLINE;
-    inm->posBufferRead = sizeof(redisInMemoryReplSendControl);
-    return 1;
 }
+
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
-    ssize_t leftInActiveBuffer;
     size_t lenToCopy;
     redisInMemoryReplReceive * inm = r->io.memoryReceive.inMemory;
     while (server.repl_inMemoryReceive == inm) {
-        BOOL handled = 0;
-        if (inm->posBufferWritten >= sizeof(redisInMemoryReplSendControl)) {
-            if (len >= INMEMORY_SEND_MINLENGTHOOB && inm->numOOBItems < inm->sendControl->countOfOOB) {
-                WSABUF * wsa = inm->buffer + inm->bufferSize - sizeof(WSABUF)* inm->numOOBItems++;
-                wsa->buf = buf;
-                wsa->len = (ULONG)len;
-                handled = 1;
-            } else if (len >= INMEMORY_SEND_MINLENGTHOOB) {  // this one belongs to the next packet
-                if (!ReadOOBItems(inm))
+        if (inm->shortcutBuffer) {
+            if (inm->shortCutBufferSize < INMEMORY_MIN_READ) {
+                buf = inm->shortcutBuffer;
+                len = inm->shortCutBufferSize;
+                inm->shortcutBuffer = NULL;
+                if (len == 0)
+                    return 1;
+                continue;
+            }
+        } else {
+            if (inm->virtualBuffer.size == 0) {
+                if (inm->totalRead == inm->posBufferStartOffset[inm->activeBufferRead] + inm->posBufferRead[inm->activeBufferRead]) {
+                    if (len < inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->totalRead)
+                        inm->shortCutBufferSize = len;
+                    else
+                        inm->shortCutBufferSize = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->totalRead;
+                    if (inm->shortCutBufferSize > INMEMORY_MIN_READ) {
+                        inm->shortcutBuffer = buf;
+                        if (!PollForRead(inm))
+                            return 0;
+                        continue;
+                    }
+                }
+                if (!CreateVirtualBuffer(inm))
                     return 0;
                 continue;
-            } else { // Inline items
-                leftInActiveBuffer = inm->posBufferWritten - inm->posBufferRead;
-                if (len <= leftInActiveBuffer) {
-                    memcpy(buf, inm->buffer + inm->posBufferRead, len);
-                    inm->posBufferRead += len;
-                    handled = 1;
-                }
             }
-            if (handled) {
-                if (inm->posBufferRead == inm->posBufferWritten && inm->posBufferWritten == inm->sendControl->sizeOfThis && inm->sendControl->countOfOOB == inm->numOOBItems)
-                    if (!ReadOOBItems(inm))
-                        return 0;
+            if (len > inm->virtualBuffer.size)
+                lenToCopy = inm->virtualBuffer.size;
+            else
+                lenToCopy = len;
+            memcpy(buf, inm->virtualBuffer.sourceOffset + inm->buffer[inm->virtualBuffer.sourceBuffer], lenToCopy);
+            inm->virtualBuffer.size -= lenToCopy;
+            inm->virtualBuffer.sourceOffset += lenToCopy;
+            if (lenToCopy == len)
                 return 1;
-            }
-        }
-        if (!PollForRead(inm)) {
-            return 0;
+            len -= lenToCopy;
+            buf = (char*)buf + lenToCopy;
         }
     }
     return 0;
