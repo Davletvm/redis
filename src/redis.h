@@ -623,10 +623,8 @@ typedef struct redisInMemoryReplReceive {
     int activeBufferRead;
     int activeBufferWrite;
     off_t totalRead;
-    char * shortcutBuffer;
     redisInMemoryReplSendControl sendControlWrite;
     redisInMemoryReplSendControl sendControlRead;
-    unsigned long shortCutBufferSize;
     unsigned long bufferSize;
     unsigned long posBufferRead[2];
     unsigned long posBufferWritten[2];

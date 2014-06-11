@@ -242,9 +242,9 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
 
         if (offsetRead == offsetWritten) {
             int nextBuffer = (inm->activeBufferRead + 1) % 2;
+            inm->posBufferRead[inm->activeBufferRead] = 0;
+            inm->posBufferWritten[inm->activeBufferRead] = 0;
             if (inm->posBufferWritten[nextBuffer]) {
-                inm->posBufferRead[inm->activeBufferRead] = 0;
-                inm->posBufferWritten[inm->activeBufferRead] = 0;
                 inm->activeBufferRead = nextBuffer;
                 continue;
             } else {
@@ -284,45 +284,22 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
     size_t lenToCopy;
     redisInMemoryReplReceive * inm = r->io.memoryReceive.inMemory;
     while (server.repl_inMemoryReceive == inm) {
-        if (inm->shortcutBuffer) {
-            if (inm->shortCutBufferSize < INMEMORY_MIN_READ) {
-                buf = inm->shortcutBuffer;
-                len = inm->shortCutBufferSize;
-                inm->shortcutBuffer = NULL;
-                if (len == 0)
-                    return 1;
-                continue;
-            }
-        } else {
-            if (inm->virtualBuffer.size == 0) {
-                if (inm->totalRead == inm->posBufferStartOffset[inm->activeBufferRead] + inm->posBufferRead[inm->activeBufferRead]) {
-                    if (len < inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->totalRead)
-                        inm->shortCutBufferSize = len;
-                    else
-                        inm->shortCutBufferSize = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->totalRead;
-                    if (inm->shortCutBufferSize > INMEMORY_MIN_READ) {
-                        inm->shortcutBuffer = buf;
-                        if (!PollForRead(inm))
-                            return 0;
-                        continue;
-                    }
-                }
-                if (!CreateVirtualBuffer(inm))
-                    return 0;
-                continue;
-            }
-            if (len > inm->virtualBuffer.size)
-                lenToCopy = inm->virtualBuffer.size;
-            else
-                lenToCopy = len;
-            memcpy(buf, inm->virtualBuffer.sourceOffset + inm->buffer[inm->virtualBuffer.sourceBuffer], lenToCopy);
-            inm->virtualBuffer.size -= lenToCopy;
-            inm->virtualBuffer.sourceOffset += lenToCopy;
-            if (lenToCopy == len)
-                return 1;
-            len -= lenToCopy;
-            buf = (char*)buf + lenToCopy;
+        if (inm->virtualBuffer.size == 0) {
+            if (!CreateVirtualBuffer(inm))
+                return 0;
+            continue;
         }
+        if (len > inm->virtualBuffer.size)
+            lenToCopy = inm->virtualBuffer.size;
+        else
+            lenToCopy = len;
+        memcpy(buf, inm->virtualBuffer.sourceOffset + inm->buffer[inm->virtualBuffer.sourceBuffer], lenToCopy);
+        inm->virtualBuffer.size -= lenToCopy;
+        inm->virtualBuffer.sourceOffset += lenToCopy;
+        if (lenToCopy == len)
+            return 1;
+        len -= lenToCopy;
+        buf = (char*)buf + lenToCopy;
     }
     return 0;
 }
