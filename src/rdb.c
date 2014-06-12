@@ -691,11 +691,12 @@ int rdbSave(char *filename) {
         }
 
         rioInitWithFile(&rdb, fp);
+
+        if (server.rdb_checksum)
+            rdb.update_cksum = rioGenericUpdateChecksum;
     } else {
         rioInitWithMemorySend(&rdb, server.repl_inMemorySend);
     }
-    if (server.rdb_checksum)
-        rdb.update_cksum = rioGenericUpdateChecksum;
     snprintf(magic, sizeof(magic), "REDIS%04d", listLength(server.pubsub_scripts) || server.protects_used ? REDIS_MSRDB_VERSION : REDIS_RDB_VERSION);
     if (rdbWriteRaw(&rdb,magic,9) == -1) goto werr;
 
@@ -1285,7 +1286,7 @@ readagain:
         if (rioRead(&rdb,&cksum,8) == 0) goto eoferr;
         memrev64ifbe(&cksum);
         if (cksum == 0) {
-            redisLog(REDIS_WARNING,"RDB file was saved with checksum disabled: no check performed.");
+            redisLog(REDIS_NOTICE,"RDB file was saved with checksum disabled: no check performed.");
         } else if (cksum != expected) {
             redisLog(REDIS_WARNING,"Wrong RDB checksum. Aborting now.");
             exit(1);

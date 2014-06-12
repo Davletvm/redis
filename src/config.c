@@ -507,9 +507,6 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0], "repl-inmemory-receive-buffer-size") &&
             argc == 2) {
             server.repl_inMemoryReceiveBuffer = memtoll(argv[1], NULL);
-        } else if (!strcasecmp(argv[0], "repl-inmemory-shortcut-min-size") &&
-            argc == 2) {
-            server.repl_inMemoryShortcutMin = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0], "sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
              * mode ASAP. */
@@ -910,9 +907,6 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-receive-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
         server.repl_inMemoryReceiveBuffer = ll;
-    } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-shortcut-min-size")) {
-        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1) goto badfmt;
-        server.repl_inMemoryShortcutMin = ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
 
@@ -1035,7 +1029,6 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("hz",server.hz);
     config_get_numerical_field("repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer);
     config_get_numerical_field("repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer);
-    config_get_numerical_field("repl-inmemory-shortcut-min-size", server.repl_inMemoryShortcutMin);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1834,7 +1827,6 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state, "repl-inmemory", server.repl_inMemoryUse, REDIS_DEFAULT_INMEMORYREPL);
     rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
-    rewriteConfigBytesOption(state, "repl-inmemory-shortcut-min-size", server.repl_inMemoryShortcutMin, REDIS_DEFAULT_INMEMORY_SHORTCUTMIN);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines

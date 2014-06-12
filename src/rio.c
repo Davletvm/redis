@@ -186,8 +186,9 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
         else
             lenToCopy = len;
         inm->sendState[inm->activeBuffer] = INMEMORY_STATE_BEINGFILLED;
-        inm->sizeFilled[inm->activeBuffer][0] += lenToCopy;
+        //redisLog(REDIS_DEBUG, "writing %d buffer %lld offset %lld", lenToCopy, inm->buffer[inm->activeBuffer], inm->sizeFilled[inm->activeBuffer][0]);
         memcpy(inm->buffer[inm->activeBuffer] + inm->sizeFilled[inm->activeBuffer][0], buf, lenToCopy);
+        inm->sizeFilled[inm->activeBuffer][0] += lenToCopy;
         if (leftInActiveBuffer == lenToCopy) {
             SendActiveBuffer(r);
         }

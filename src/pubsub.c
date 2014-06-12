@@ -498,6 +498,12 @@ void setkeyspacescriptClear(redisClient *c)
 
 void setkeyspacescriptCommand(redisClient *c)
 {
+    if (server.lua_inKeyspaceScript) {
+        addReplyErrorFormat(c,
+            "SETKSSCRIPT command not allowed inside of event script");
+        return;
+    }
+
     if (c->argc == 4) {
         setkeyspacescriptNewScript(c);
     } else if (c->argc == 3) {

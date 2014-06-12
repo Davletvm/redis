@@ -249,7 +249,7 @@ struct redisCommand redisCommandTable[] = {
     {"punsubscribe",punsubscribeCommand,-1,"rpslt",0,NULL,0,0,0,0,0},
     {"publish",publishCommand,3,"pltr",0,NULL,0,0,0,0,0},
     {"pubsub",pubsubCommand,-2,"pltrR",0,NULL,0,0,0,0,0},
-    {"setksscript",setkeyspacescriptCommand,-1,"rpslt",0,NULL,0,0,0,0,0},
+    {"setksscript",setkeyspacescriptCommand,-1,"rplt",0,NULL,0,0,0,0,0},
     {"protect", protectkeyCommand, -2, "w",0,noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"unprotect", unprotectkeyCommand, -2, "w", 0, noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"isprotect", isprotectkeyCommand, 2, "r", 0, NULL, 1, 1, 1, 0, 0 },
@@ -1468,7 +1468,6 @@ void initServerConfig() {
     server.repl_inMemoryUse = REDIS_DEFAULT_INMEMORYREPL;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
-    server.repl_inMemoryShortcutMin = REDIS_DEFAULT_INMEMORY_SHORTCUTMIN;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;

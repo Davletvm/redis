@@ -138,7 +138,6 @@
 #define REDIS_DEFAULT_INMEMORYREPL 0
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
-#define REDIS_DEFAULT_INMEMORY_SHORTCUTMIN (1024 * 128)
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -607,6 +606,7 @@ typedef struct redisInMemoryReplSendControl{
     int sizeOfThis;
     int sizeOfNext;
     off_t offset;
+    uint64_t cksum;
 }redisInMemoryReplSendControl;
 
 typedef struct redisInMemoryVirtualBuffer
@@ -830,7 +830,6 @@ struct redisServer {
     int repl_inMemoryUse; /* Don't use disk to synchornize with slaves */
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
-    int repl_inMemoryShortcutMin; /* Size to use read directly into allocated object */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */

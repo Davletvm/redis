@@ -1091,11 +1091,12 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         replicationAbortSyncTransfer();
         return;
     }
+    redisLog(REDIS_DEBUG, "Requested: %d, Read: %d, Total: %lld", readlen, nread, inm->totalRead + nread);
     server.repl_transfer_lastio = server.unixtime;
     inm->totalRead += nread;
     inm->posBufferWritten[inm->activeBufferWrite] += nread;
     if (!inm->sendControlWrite.sizeOfThis && inm->posBufferWritten[inm->activeBufferWrite] >= sizeof(redisInMemoryReplSendControl)) {
-        memcpy(&inm->sendControlWrite, inm->buffer, sizeof(redisInMemoryReplSendControl));
+        memcpy(&inm->sendControlWrite, inm->buffer[inm->activeBufferWrite], sizeof(redisInMemoryReplSendControl));
         inm->sendControlWrite.offset = 0;
         memcpy(&inm->sendControlRead, &inm->sendControlWrite, sizeof(redisInMemoryReplSendControl));
         inm->posBufferRead[inm->activeBufferWrite] = sizeof(redisInMemoryReplSendControl);
@@ -1108,7 +1109,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             memcpy(&inm->sendControlWrite, inm->buffer[inm->activeBufferWrite] + offsetOfNewControl - inm->posBufferStartOffset[inm->activeBufferWrite], sizeof(redisInMemoryReplSendControl));
             inm->sendControlWrite.offset = offsetOfNewControl;
         }
-        if (!inm->sendControlWrite.sizeOfNext && inm->totalRead == inm->posBufferStartOffset[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite]) {
+        if (!inm->sendControlWrite.sizeOfNext && inm->totalRead == inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis) {
             inm->endStateFlags |= INMEMORY_ENDSTATE_ENDFOUND;
         }
     }
