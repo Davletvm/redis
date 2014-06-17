@@ -98,12 +98,16 @@ SOCKET RFDMap::lookupSocket(RFD rfd) {
 }
 
 int RFDMap::lookupPosixFD(RFD rfd) {
-    if (RFDToPosixFDMap.find(rfd)  != RFDToPosixFDMap.end()) {
-        return RFDToPosixFDMap[rfd];
-    } else {
-//   redisLog( REDIS_DEBUG, "RFDMap::lookupPosixFD() - failed to find posix FD!" );
-        return -1;
-    }
+	if (RFDToPosixFDMap.find(rfd) != RFDToPosixFDMap.end()) {
+		return RFDToPosixFDMap[rfd];
+	}
+	else if (rfd >= 0 && rfd <= 2) {
+		return rfd;
+	}
+	else {
+		//   	redisLog( REDIS_DEBUG, "RFDMap::lookupPosixFD() - failed to find posix FD!" );
+		return -1;
+	}
 }
 
 RFD RFDMap::lookupRFD(SOCKET s) {
