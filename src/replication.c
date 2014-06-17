@@ -417,7 +417,7 @@ void sendBulkToSlaveLenDone(aeEventLoop *el, int fd, void *privdata, int written
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
-    sdsfree((sds)req->data);
+    sdsfree((sds)req->buf);
 }
 
 
@@ -434,10 +434,8 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
         * operations) will never be smaller than the few bytes we need. */
         sds bulkcount;
 
-        redisLog(REDIS_VERBOSE, "Sending in memory prefix");
+        redisLog(REDIS_DEBUG, "Sending in memory prefix");
         bulkcount = sdscatprintf(sdsempty(), "$%lld\r\n", (long long) -2);
-
-        int len4 = 4;
 
         result = aeWinSocketSend(fd, bulkcount, (int)sdslen(bulkcount),
             el, slave, bulkcount, sendBulkToSlaveLenDone);

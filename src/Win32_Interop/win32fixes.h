@@ -298,8 +298,6 @@ int aeWinCloseSocket(int fd);
 int aeWinReceiveDone(int fd);
 int aeWinSocketSend(int fd, char *buf, int len, 
                     void *eventLoop, void *client, void *data, void *proc);
-int aeWinSocketSendMulti(int fd, WSABUF * bufs, DWORD count,
-    void *eventLoop, void *client, void *data, void *proc);
 int aeWinListen(int rfd, int backlog);
 int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len);
 int aeWinSocketConnect(int fd, const struct sockaddr *sa, int len);

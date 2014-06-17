@@ -31,6 +31,7 @@
  * NOTE: OVERLAPPED must be first member */
 typedef struct asendreq {
     OVERLAPPED ov;
+    WSABUF wbuf;
     aeWinSendReq req;
     aeFileProc *proc;
     aeEventLoop *eventLoop;
