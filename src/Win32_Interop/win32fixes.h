@@ -35,7 +35,7 @@ typedef long long _off_t_;
 #include <limits.h>  /* INT_MAX */
 #include <process.h>
 #include <sys/types.h>
-
+#include <sys/stat.h>
 #define off_t _off_t_
 
 

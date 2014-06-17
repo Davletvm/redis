@@ -1661,7 +1661,11 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
     int retval = 0;
     int fd = open(configfile,O_RDWR|O_CREAT,0644);
     int content_size = sdslen(content), padding = 0;
+#ifdef _WIN32
+	struct _stat64 sb;
+#else
     struct stat sb;
+#endif
     sds content_padded;
 
     /* 1) Open the old file (or create a new one if it does not
