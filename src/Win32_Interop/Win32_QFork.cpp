@@ -32,6 +32,7 @@
 #include "Win32_QFork_impl.h"
 #include "Win32_dlmalloc.h"
 #include "Win32_SmartHandle.h"
+#include "Win32_Service.h"
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -1124,6 +1125,9 @@ extern "C"
                 FILE_ATTRIBUTE_NORMAL, 
                 NULL );
 #endif
+		// service commands do not launch an instance of redis directly
+		if (HandleServiceCommands(argc, argv) == TRUE)
+			return 0;
 
         StartupStatus status = QForkStartup(argc, argv);
         if (status == ssCONTINUE_AS_MASTER) {

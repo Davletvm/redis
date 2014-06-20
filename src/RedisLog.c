@@ -27,9 +27,12 @@
 #include <malloc.h>
 #include <string.h>
 #include <process.h>
+#include "redis.h"
+#ifdef _WIN32
 #include "win32_Interop/win32Fixes.h"
+#include "win32_Interop/Win32_EventLog.h"
+#endif
 #include <time.h>
-
 
 static int verbosity = REDIS_WARNING;
 static char* logFile = NULL;
@@ -99,13 +102,14 @@ void redisLogRaw(int level, const char *msg) {
         off = strftime(buf,sizeof(buf),"%d %b %H:%M:%S.",localtime(&tv.tv_sec));
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
 #endif
-        fprintf(fp,"[%d] %s %c %s\n",(int)getpid(),buf,c[level],msg);
+        fprintf(fp,"[%d] %s %c %s\n",(int)_getpid(),buf,c[level],msg);
     }
     fflush(fp);
+    
+	if (log_to_stdout == 0) fclose(fp);
 
-    if (logFile) fclose(fp);
 #ifdef _WIN32
-    // replace with event log or ETW?
+	if (server.syslog_enabled) WriteEventLog(server.syslog_ident, msg);
 #else
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 #endif
@@ -157,9 +161,6 @@ err:
     if (!log_to_stdout) close(fd);
 #endif
 }
-
-
-
 
 
 

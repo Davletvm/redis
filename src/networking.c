@@ -584,7 +584,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(privdata);
 
     cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
-    if (cfd == AE_ERR) {
+    if (cfd == ANET_ERR) {
         redisLog(REDIS_WARNING,"Accepting client connection: %s", server.neterr);
         return;
     }
@@ -599,7 +599,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(privdata);
 
     cfd = anetUnixAccept(server.neterr, fd);
-    if (cfd == AE_ERR) {
+    if (cfd == ANET_ERR) {
         redisLog(REDIS_WARNING,"Accepting client connection: %s", server.neterr);
         return;
     }
@@ -664,7 +664,7 @@ void freeClient(redisClient *c) {
     }
 
     /* Log link disconnection with slave */
-    if (c->flags & REDIS_SLAVE) {
+    if (c->flags & REDIS_SLAVE && !(c->flags & REDIS_MONITOR)) {
         char ip[REDIS_IP_STR_LEN];
 
         if (anetPeerToString(c->fd,ip,sizeof(ip),NULL) != -1) {
@@ -858,7 +858,6 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-
     /* move list pointer to last one sent or first in list */
     listRewind(c->reply, &li);
     ln = listNext(&li);
@@ -918,12 +917,13 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory)) break;
     }
+
     if (totwritten > 0) {
-        /* For clients representing masters we don't count sending data
-         * as an interaction, since we always send REPLCONF ACK commands
-         * that take some time to just fill the socket output buffer.
-         * We just rely on data / pings received for timeout detection. */
-        if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
+		/* For clients representing masters we don't count sending data
+		* as an interaction, since we always send REPLCONF ACK commands
+		* that take some time to just fill the socket output buffer.
+		* We just rely on data / pings received for timeout detection. */
+		if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
     }
 
 }
@@ -1401,8 +1401,9 @@ int getClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
             formatPeerId(peerid, peerid_len, "MASTER", 0);
             retval = 0;
         } else {
-            formatPeerId(peerid,peerid_len,ip,port);\
+            formatPeerId(peerid,peerid_len,ip,port);
         }
+
         return (retval == -1) ? REDIS_ERR : REDIS_OK;
     }
 }

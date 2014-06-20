@@ -90,7 +90,7 @@ int InitWinsock() {
     int iError;
 
     wVers = MAKEWORD(2, 2);
-    iError = f_WSAStartup(wVers, &t_wsa);
+	iError = f_WSAStartup(wVers, &t_wsa);
 
     if(iError != NO_ERROR || LOBYTE(t_wsa.wVersion) != 2 || HIBYTE(t_wsa.wVersion) != 2 ) {
         exit(1);
@@ -101,7 +101,7 @@ int InitWinsock() {
 
 auto f_WSACleanup = dllfunctor_stdcall<int>("ws2_32.dll", "WSACleanup");
 int  CleanupWinsock() {
-    return f_WSACleanup();
+	return f_WSACleanup();
 }
 
 BOOL SetFDInformation(int FD, DWORD mask, DWORD flags){
@@ -219,6 +219,7 @@ BOOL FDAPI_ConnectEx(int fd,const struct sockaddr *name,int namelen,PVOID lpSend
             }
 
 			EnableFastLoopback(s);
+
             return connectex(s,name,namelen,lpSendBuffer,dwSendDataLength,lpdwBytesSent,lpOverlapped);
         }
     } CATCH_AND_REPORT()
@@ -588,12 +589,14 @@ int redis_fstat_impl(int fd, struct __stat64 *buffer) {
     return -1;
 }
 
+
 auto f_listen = dllfunctor_stdcall<int, SOCKET, int>("ws2_32.dll", "listen");
 int redis_listen_impl(int sockfd, int backlog) {
    try {
         SOCKET s = RFDMap::getInstance().lookupSocket( sockfd );
         if( s != INVALID_SOCKET ) {
-            return f_listen( s, backlog );
+			EnableFastLoopback(s);
+			return f_listen( s, backlog );
         } else {
             errno = EBADF;
             return 0;
@@ -863,9 +866,9 @@ int redis_isatty_impl(int fd) {
             return crt_isatty(fd);
         }
         else {
-            errno = EBADF;
-            return 0;
-        }
+			errno = EBADF;
+			return 0;
+		}
     } CATCH_AND_REPORT();
 
     errno = EBADF;
