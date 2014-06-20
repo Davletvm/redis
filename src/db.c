@@ -881,8 +881,6 @@ void expireGenericCommand(redisClient *c, long long basetime, int unit) {
      * Instead we take the other branch of the IF statement setting an expire
      * (possibly in the past) and wait for an explicit DEL from the master. */
     if (when <= now && !server.loading && !server.masterhost) {
-        robj *aux;
-
         redisAssertWithInfo(c,key,dbDelete(c->db,key));
         server.dirty++;
 

@@ -1165,7 +1165,7 @@ void fireEventScript(int dbid, robj* event, robj* key, pubsubScript* script)
 
     numkeys = 1;
 
-    if (!onNewEventScript(NULL, script, &funcname))
+    if (!onNewEventScript(NULL, script, funcname))
         return;
 
     /* Push the pcall error handler function on the stack. */
@@ -1214,11 +1214,11 @@ void fireEventScript(int dbid, robj* event, robj* key, pubsubScript* script)
 
 
     robj *argv[5];
-    if (!replicationScriptCacheExists(script->scriptSha)) {
+    if (!replicationScriptCacheExists(script->scriptSha->ptr)) {
         /* This script is not in our script cache, replicate it as
         * EVAL, then add it into the script cache, as from now on
         * slaves and AOF know about it. */
-        replicationScriptCacheAdd(script->scriptSha);
+        replicationScriptCacheAdd(script->scriptSha->ptr);
 
         argv[0] = shared.eval;
         argv[1] = script->script;

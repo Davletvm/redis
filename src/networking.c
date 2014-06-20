@@ -833,11 +833,11 @@ void sendReplyListDone(aeEventLoop *el, int fd, void *privdata, int written) {
     
     if (written == -1) {
         server.orphaned_outstanding_writes--;
-        server.orphaned_sent_bytes -= objmem;
+        server.orphaned_sent_bytes -= (unsigned long) objmem;
         return;
     }
 
-    c->sent_bytes -= objmem;
+    c->sent_bytes -= (unsigned long) objmem;
     c->outstanding_writes--;
 
     if (c->bufpos == 0 && listLength(c->reply) == 0) {

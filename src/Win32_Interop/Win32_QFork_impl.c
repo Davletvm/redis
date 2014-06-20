@@ -96,7 +96,7 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->sendState = control->bufferState;
     int IDs[MAXSENDBUFFER];
     for (int x = 0; x < MAXSENDBUFFER; x++) {
-        server.repl_inMemorySend->controlAlias[x] = server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b;
+        server.repl_inMemorySend->controlAlias[x] = (redisInMemoryReplSendControl*)(server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b);
         server.repl_inMemorySend->sizeFilled[x] = &(control->buffer[x][0].s);
         server.repl_inMemorySend->sizeFilled[x][0] = sizeof(redisInMemoryReplSendControl);
         server.repl_inMemorySend->sendState[x] = INMEMORY_STATE_READYTOFILL;
@@ -127,7 +127,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     inMemoryRepl.id = buffers->id;
     inMemoryRepl.bufferSize = buffers->bufferSize;
     for (int x = 0; x < MAXSENDBUFFER; x++) {
-        inMemoryRepl.controlAlias[x] = inMemoryRepl.buffer[x] = buffers->buffer[x][0].b;
+        inMemoryRepl.controlAlias[x] = (redisInMemoryReplSendControl*)( inMemoryRepl.buffer[x] = buffers->buffer[x][0].b);
         inMemoryRepl.sizeFilled[x] = &(buffers->buffer[x][0].s);
     }
     inMemoryRepl.doSendEvents = doSend;

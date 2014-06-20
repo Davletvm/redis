@@ -1073,10 +1073,10 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             readlen = inm->bufferSize;
         }
         size_t nextControlOffset = inm->sendControlWrite.sizeOfThis + inm->sendControlWrite.offset;
-        if (nextControlOffset < inm->totalRead + readlen && nextControlOffset + sizeof(redisInMemoryReplSendControl) > inm->totalRead + readlen) {
+        if (nextControlOffset < (size_t)inm->totalRead + readlen && (_off_t)(nextControlOffset + sizeof(redisInMemoryReplSendControl)) > inm->totalRead + readlen) {
             readlen -= sizeof(redisInMemoryReplSendControl);
-        } else if (inm->totalRead + readlen > nextControlOffset + inm->sendControlWrite.sizeOfNext) {
-            readlen = nextControlOffset + inm->sendControlWrite.sizeOfNext - inm->totalRead;
+        } else if ((_off_t)(inm->totalRead + readlen) > (_off_t)(nextControlOffset + inm->sendControlWrite.sizeOfNext)) {
+            readlen = (ssize_t)(nextControlOffset + inm->sendControlWrite.sizeOfNext - inm->totalRead);
         }
         if (inm->posBufferWritten[inm->activeBufferWrite] == 0) {
             inm->posBufferStartOffset[inm->activeBufferWrite] = inm->totalRead;
@@ -1104,10 +1104,10 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         inm->posBufferRead[inm->activeBufferWrite] = sizeof(redisInMemoryReplSendControl);
     }
     if (inm->sendControlWrite.sizeOfThis) {
-        while (inm->totalRead >= inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof (redisInMemoryReplSendControl) && inm->sendControlWrite.sizeOfNext) {
+        while (inm->totalRead >= (_off_t)(inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof (redisInMemoryReplSendControl)) && inm->sendControlWrite.sizeOfNext) {
             off_t offsetOfNewControl = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis;
-            redisAssert(offsetOfNewControl >= inm->posBufferStartOffset[inm->activeBufferWrite] &&
-                offsetOfNewControl + sizeof(redisInMemoryReplSendControl) <= inm->posBufferStartOffset[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite]);
+            redisAssert(offsetOfNewControl >= (_off_t)inm->posBufferStartOffset[inm->activeBufferWrite] &&
+                (_off_t)(offsetOfNewControl + sizeof(redisInMemoryReplSendControl)) <= (_off_t)(inm->posBufferStartOffset[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite]));
             memcpy(&inm->sendControlWrite, inm->buffer[inm->activeBufferWrite] + offsetOfNewControl - inm->posBufferStartOffset[inm->activeBufferWrite], sizeof(redisInMemoryReplSendControl));
             inm->sendControlWrite.offset = offsetOfNewControl;
         }
@@ -1117,6 +1117,81 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     }
     aeWinReceiveDone(fd);
 }
+
+
+int finishedReadingBulkPayload()
+{
+#ifdef _WIN32
+    /* Close temp, since rename is unable to delete open file */
+    close(server.repl_transfer_fd);
+    server.repl_transfer_fd = -1;
+#endif
+    if (server.repl_transfer_size != -2) {
+        if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+            redisLog(REDIS_WARNING, "Failed trying to rename the temp DB into dump.rdb in MASTER <-> SLAVE synchronization: %s", strerror(errno));
+            replicationAbortSyncTransfer();
+            return REDIS_ERR;
+        }
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Flushing old data before in-memory transfer");
+        signalFlushedDb(-1);
+        emptyDb(replicationEmptyDbCallback);
+        /* Before loading the DB into memory we need to delete the readable
+        * handler, otherwise it will get called recursively since
+        * rdbLoad() will call the event loop to process events from time to
+        * time for non blocking loading. */
+        aeDeleteFileEvent(server.el, server.repl_transfer_s, AE_READABLE);
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
+        if (rdbLoad(server.rdb_filename) != REDIS_OK) {
+            redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from disk");
+            replicationAbortSyncTransfer();
+            return REDIS_ERR;
+        }
+    } else {
+        unlink(server.repl_transfer_tmpfile);
+        clearInMemoryReplBuffersSlave();
+    }
+    /* Final setup of the connected slave <- master link */
+    zfree(server.repl_transfer_tmpfile);
+#ifdef _WIN32
+    server.repl_transfer_tmpfile = NULL;
+#else
+    /* Moved before rename tmp->db in windows */
+    close(server.repl_transfer_fd);
+#endif
+    server.master = createClient(server.repl_transfer_s);
+    server.master->flags |= REDIS_MASTER;
+    server.master->authenticated = 1;
+    server.repl_state = REDIS_REPL_CONNECTED;
+    server.master->reploff = server.repl_master_initial_offset;
+
+    memcpy(server.master->replrunid, server.repl_master_runid,
+        sizeof(server.repl_master_runid));
+    /* If master offset is set to -1, this master is old and is not
+    * PSYNC capable, so we flag it accordingly. */
+    if (server.master->reploff == -1)
+        server.master->flags |= REDIS_PRE_PSYNC;
+    redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Finished with success");
+    /* Restart the AOF subsystem now that we finished the sync. This
+    * will trigger an AOF rewrite, and when done will start appending
+    * to the new file. */
+    if (server.aof_state != REDIS_AOF_OFF) {
+        int retry = 10;
+
+        stopAppendOnly();
+        while (retry-- && startAppendOnly() == REDIS_ERR) {
+            redisLog(REDIS_WARNING, "Failed enabling the AOF after successful master synchronization! Trying it again in one second.");
+            sleep(1);
+        }
+        if (!retry) {
+            redisLog(REDIS_WARNING, "FATAL: this slave instance finished the synchronization with its master, but the AOF can't be turned on. Exiting now.");
+            exit(1);
+        }
+    }
+    return REDIS_OK;
+}
+
+
+
 
 int readSyncBulkPayloadInMemory(int fd)
 {
@@ -1265,77 +1340,6 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
 error:
     replicationAbortSyncTransfer();
     return;
-}
-
-int finishedReadingBulkPayload()
-{
-#ifdef _WIN32
-    /* Close temp, since rename is unable to delete open file */
-    close(server.repl_transfer_fd);
-    server.repl_transfer_fd = -1;
-#endif
-    if (server.repl_transfer_size != -2) {
-        if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
-            redisLog(REDIS_WARNING, "Failed trying to rename the temp DB into dump.rdb in MASTER <-> SLAVE synchronization: %s", strerror(errno));
-            replicationAbortSyncTransfer();
-            return REDIS_ERR;
-        }
-        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Flushing old data before in-memory transfer");
-        signalFlushedDb(-1);
-        emptyDb(replicationEmptyDbCallback);
-        /* Before loading the DB into memory we need to delete the readable
-        * handler, otherwise it will get called recursively since
-        * rdbLoad() will call the event loop to process events from time to
-        * time for non blocking loading. */
-        aeDeleteFileEvent(server.el, server.repl_transfer_s, AE_READABLE);
-        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
-        if (rdbLoad(server.rdb_filename) != REDIS_OK) {
-            redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from disk");
-            replicationAbortSyncTransfer();
-            return REDIS_ERR;
-        }
-    } else {
-        unlink(server.repl_transfer_tmpfile);
-        clearInMemoryReplBuffersSlave();
-    }
-    /* Final setup of the connected slave <- master link */
-    zfree(server.repl_transfer_tmpfile);
-#ifdef _WIN32
-    server.repl_transfer_tmpfile = NULL;
-#else
-    /* Moved before rename tmp->db in windows */
-    close(server.repl_transfer_fd);
-#endif
-    server.master = createClient(server.repl_transfer_s);
-    server.master->flags |= REDIS_MASTER;
-    server.master->authenticated = 1;
-    server.repl_state = REDIS_REPL_CONNECTED;
-    server.master->reploff = server.repl_master_initial_offset;
-
-    memcpy(server.master->replrunid, server.repl_master_runid,
-        sizeof(server.repl_master_runid));
-    /* If master offset is set to -1, this master is old and is not
-    * PSYNC capable, so we flag it accordingly. */
-    if (server.master->reploff == -1)
-        server.master->flags |= REDIS_PRE_PSYNC;
-    redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Finished with success");
-    /* Restart the AOF subsystem now that we finished the sync. This
-    * will trigger an AOF rewrite, and when done will start appending
-    * to the new file. */
-    if (server.aof_state != REDIS_AOF_OFF) {
-        int retry = 10;
-
-        stopAppendOnly();
-        while (retry-- && startAppendOnly() == REDIS_ERR) {
-            redisLog(REDIS_WARNING, "Failed enabling the AOF after successful master synchronization! Trying it again in one second.");
-            sleep(1);
-        }
-        if (!retry) {
-            redisLog(REDIS_WARNING, "FATAL: this slave instance finished the synchronization with its master, but the AOF can't be turned on. Exiting now.");
-            exit(1);
-        }
-    }
-    return REDIS_OK;
 }
 
 

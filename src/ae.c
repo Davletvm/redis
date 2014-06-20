@@ -414,7 +414,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             when = when - now;
             if (when < 0) when = 0;
             tvp = &tv;
-            tv.tv_sec = when / 1000;
+            tv.tv_sec = (long)(when / 1000);
             tv.tv_usec = (when % 1000) * 1000;
         } else {
             /* If we have to check for events but need to return

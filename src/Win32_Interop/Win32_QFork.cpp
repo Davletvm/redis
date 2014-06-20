@@ -692,7 +692,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             size_t SPBufferSize = offsetof(SPBuffer, b) + sendBufferSize;
             SPBufferSize = (SPBufferSize + 0x0f) & ~0x0f;
             size += SPBufferSize * MAXSENDBUFFER;
-            g_pQForkControl->inMemoryBuffersControlOffset = SPBufferSize;
+            g_pQForkControl->inMemoryBuffersControlOffset = (int)SPBufferSize;
 
             if (g_pQForkControl->inMemoryBuffersControl) {
                 IFFAILTHROW(UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl), "BeginForkOperation: UnmapViewOfFile failed");
@@ -723,7 +723,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 g_pQForkControl->inMemoryBuffersControl->buffer[x] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl) + SPBufferSize * x);
             }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
-            g_pQForkControl->inMemoryBuffersControl->heapOffset = (char*)g_pQForkControl->altHeapStart - g_pQForkControl->heapStart;
+            g_pQForkControl->inMemoryBuffersControl->heapOffset = (char*)g_pQForkControl->altHeapStart - (char*)g_pQForkControl->heapStart;
 
             SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl,g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
@@ -759,7 +759,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        sprintf_s(arguments, _MAX_PATH, "%s %ld %ld", qforkFlag, g_hQForkControlFileMap, GetCurrentProcessId());
+        sprintf_s(arguments, _MAX_PATH, "%s %lld %ld", qforkFlag, (unsigned long long) g_hQForkControlFileMap, GetCurrentProcessId());
         redisLog(REDIS_VERBOSE, "Launching child");
         IFFAILTHROW(CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi), "Problem creating slave process" );
         
@@ -774,7 +774,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         handles[2] = g_hForkedProcess;
 
         // wait for "forked" process to map memory
-        IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 1000000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
+        IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 100000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
         
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
@@ -814,7 +814,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_READWRITE, &oldProtect), "BeginForkOperation: Cannot reset control back to read-write");
         
         if (g_pQForkControl->inMemoryBuffersControl) {
-            IFFAILTHROW(UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControlHandle), "BeginForkOperation: UnMapViewOfFile failed");            
+            IFFAILTHROW(UnmapViewOfFile(g_pQForkControl->inMemoryBuffersControl), "BeginForkOperation: UnMapViewOfFile failed");            
             g_pQForkControl->inMemoryBuffersControl = NULL;
         }
         if (g_pQForkControl->inMemoryBuffersControlHandle) {
@@ -1057,8 +1057,8 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
         if (blockUntilCleanedup)
             SetEvent(g_pQForkControl->operationFailed);
         OperationStatus os = GetForkOperationStatus(blockUntilCleanedup);
-        bool failed = os & osFAILED;
-        bool inMemory = os & osINMEMORY;
+        int failed = os & osFAILED;
+        int inMemory = os & osINMEMORY;
         os = (OperationStatus)(os & ~(osFAILED | osINMEMORY));
 
         if (blockUntilCleanedup) {

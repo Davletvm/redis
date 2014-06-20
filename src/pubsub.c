@@ -474,9 +474,6 @@ void getMatchingScripts(robj *patternEvent, robj* patternKey, list ** matches)
 
 void setkeyspacescriptListMatchingScripts(redisClient *c)
 {
-    listNode *ln;
-    listIter li;
-
     list * answers = listCreate();
 
     robj * patternEvent = c->argv[1];

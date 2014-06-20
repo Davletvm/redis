@@ -228,7 +228,7 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
                 redisLog(REDIS_DEBUG, "WT: completion requested %d", id);
-                PostQueuedCompletionStatus(state->iocp, 0, -(rval - WAIT_OBJECT_0), (LPOVERLAPPED) id);
+                PostQueuedCompletionStatus(state->iocp, 0, ((unsigned long)(-(int)(rval - WAIT_OBJECT_0))), (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
             LeaveCriticalSection(&(state->threadCS));

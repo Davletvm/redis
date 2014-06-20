@@ -513,10 +513,10 @@ void loadServerConfigFromString(char *config) {
             }
         } else if (!strcasecmp(argv[0], "repl-inmemory-send-buffer-size") &&
             argc == 2) {
-            server.repl_inMemorySendBuffer = memtoll(argv[1], NULL);
+            server.repl_inMemorySendBuffer = (int)memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0], "repl-inmemory-receive-buffer-size") &&
             argc == 2) {
-            server.repl_inMemoryReceiveBuffer = memtoll(argv[1], NULL);
+            server.repl_inMemoryReceiveBuffer = (int)memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0], "sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
              * mode ASAP. */
