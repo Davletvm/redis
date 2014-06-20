@@ -32,6 +32,7 @@
 #include "Win32_QFork_impl.h"
 #include "Win32_dlmalloc.h"
 #include "Win32_SmartHandle.h"
+#include "Win32_Service.h"
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -253,7 +254,12 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         sfmhMapFile.Assign(
            g_pQForkControl->heapMemoryMapFile, 
            PAGE_READONLY, 
-           HIDWORD(mmSize), LODWORD(mmSize),
+#ifdef _WIN64           
+           HIDWORD(mmSize),
+#else      
+           0,
+#endif
+           LODWORD(mmSize),
            string("QForkSlaveInit: Could not open file mapping object in slave"));
         g_pQForkControl->heapMemoryMap = sfmhMapFile;
 
@@ -426,7 +432,11 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 g_pQForkControl->heapMemoryMapFile,
                 NULL,
                 PAGE_READWRITE,
+#ifdef _WIN64           
                 HIDWORD(mmSize),
+#else      
+                0,
+#endif
                 LODWORD(mmSize),
                 NULL);
         IFFAILTHROW(g_pQForkControl->heapMemoryMap, "QForkMasterInit: CreateFileMapping failed.");
@@ -1237,6 +1247,9 @@ extern "C"
                 FILE_ATTRIBUTE_NORMAL, 
                 NULL );
 #endif
+		// service commands do not launch an instance of redis directly
+		if (HandleServiceCommands(argc, argv) == TRUE)
+			return 0;
 
         StartupStatus status = QForkStartup(argc, argv);
         if (status == ssCONTINUE_AS_MASTER) {

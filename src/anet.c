@@ -48,6 +48,7 @@
 #include <stdio.h>
 #ifdef _WIN32
 #include "win32_Interop/win32fixes.h"
+#include <mstcpip.h>
 #define ANET_NOTUSED(V) V
 #endif
 
@@ -86,15 +87,13 @@ int anetNonBlock(char *err, int fd)
  * the probe send time, interval, and count. */
 int anetKeepAlive(char *err, int fd, int interval)
 {
-    int val = 1;
-
-    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1)
-    {
-        anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
-        return ANET_ERR;
-    }
-
+	int val = 1;
 #ifdef __linux__
+	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1)
+	{
+		anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
+		return ANET_ERR;
+	}
     /* Default settings are more or less garbage, with the keepalive time
      * set to 7200 by default on Linux. Modify settings to make the feature
      * actually useful. */
@@ -123,6 +122,25 @@ int anetKeepAlive(char *err, int fd, int interval)
         anetSetError(err, "setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
         return ANET_ERR;
     }
+#else
+	struct tcp_keepalive alive;
+	DWORD dwBytesRet = 0;
+	alive.onoff = TRUE;
+	alive.keepalivetime = interval * 1000;
+	/* According to http://msdn.microsoft.com/en-us/library/windows/desktop/ee470551(v=vs.85).aspx
+	   On Windows Vista and later, the number of keep-alive probes (data retransmissions) is set to 10 and cannot be changed.
+	   So we set the keep alive interval as interval/10, as 10 probes will be send before
+	   detecting an error
+	*/
+	val = interval / 10;
+	if (val == 0) val = 1;
+	alive.keepaliveinterval = val * 1000;
+	if (WSAIoctl(fd, SIO_KEEPALIVE_VALS, &alive, sizeof(alive),
+		NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR)
+	{
+		anetSetError(err, "WSAIotcl(SIO_KEEPALIVE_VALS) failed with error code %d\n", WSAGetLastError());
+		return ANET_ERR;
+	}
 #endif
 
     return ANET_OK;
@@ -452,18 +470,15 @@ int anetWrite(int fd, char *buf, int count)
     return totlen;
 }
 
-static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len) {
+static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
         return ANET_ERR;
     }
 
-    /* Use a backlog of 512 entries. We pass 511 to the listen() call because
-     * the kernel does: backlogsize = roundup_pow_of_two(backlogsize + 1);
-     * which will thus give us a backlog of 512 entries */
 #ifdef _WIN32
-    if (aeWinListen(s, 512) == SOCKET_ERROR) { 
+    if (aeWinListen(s, 512) == SOCKET_ERROR) {
 #else
     if (listen(s, 511) == -1) {
 #endif
@@ -484,7 +499,7 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-static int _anetTcpServer(char *err, int port, char *bindaddr, int af)
+static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
 {
     int s, rv;
     char _port[6];  /* strlen("65535") */
@@ -510,7 +525,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af)
 #else
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
 #endif
-        if (anetListen(err,s,p->ai_addr,p->ai_addrlen) == ANET_ERR) goto error;
+        if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) goto error;
         goto end;
     }
     if (p == NULL) {
@@ -525,17 +540,17 @@ end:
     return s;
 }
 
-int anetTcpServer(char *err, int port, char *bindaddr)
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET);
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
 }
 
-int anetTcp6Server(char *err, int port, char *bindaddr)
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET6);
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
 }
 
-int anetUnixServer(char *err, char *path, mode_t perm)
+int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
 {
 #ifdef _WIN32
     ANET_NOTUSED(err);
@@ -552,7 +567,7 @@ int anetUnixServer(char *err, char *path, mode_t perm)
     memset(&sa,0,sizeof(sa));
     sa.sun_family = AF_LOCAL;
     strncpy(sa.sun_path,path,sizeof(sa.sun_path)-1);
-    if (anetListen(err,s,(struct sockaddr*)&sa,sizeof(sa)) == ANET_ERR)
+    if (anetListen(err,s,(struct sockaddr*)&sa,sizeof(sa),backlog) == ANET_ERR)
         return ANET_ERR;
     if (perm)
         chmod(sa.sun_path, perm);

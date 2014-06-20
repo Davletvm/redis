@@ -29,18 +29,20 @@ typedef long long _off_t_;
 #include <stdio.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <windows.h>
 #include <float.h>
 #include <fcntl.h>    /* _O_BINARY */
 #include <limits.h>  /* INT_MAX */
 #include <process.h>
 #include <sys/types.h>
-
+#include <sys/stat.h>
 #define off_t _off_t_
 
 
 #include "Win32_FDAPI.h"    
 #include "Win32_QFork.h"
+#include "Win32_Service.h"
 
 #define fseeko fseeko64
 #define ftello ftello64

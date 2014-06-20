@@ -27,9 +27,12 @@
 #include <malloc.h>
 #include <string.h>
 #include <process.h>
+#include "redis.h"
+#ifdef _WIN32
 #include "win32_Interop/win32Fixes.h"
+#include "win32_Interop/Win32_EventLog.h"
+#endif
 #include <time.h>
-
 
 static int verbosity = REDIS_WARNING;
 static char* logFile = NULL;
@@ -63,7 +66,17 @@ void redisLogRaw(int level, const char *msg) {
     FILE *fp;
     char buf[64];
     int rawmode = (level & REDIS_LOG_RAW);
-    int log_to_stdout = (logFile == NULL) ? 1 : (logFile[0] == '\0');
+	int log_to_stdout;
+	log_to_stdout = 0;
+	if (logFile == NULL) {
+		log_to_stdout = 1;
+	}
+	else {
+		if ((logFile[0] == '\0') || (_stricmp(logFile, "stdout") == 0)) {
+			log_to_stdout = 1;
+		}
+	}
+
 
     level &= 0xff; /* clear flags */
     if (level < verbosity) return;
@@ -86,9 +99,9 @@ void redisLogRaw(int level, const char *msg) {
         snprintf(buf+off,sizeof(buf)-off,"%03d",usecs/1000);
         DWORD tid = GetCurrentThreadId();
         if (tid != MainTID) {
-            fprintf(fp,"[%d,%d] %s %c %s\n",(int)getpid(), tid, buf,c[level],msg);
+            fprintf(fp,"[%d,%d] %s %c %s\n",(int)_getpid(), tid, buf,c[level],msg);
         } else {
-            fprintf(fp, "[%d] %s %c %s\n", (int)getpid(), buf, c[level], msg);
+            fprintf(fp, "[%d] %s %c %s\n", (int)_getpid(), buf, c[level], msg);
         }
 #else
         struct timeval tv;
@@ -100,10 +113,11 @@ void redisLogRaw(int level, const char *msg) {
 #endif
     }
     fflush(fp);
+    
+	if (log_to_stdout == 0) fclose(fp);
 
-    if (logFile) fclose(fp);
 #ifdef _WIN32
-    // replace with event log or ETW?
+	if (server.syslog_enabled) WriteEventLog(server.syslog_ident, msg);
 #else
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 #endif
@@ -155,9 +169,6 @@ err:
     if (!log_to_stdout) close(fd);
 #endif
 }
-
-
-
 
 
 

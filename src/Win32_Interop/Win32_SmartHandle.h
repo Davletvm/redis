@@ -59,7 +59,7 @@ public:
 
     SmartHandle()
     {
-        m_handle = INVALID_HANDLE_VALUE;
+        m_handle = NULL;
     }
 
     SmartHandle( HANDLE handle )
@@ -98,6 +98,10 @@ public:
     {
         if( !DuplicateHandle(parentProcess, parentHandleToDuplicate, GetCurrentProcess(), &m_handle,  0, FALSE, DUPLICATE_SAME_ACCESS) )
             throw std::system_error(GetLastError(), system_category(), "handle duplication failed");
+    }
+
+    operator PHANDLE () {
+        return &m_handle;
     }
 
     operator HANDLE()
@@ -383,3 +387,88 @@ public:
         Free();
     }
 } SmartVirtualMemoryPtr;
+
+
+typedef class SmartServiceHandle
+{
+private:
+    SC_HANDLE m_handle;
+
+public:
+    operator SC_HANDLE()
+    {
+        return m_handle;
+    }
+
+    SmartServiceHandle & operator= (const SC_HANDLE handle)
+    {
+        m_handle = handle;
+        return *this;
+    }
+
+    SmartServiceHandle()
+    {
+        m_handle = NULL;
+    }
+
+    SmartServiceHandle(const SC_HANDLE handle)
+    {
+        m_handle = handle;
+    }
+
+    BOOL Valid()
+    {
+        return (m_handle != NULL);
+    }
+
+    BOOL Invalid()
+    {
+        return (m_handle == NULL);
+    }
+
+    ~SmartServiceHandle()
+    {
+        CloseServiceHandle(m_handle);
+        m_handle = NULL;
+    }
+} SmartServiceHandle;
+
+typedef class SmartRegistryHandle {
+private:
+    HKEY m_handle;
+
+public:
+    operator HKEY() {
+        return m_handle;
+    }
+
+    operator HKEY* () {
+        return &m_handle;
+    }
+
+    SmartRegistryHandle & operator= (const HKEY handle) {
+        m_handle = handle;
+        return *this;
+    }
+
+    SmartRegistryHandle() {
+        m_handle = NULL;
+    }
+
+    SmartRegistryHandle(const HKEY handle) {
+        m_handle = handle;
+    }
+
+    BOOL Valid() {
+        return (m_handle != NULL);
+    }
+
+    BOOL Invalid() {
+        return (m_handle == NULL);
+    }
+
+    ~SmartRegistryHandle() {
+        RegCloseKey(m_handle);
+        m_handle = NULL;
+    }
+} SmartRegistryHandle;

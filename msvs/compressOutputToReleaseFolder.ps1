@@ -6,7 +6,8 @@ $IncludeBaseDirectory = $false
 $CurDir = [System.IO.Directory]::GetCurrentDirectory() 
 $PubDir = [System.IO.Path]::Combine($CurDir, "x64\Release\pub" )
 $SourceDir = [System.IO.Path]::Combine($CurDir, "x64\Release" )
-$Destination = [System.IO.Path]::Combine($CurDir, "..\bin\Release\redis-2.8.4.zip" )
+$DocumentationDir = [System.IO.Path]::Combine($CurDir, "setups\documentation" )
+$Destination = [System.IO.Path]::Combine($CurDir, "..\bin\Release\redis-2.8.9.zip" )
 
 [System.IO.Directory]::CreateDirectory($PubDir) | Out-Null
 
@@ -18,7 +19,7 @@ ForEach( $file in [System.IO.Directory]::EnumerateFiles($SourceDir, "*.exe" ) ) 
 	[System.IO.File]::Copy($file, [System.IO.Path]::Combine( $PubDir, [System.IO.Path]::GetFileName($file) ) )
 }
 
-ForEach( $file in [System.IO.Directory]::EnumerateFiles($SourceDir, "*.dll" ) ) {
+ForEach( $file in [System.IO.Directory]::EnumerateFiles($DocumentationDir, "*.*" ) ) {
 	[System.IO.File]::Copy($file, [System.IO.Path]::Combine( $PubDir, [System.IO.Path]::GetFileName($file) ) )
 }
 
