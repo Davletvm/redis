@@ -27,7 +27,6 @@
 #include <malloc.h>
 #include <string.h>
 #include <process.h>
-#include "redis.h"
 #ifdef _WIN32
 #include "win32_Interop/win32Fixes.h"
 #include "win32_Interop/Win32_EventLog.h"
@@ -35,6 +34,8 @@
 #include <time.h>
 
 static int verbosity = REDIS_WARNING;
+static int serverSysLog = 0;
+static const char * serverSysLogIdent = 0;
 static char* logFile = NULL;
 
 DWORD MainTID;
@@ -42,6 +43,12 @@ void setLogVerbosityLevel(int level)
 {
     verbosity = level;
     MainTID = GetCurrentThreadId();
+}
+
+void setSysLog(int syslog, const char * ident)
+{
+    serverSysLog = syslog;
+    serverSysLogIdent = ident;
 }
 
 void setLogFile(const char* logFileName)
@@ -66,16 +73,16 @@ void redisLogRaw(int level, const char *msg) {
     FILE *fp;
     char buf[64];
     int rawmode = (level & REDIS_LOG_RAW);
-	int log_to_stdout;
-	log_to_stdout = 0;
-	if (logFile == NULL) {
-		log_to_stdout = 1;
-	}
-	else {
-		if ((logFile[0] == '\0') || (_stricmp(logFile, "stdout") == 0)) {
-			log_to_stdout = 1;
-		}
-	}
+    int log_to_stdout;
+    log_to_stdout = 0;
+    if (logFile == NULL) {
+        log_to_stdout = 1;
+    }
+    else {
+        if ((logFile[0] == '\0') || (_stricmp(logFile, "stdout") == 0)) {
+            log_to_stdout = 1;
+        }
+    }
 
 
     level &= 0xff; /* clear flags */
@@ -114,10 +121,10 @@ void redisLogRaw(int level, const char *msg) {
     }
     fflush(fp);
     
-	if (log_to_stdout == 0) fclose(fp);
+    if (log_to_stdout == 0) fclose(fp);
 
 #ifdef _WIN32
-	if (server.syslog_enabled) WriteEventLog(server.syslog_ident, msg);
+    if (serverSysLog) WriteEventLog(serverSysLogIdent, msg);
 #else
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 #endif

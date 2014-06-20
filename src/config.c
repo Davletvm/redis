@@ -207,10 +207,12 @@ void loadServerConfigFromString(char *config) {
             if ((server.syslog_enabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"syslog-ident") && argc == 2) {
+            setSysLog(server.syslog_enabled, server.syslog_ident);
+        } else if (!strcasecmp(argv[0], "syslog-ident") && argc == 2) {
             if (server.syslog_ident) zfree(server.syslog_ident);
             server.syslog_ident = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"syslog-facility") && argc == 2) {
+            setSysLog(server.syslog_enabled, server.syslog_ident);
+        } else if (!strcasecmp(argv[0], "syslog-facility") && argc == 2) {
 #ifdef _WIN32
             // Skip error - just ignore Syslog
             // err "Syslog is not supported on Windows platform.";

@@ -82,7 +82,7 @@ void aeHandleEventCallbackProc(aeEventLoop * el, void * param)
 }
 
 
-void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER], HANDLE pingHandle)
+void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[MAXSENDBUFFER], HANDLE doneSent[MAXSENDBUFFER])
 {
 #ifndef NO_QFORKIMPL
     control->id = control_id++;
@@ -118,7 +118,7 @@ void SendBuffer(redisInMemoryReplSend * inm, int which, int sequence)
     SetEvent(inm->doSendEvents[which]);
 }
 
-int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2], HANDLE pingHandle)
+int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2])
 {
 #ifndef NO_QFORKIMPL
     redisInMemoryReplSend inMemoryRepl;
