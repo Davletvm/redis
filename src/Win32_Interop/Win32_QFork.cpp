@@ -205,7 +205,12 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
        SmartFileMapHandle sfmhMapFile(
            g_pQForkControl->heapMemoryMapFile, 
            PAGE_READONLY, 
-           HIDWORD(mmSize), LODWORD(mmSize),
+#ifdef _WIN64           
+           HIDWORD(mmSize),
+#else      
+           0,
+#endif
+           LODWORD(mmSize),
            string("QForkSlaveInit: Could not open file mapping object in slave"));
        g_pQForkControl->heapMemoryMap = sfmhMapFile;
 
@@ -377,7 +382,11 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
                 g_pQForkControl->heapMemoryMapFile,
                 NULL,
                 PAGE_READWRITE,
+#ifdef _WIN64           
                 HIDWORD(mmSize),
+#else      
+                0,
+#endif
                 LODWORD(mmSize),
                 NULL);
         if (g_pQForkControl->heapMemoryMap == NULL) {
