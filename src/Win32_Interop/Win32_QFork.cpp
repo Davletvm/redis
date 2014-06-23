@@ -835,8 +835,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         exit(1);
     }
 
-
-
     return FALSE;
 }
 
