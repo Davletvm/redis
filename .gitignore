@@ -76,3 +76,4 @@ msvs/RedisWAInst/src/RedisServer/obj/
 *.dat
 *.rdb
 ms1.bat
+msvs/mshash.h
