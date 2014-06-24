@@ -77,3 +77,5 @@ msvs/RedisWAInst/src/RedisServer/obj/
 *.rdb
 ms1.bat
 msvs/mshash.h
+src/Win32_Interop/EventLog.h
+src/Win32_Interop/resources/

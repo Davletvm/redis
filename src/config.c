@@ -130,13 +130,13 @@ void loadServerConfigFromString(char *config) {
             if (server.port < 0 || server.port > 65535) {
                 err = "Invalid port"; goto loaderr;
             }
-		} else if (!strcasecmp(argv[0], "tcp-backlog") && argc == 2) {
-			server.tcp_backlog = atoi(argv[1]);
-			if (server.tcp_backlog < 0) {
-				err = "Invalid backlog value"; goto loaderr;
-			}
-		}
-		else if (!strcasecmp(argv[0],"bind") && argc >= 2) {
+        } else if (!strcasecmp(argv[0], "tcp-backlog") && argc == 2) {
+            server.tcp_backlog = atoi(argv[1]);
+            if (server.tcp_backlog < 0) {
+                err = "Invalid backlog value"; goto loaderr;
+            }
+        }
+        else if (!strcasecmp(argv[0],"bind") && argc >= 2) {
             int j, addresses = argc-1;
 
             if (addresses > REDIS_BINDADDR_MAX) {
@@ -186,7 +186,24 @@ void loadServerConfigFromString(char *config) {
             FILE *logfp;
 
             zfree(server.logfile);
+#ifdef _WIN32
+            int length = strlen(argv[1]);
+            if ((argv[0] == '\''  &&  argv[length-1] == '\'')  ||
+                (argv[0] == '\"'  &&  argv[length-1] == '\"')) {
+                if (length == 2) {
+                    server.logfile[0] = zstrdup("\0");
+                } else {
+                    size_t l = length - 2 + 1;
+                    char *p = zmalloc(l);
+                    memcpy(p, argv[1]+1, l);
+                    server.logfile[0] = p;
+                }
+            } else {
+                server.logfile = zstrdup(argv[1]);
+            }
+#else
             server.logfile = zstrdup(argv[1]);
+#endif
             if (server.logfile[0] != '\0') {
                 /* Test if we are able to open the file. The server will not
                  * be able to abort just for this problem later... */
@@ -207,16 +224,18 @@ void loadServerConfigFromString(char *config) {
             if ((server.syslog_enabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-            setSysLog(server.syslog_enabled, server.syslog_ident);
-        } else if (!strcasecmp(argv[0], "syslog-ident") && argc == 2) {
+#ifdef _WIN32
+            setSyslogEnabled(server.syslog_enabled);
+#endif
+        } else if (!strcasecmp(argv[0],"syslog-ident") && argc == 2) {
             if (server.syslog_ident) zfree(server.syslog_ident);
             server.syslog_ident = zstrdup(argv[1]);
-            setSysLog(server.syslog_enabled, server.syslog_ident);
+#ifdef _WIN32
+            setSyslogIdent(server.syslog_ident);
+#endif
         } else if (!strcasecmp(argv[0], "syslog-facility") && argc == 2) {
 #ifdef _WIN32
-            // Skip error - just ignore Syslog
-            // err "Syslog is not supported on Windows platform.";
-            // goto loaderr;
+            // Skip error - just ignore syslog-facility
 #else
             int i;
 
@@ -1031,7 +1050,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("slowlog-max-len",
             server.slowlog_max_len);
     config_get_numerical_field("port",server.port);
-	config_get_numerical_field("tcp-backlog", server.tcp_backlog);
+    config_get_numerical_field("tcp-backlog", server.tcp_backlog);
     config_get_numerical_field("databases",server.dbnum);
     config_get_numerical_field("repl-ping-slave-period",server.repl_ping_slave_period);
     config_get_numerical_field("repl-timeout",server.repl_timeout);
@@ -1702,16 +1721,16 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
     int fd = open(configfile,O_RDWR|O_CREAT,0644);
     int content_size = sdslen(content), padding = 0;
 #ifdef _WIN32
-	struct _stat64 sb;
+    struct _stat64 sb;
 #else
-	struct stat sb;
+    struct stat sb;
 #endif
     sds content_padded;
 
     /* 1) Open the old file (or create a new one if it does not
      *    exist), get the size. */
     if (fd == -1) return -1; /* errno set by open(). */
-	if (fstat(fd,&sb) == -1) {
+    if (fstat(fd,&sb) == -1) {
         close(fd);
         return -1; /* errno set by fstat(). */
     }
@@ -1768,7 +1787,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"daemonize",server.daemonize,0);
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
-	rewriteConfigNumericalOption(state, "tcp-backlog", server.tcp_backlog, REDIS_TCP_BACKLOG);
+    rewriteConfigNumericalOption(state, "tcp-backlog", server.tcp_backlog, REDIS_TCP_BACKLOG);
     rewriteConfigBindOption(state);
     rewriteConfigStringOption(state,"unixsocket",server.unixsocket,NULL);
     rewriteConfigOctalOption(state,"unixsocketperm",server.unixsocketperm,REDIS_DEFAULT_UNIX_SOCKET_PERM);

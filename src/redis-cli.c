@@ -51,6 +51,7 @@
   #define STDIN_FILENO (_fileno(stdin))
 #endif
 #include "win32_Interop/win32fixes.h"
+#include "win32_Interop/Win32_ANSI.h"
 #include <windows.h>
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
@@ -64,8 +65,6 @@
 #ifndef STDIN_FILENO
   #define STDIN_FILENO (_fileno(stdin))
 #endif
-#include "win32_Interop/win32fixes.h"
-#include <windows.h>
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
 #define strtoull _strtoui64
@@ -1890,9 +1889,9 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
     _fmode = _O_BINARY;
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
+    setmode(_fileno(stdin), _O_BINARY);
+    setmode(_fileno(stdout), _O_BINARY);
+    setmode(_fileno(stderr), _O_BINARY);
 #endif
     firstarg = parseOptions(argc,argv);
     argc -= firstarg;

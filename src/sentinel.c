@@ -273,8 +273,9 @@ static void redisAeWriteEvent(aeEventLoop *el, int fd, void *privdata, int mask)
         result = aeWinSocketSend((int)c->fd,(char*)c->obuf,(int)(sdslen(c->obuf)), 
                                         el, e, NULL, writeHandlerDone);
         if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-            if (errno != EPIPE)
-                fprintf(stderr, "Writing to socket %s\n", wsa_strerror(errno));
+            if (errno != EPIPE) {
+                redisLog(REDIS_VERBOSE, "Writing to socket %s (%d)\n", wsa_strerror(errno), errno);
+            }
             return;
         }
     }
@@ -1714,7 +1715,9 @@ void sentinelFlushConfig(void) {
 
     if (rewrite_status == -1) goto werr;
     if ((fd = open(server.configfile,O_RDONLY,0)) == -1) goto werr;
+#ifndef _WIN32
     if (fsync(fd) == -1) goto werr;
+#endif
     if (close(fd) == EOF) goto werr;
     return;
 

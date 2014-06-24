@@ -33,12 +33,14 @@
 #include "Win32_dlmalloc.h"
 #include "Win32_SmartHandle.h"
 #include "Win32_Service.h"
+#include "Win32_CommandLine.h"
+#include "..\redisLog.h"
+#include <time.h>
 #include <vector>
 #include <iostream>
-#include <fstream>
 #include <sstream>
-#include <time.h>
-#include "..\redisLog.h"
+#include <stdint.h>
+#include <exception>
 using namespace std;
 
 //#define DEBUG_WITH_PROCMON
@@ -69,54 +71,7 @@ BOOL WriteToProcmon (wstring message)
 #define IFFAILTHROW(a,m) if(!(a)) { throw std::system_error(GetLastError(), system_category(), m); }
 
 
-/*
-Redis is an in memory DB. We need to share the redis database with a quasi-forked process so that we can do the RDB and AOF saves 
-without halting the main redis process, or crashing due to code that was never designed to be thread safe. Essentially we need to
-replicate the COW behavior of fork() on Windows, but we don't actually need a complete fork() implementation. A complete fork() 
-implementation would require subsystem level support to make happen. The following is required to make this quasi-fork scheme work:
 
-DLMalloc (http://g.oswego.edu/dl/html/malloc.html):
-    - replaces malloc/realloc/free, either by manual patching of the zmalloc code in Redis or by patching the CRT routines at link time
-    - partitions space into segments that it allocates from (currently configured as 64MB chunks)
-    - we map/unmap these chunks as requested into a memory map (unmapping allows the system to decide how to reduce the physical memory 
-      pressure on system)
-
-DLMallocMemoryMap:
-   - An uncomitted memory map whose size is the total physical memory on the system less some memory for the rest of the system so that 
-     we avoid excessive swapping.
-   - This is reserved high in VM space so that it can be mapped at a specific address in the child qforked process (ASLR must be 
-     disabled for these processes)
-   - This must be mapped in exactly the same virtual memory space in both forker and forkee.
-
-QForkConrolMemoryMap:
-   - contains a map of the allocated segments in the DLMallocMemoryMap
-   - contains handles for inter-process synchronization
-   - contains pointers to some of the global data in the parent process if mapped into DLMallocMemoryMap, and a copy of any other 
-     required global data
-
-QFork process:
-    - a copy of the parent process with a command line specifying QFork behavior
-    - when a COW operation is requested via an event signal
-        - opens the DLMAllocMemoryMap with PAGE_WRITECOPY
-        - reserve space for DLMAllocMemoryMap at the memory location specified in ControlMemoryMap
-        - locks the DLMalloc segments as specified in QForkConrolMemoryMap 
-        - maps global data from the QForkConrolMEmoryMap into this process
-        - executes the requested operation
-        - unmaps all the mm views (discarding any writes)
-        - signals the parent when the operation is complete
-
-How the parent invokes the QFork process:
-    - protects mapped memory segments with VirtualProtect using PAGE_WRITECOPY (both the allocated portions of DLMAllocMemoryMap and 
-      the QForkConrolMemoryMap)
-    - QForked process is signaled to process command
-    - Parent waits (asynchronously) until QForked process signals that operation is complete, then as an atomic operation:
-        - signals and waits for the forked process to terminate
-        - resotres protection status on mapped blocks
-        - determines which pages have been modified and copies these to a buffer
-        - unmaps the view of the heap (discarding COW changes form the view)
-        - remaps the view
-        - copies the changes back into the view
-*/
 
 #ifndef LODWORD
     #define LODWORD(_qw)    ((DWORD)(_qw))
@@ -128,7 +83,6 @@ How the parent invokes the QFork process:
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
 const int cMaxBlocks = 1 << 16;                                  // 64MB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
-const char* qforkFlag = "--QFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
 
@@ -192,7 +146,8 @@ BOOL g_isForkedProcess;
 CleanupState g_CleanupState;
 int g_SlaveExitCode; // For slave process
 
-
+const long long cSentinelHeapSize = 30 * 1024 * 1024;
+extern "C" int checkForSentinelMode(int argc, char **argv);
 
 extern "C"
 {
@@ -310,7 +265,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         }
         g_SlaveExitCode = exitCode;
 
-        // let parent know weare done
+        // let parent know we are done
         SetEvent(g_pQForkControl->operationComplete);
 
         // parent will notify us when to quit
@@ -347,7 +302,7 @@ void CreateEventHandle(HANDLE * out) {
 }
 
 
-BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
+BOOL QForkMasterInit() {
 
     // This will be reset to the correct value when config is processed
     setLogVerbosityLevel(REDIS_WARNING);
@@ -387,22 +342,43 @@ BOOL QForkMasterInit( __int64 maxMemoryVirtualBytes) {
         perfinfo.cb = sizeof(PERFORMANCE_INFORMATION);
         IFFAILTHROW(GetPerformanceInfo(&perfinfo, sizeof(PERFORMANCE_INFORMATION)), "GetPerformanceInfo failed");
         
-        SIZE_T maxSystemReservePages = 3i64 * 1024i64 * 1024i64 * 1024i64 / pageSize;
+        SIZE_T desiredMaxHeap = g_win64maxvirtualmemory;
         SIZE_T maxPhysicalPagesToUse = perfinfo.PhysicalTotal;
-        SIZE_T maxPhysicalMapping = (maxPhysicalPagesToUse * pageSize * 14i64) / 10i64;
-        g_win64maxmemory = maxPhysicalPagesToUse * pageSize;
-        if (maxMemoryVirtualBytes != -1) {
-            SIZE_T allocationBlocks = maxMemoryVirtualBytes / cAllocationGranularity;
-            allocationBlocks += ((maxMemoryVirtualBytes % cAllocationGranularity) != 0);
+        SIZE_T maxVirtualMapping = (maxPhysicalPagesToUse * pageSize * 14i64) / 10i64;
+        if (g_win64maxvirtualmemory != -1) {
+            SIZE_T allocationBlocks = g_win64maxvirtualmemory / cAllocationGranularity;
+            allocationBlocks += ((g_win64maxvirtualmemory % cAllocationGranularity) != 0);
             allocationBlocks = max(2, allocationBlocks);
-            maxPhysicalMapping = allocationBlocks * cAllocationGranularity;
-            g_win64maxmemory = maxPhysicalMapping * 7i64 / 10i64;
+            maxVirtualMapping = allocationBlocks * cAllocationGranularity;
         }
-        g_pQForkControl->availableBlocksInHeap = (int)(maxPhysicalMapping / cAllocationGranularity);
+        g_pQForkControl->availableBlocksInHeap = (int)(maxVirtualMapping / cAllocationGranularity);
         g_win64maxvirtualmemory = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
+        if (g_win64maxmemory == -1) {
+            g_win64maxmemory = maxVirtualMapping * 7i64 / 10i64;
+        }
         if (g_pQForkControl->availableBlocksInHeap <= 0) {
             throw std::runtime_error(
-                "QForkMasterInit: Not enough physical memory to initialize Redis.");
+                "Invalid number of heap blocks.");
+        }
+
+        // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
+        // Clean up anything we can to prevent excessive disk usage.
+        wchar_t heapMemoryMapWildCard[MAX_PATH];
+        WIN32_FIND_DATA fd;
+        swprintf_s(
+            heapMemoryMapWildCard,
+            MAX_PATH,
+            L"%s_*.dat",
+            cMapFileBaseName);
+        HANDLE hFind = FindFirstFile(heapMemoryMapWildCard, &fd);
+        while (hFind != INVALID_HANDLE_VALUE) {
+            // Failure likely means the file is in use by another redis instance.
+            DeleteFile(fd.cFileName);
+
+            if (FALSE == FindNextFile(hFind, &fd)) {
+                FindClose(hFind);
+                hFind = INVALID_HANDLE_VALUE;
+            }
         }
 
         wchar_t heapMemoryMapPath[MAX_PATH];
@@ -511,77 +487,40 @@ StartupStatus QForkStartup(int argc, char** argv) {
     bool foundSlaveFlag = false;
     HANDLE QForkConrolMemoryMapHandle = NULL;
     DWORD PPID = 0;
-    __int64 maxvirtualmemory = -1;
-    int memtollerr;
-    if ((argc == 3) && (strcmp(argv[0], qforkFlag) == 0)) {
+    int memtollerr = 0;
+    g_win64maxvirtualmemory = -1;
+    g_win64maxmemory = -1;
+
+    if (g_argMap.find(cQFork) != g_argMap.end()) {
         // slave command line looks like: --QFork [QForkConrolMemoryMap handle] [parent process id]
         foundSlaveFlag = true;
         char* endPtr;
-        QForkConrolMemoryMapHandle = (HANDLE)strtoul(argv[1], &endPtr, 10);
+        QForkConrolMemoryMapHandle = (HANDLE)strtoul(g_argMap[cQFork].at(0).at(0).c_str(),&endPtr,10);
         char* end = NULL;
-        PPID = strtoul(argv[2], &end, 10);
+        PPID = strtoul(g_argMap[cQFork].at(0).at(1).c_str(), &end, 10);
     } else {
-        bool maxMemoryFlagFound = false;
-        for (int n = 1; n < argc; n++) {
-            // check for maxmemory + reserve bypass flags in .conf file
-            if( n == 1  && strncmp(argv[n],"--",2) != 0 ) {
-                ifstream config;
-                config.open(argv[n]);
-                if (config.fail())
-                    continue;
-                while (!config.eof()) {
-                    string line;
-                    getline(config,line);
-                    istringstream iss(line);
-                    string token;
-                    if (getline(iss, token, ' ')) {
-                        if (_stricmp(token.c_str(), maxvirtualmemoryflag) == 0) {
-                            string maxmemoryString;
-                            if (getline(iss, maxmemoryString, ' ')) {
-                                maxvirtualmemory = memtoll(maxmemoryString.c_str(), &memtollerr);
-                                if (memtollerr != 0) {
-                                    redisLog(REDIS_WARNING, 
-                                        "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.", 
-                                        maxvirtualmemoryflag,
-                                        maxmemoryString.c_str());
-                                    redisLog(REDIS_WARNING, "Failing startup.");
-                                    return StartupStatus::ssFAILED;
-                                }
-                                maxMemoryFlagFound = true;
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-            if( strncmp(argv[n],"--", 2) == 0) {
-                if (_stricmp(argv[n]+2,maxvirtualmemoryflag) == 0) {
-                    if (n + 1 >= argc) {
-                        redisLog(REDIS_WARNING,
-                            "%s specified without a size.", 
-                            argv[n] );
-                        redisLog(REDIS_WARNING, "Failing startup.");
-                        return StartupStatus::ssFAILED;
-                    }
-                    maxvirtualmemory = memtoll(argv[n+1], &memtollerr);
-                    if (memtollerr != 0) {
-                        redisLog(REDIS_WARNING,
-                            "%s specified. Unable to convert %s to the maximum number of bytes to use for the heap.", 
-                            argv[n],
-                            argv[n+1] );
-                        redisLog(REDIS_WARNING, "Failing startup.");
-                        return StartupStatus::ssFAILED;
-                    } 
-                    maxMemoryFlagFound = true;
-                }
-            }
+        if (g_argMap.find(cMaxHeap) != g_argMap.end()) {
+            int mtollerr = 0;
+            g_win64maxvirtualmemory = memtoll(g_argMap[cMaxHeap].at(0).at(0).c_str(), &memtollerr);
+        }
+        if (g_argMap.find(cMaxMemory) != g_argMap.end()) {
+            int mtollerr = 0;
+            g_win64maxmemory = memtoll(g_argMap[cMaxMemory].at(0).at(0).c_str(), &memtollerr);
+        }
+    }
+
+    if (g_win64maxvirtualmemory == -1)
+    {
+        if (checkForSentinelMode(argc, argv)) {
+            // Sentinel mode does not need a large heap. This conserves disk space and page file reservation requirements.
+            g_win64maxvirtualmemory = cSentinelHeapSize;
         }
     }
 
     if (foundSlaveFlag) {
         return QForkSlaveInit( QForkConrolMemoryMapHandle, PPID ) ? StartupStatus::ssSLAVE_EXIT : StartupStatus::ssFAILED;
     } else {
-        return QForkMasterInit(maxvirtualmemory) ? StartupStatus::ssCONTINUE_AS_MASTER : StartupStatus::ssFAILED;
+        return QForkMasterInit() ? StartupStatus::ssCONTINUE_AS_MASTER : StartupStatus::ssFAILED;
     }
 }
 
@@ -759,7 +698,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        sprintf_s(arguments, _MAX_PATH, "%s %lld %ld", qforkFlag, (unsigned long long) g_hQForkControlFileMap, GetCurrentProcessId());
+        sprintf_s(arguments, _MAX_PATH, "%s --%s %llu %lu", fileName, cQFork.c_str(), (uint64_t) g_hQForkControlFileMap, GetCurrentProcessId());
         redisLog(REDIS_VERBOSE, "Launching child");
         IFFAILTHROW(CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi), "Problem creating slave process" );
         
@@ -1226,6 +1165,20 @@ BOOL FreeHeapBlock(LPVOID block, size_t size)
     return TRUE;
 }
 
+void SetupLogging() {
+    bool serviceRun = g_argMap.find(cServiceRun) != g_argMap.end();
+    string syslogEnabledValue = (g_argMap.find(cSyslogEnabled) != g_argMap.end() ? g_argMap[cSyslogEnabled].at(0).at(0) : cNo);
+    bool syslogEnabled = (syslogEnabledValue.compare(cYes) == 0) || serviceRun;
+    string syslogIdent = (g_argMap.find(cSyslogIdent) != g_argMap.end() ? g_argMap[cSyslogIdent].at(0).at(0) : cDefaultSyslogIdent);
+    string logFileName = (g_argMap.find(cLogfile) != g_argMap.end() ? g_argMap[cLogfile].at(0).at(0) : cDefaultLogfile);
+
+    setSyslogEnabled(syslogEnabled);
+    if (syslogEnabled) {
+        setSyslogIdent(syslogIdent.c_str());
+    } else {
+        setLogFile(logFileName.c_str());
+    }
+}
 
 extern "C"
 {
@@ -1234,36 +1187,53 @@ extern "C"
     // is invoked so that the QFork allocator can be setup prior to anything 
     // Redis will allocate.
     int main(int argc, char* argv[]) {
+        try {
+            ParseCommandLineArguments(argc, argv);
+            SetupLogging();
+        } catch (runtime_error &re) {
+            cout << re.what() << endl;
+            exit(-1);
+        }
+        
+        try {
 #ifdef DEBUG_WITH_PROCMON
-        hProcMonDevice = 
-            CreateFile( 
-                L"\\\\.\\Global\\ProcmonDebugLogger", 
-                GENERIC_READ|GENERIC_WRITE, 
-                FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, 
-                NULL, 
-                OPEN_EXISTING, 
-                FILE_ATTRIBUTE_NORMAL, 
-                NULL );
+            hProcMonDevice =
+                CreateFile(
+                L"\\\\.\\Global\\ProcmonDebugLogger",
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                NULL,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL);
 #endif
-		// service commands do not launch an instance of redis directly
-		if (HandleServiceCommands(argc, argv) == TRUE)
-			return 0;
 
-        StartupStatus status = QForkStartup(argc, argv);
-        if (status == ssCONTINUE_AS_MASTER) {
-            int retval = redis_main(argc, argv);
-            QForkShutdown();
-            return retval;
-        } else if (status == ssSLAVE_EXIT) {
-            // slave is done - clean up and exit
-            QForkShutdown();
-            return g_SlaveExitCode;
-        } else if (status == ssFAILED) {
-            // master or slave failed initialization
-            return 1;
-        } else {
-            // unexpected status return
-            return 2;
+            // service commands do not launch an instance of redis directly
+            if (HandleServiceCommands(argc, argv) == TRUE)
+                return 0;
+
+            StartupStatus status = QForkStartup(argc, argv);
+            if (status == ssCONTINUE_AS_MASTER) {
+                int retval = redis_main(argc, argv);
+                QForkShutdown();
+                return retval;
+            } else if (status == ssSLAVE_EXIT) {
+                // slave is done - clean up and exit
+                QForkShutdown();
+                return g_SlaveExitCode;
+            } else if (status == ssFAILED) {
+                // master or slave failed initialization
+                return 1;
+            } else {
+                // unexpected status return
+                return 2;
+            }
+        } catch (std::system_error syserr) {
+            ::redisLog(REDIS_WARNING, "main: system error caught. error code=0x%08x, message=%s\n", syserr.code().value(), syserr.what());
+        } catch (std::runtime_error runerr) {
+            ::redisLog(REDIS_WARNING, "main: runtime error caught. message=%s\n", runerr.what());
+        } catch (...) {
+            ::redisLog(REDIS_WARNING, "main: other exception caught.\n");
         }
     }
 }

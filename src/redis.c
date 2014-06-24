@@ -1431,8 +1431,10 @@ void initServerConfig() {
         server.syslog_ident = zstrdup(REDIS_DEFAULT_SYSLOG_IDENT);
         server.syslog_enabled = REDIS_DEFAULT_SYSLOG_ENABLED;
     }
+    setSyslogEnabled(server.syslog_enabled);
+    setSyslogIdent(server.syslog_ident);
 #else
-      server.syslog_enabled = REDIS_DEFAULT_SYSLOG_ENABLED;
+    server.syslog_enabled = REDIS_DEFAULT_SYSLOG_ENABLED;
     server.syslog_ident = zstrdup(REDIS_DEFAULT_SYSLOG_IDENT);
 #endif
     server.syslog_facility = LOG_LOCAL0;
@@ -2608,9 +2610,9 @@ sds genRedisInfoString(char *section) {
             "max_virtual_memory_human:%s\r\n"
             "mem_fragmentation_ratio:%.2f\r\n"
             "mem_allocator:%s\r\n",
-            (long long)zmalloc_used_memory(),
+            (long long)zmalloc_used,
             hmem,
-            (long long)zmalloc_get_rss(),
+            (long long)server.resident_set_size,
             rss_hmem,
             (long long)server.stat_peak_memory,
             peak_hmem,
@@ -2661,7 +2663,8 @@ sds genRedisInfoString(char *section) {
             "aof_rewrite_scheduled:%d\r\n"
             "aof_last_rewrite_time_sec:%lld\r\n"
             "aof_current_rewrite_time_sec:%lld\r\n"
-            "aof_last_bgrewrite_status:%s\r\n",
+            "aof_last_bgrewrite_status:%s\r\n"
+            "aof_last_write_status:%s\r\n", 
             server.loading,
             server.dirty,
             server.rdb_child_pid != -1,
@@ -2676,7 +2679,8 @@ sds genRedisInfoString(char *section) {
             (long long)server.aof_rewrite_time_last,
             (server.aof_child_pid == -1) ?
                 (long long)-1 : (long long)(time(NULL)-server.aof_rewrite_time_start),
-            (server.aof_lastbgrewrite_status == REDIS_OK) ? "ok" : "err");
+            (server.aof_lastbgrewrite_status == REDIS_OK) ? "ok" : "err",
+            (server.aof_last_write_status == REDIS_OK) ? "ok" : "err");
 #else
     /* Persistence */
     if (allsections || defsections || !strcasecmp(section,"persistence")) {

@@ -59,6 +59,7 @@ this should preceed the other arguments passed to redis. For instance:
 #include <shlobj.h>
 #include <tchar.h>
 #include <strsafe.h>
+#include <aclapi.h>
 #include "Win32_EventLog.h"
 #include <algorithm>
 #include <string>
@@ -66,6 +67,7 @@ this should preceed the other arguments passed to redis. For instance:
 #include <vector>
 #include <iostream>
 #include "..\redisLog.h"
+#include "Win32_CommandLine.h"
 using namespace std;
 
 #include "Win32_SmartHandle.h"
@@ -97,7 +99,7 @@ void WriteServiceInstallMessage(string message) {
         WriteFile(pipe, message.c_str(), (DWORD)message.length(), &bytesWritten, NULL);
         CloseHandle(pipe);
     } else {
-        cout << message;
+        ::redisLog(REDIS_WARNING, message.c_str());
     }
 }
 
@@ -142,7 +144,7 @@ BOOL RelaunchAsElevatedProcess(int argc, char** argv) {
                 DWORD result = ReadFile(pipe, buffer, messageBufferSize, &bytesRead, NULL);
                 if (result != 0 && bytesRead > 0) {
                     buffer[bytesRead] = '\0';	// ensure received message is null terminated;
-                    cout << buffer;
+                    ::redisLog(REDIS_WARNING, (const char*)buffer);
                 }
             }
             CloseHandle(sei.hProcess);
@@ -173,17 +175,77 @@ bool IsProcessElevated() {
     return  (elevation.TokenIsElevated != 0);
 }
 
-VOID InitializeServiceName(int argc, char** argv) {
-    for (int a = 0; a < argc; a++) {
-        if (_stricmp(argv[a], "--service-name") == 0) {
-            if (a + 1 <= argc) {
-                if (strlen(argv[a + 1]) > MAX_SERVICE_NAME_LENGTH) {
-                    throw std::runtime_error("Service name too long.");
-                }
-                strcpy_s(g_serviceName, MAX_SERVICE_NAME_LENGTH, argv[a + 1]);
-                return;
-            }
+VOID InitializeServiceName() {
+    if (g_argMap.find(cServiceName) != g_argMap.end()) {
+        if (g_argMap[cServiceName].at(0).at(0).length() > MAX_SERVICE_NAME_LENGTH) {
+            throw std::runtime_error("Service name too long.");
         }
+        strcpy_s(g_serviceName, MAX_SERVICE_NAME_LENGTH, g_argMap[cServiceName].at(0).at(0).c_str());
+    }
+}
+
+DWORD AddAceToObjectsSecurityDescriptor(
+    LPSTR pszObjName,          
+    SE_OBJECT_TYPE ObjectType,  
+    LPSTR pszTrustee,          
+    TRUSTEE_FORM TrusteeForm,   
+    DWORD dwAccessRights,       
+    ACCESS_MODE AccessMode,     
+    DWORD dwInheritance         
+    ) {
+    DWORD dwRes = 0;
+    PACL pOldDACL = NULL, pNewDACL = NULL;
+    PSECURITY_DESCRIPTOR pSD = NULL;
+    EXPLICIT_ACCESSA ea;
+
+    if (NULL == pszObjName)
+        return ERROR_INVALID_PARAMETER;
+
+    dwRes = GetNamedSecurityInfoA(pszObjName, ObjectType,
+        DACL_SECURITY_INFORMATION,
+        NULL, NULL, &pOldDACL, NULL, &pSD);
+    if (ERROR_SUCCESS != dwRes) {
+        ::redisLog(REDIS_WARNING, "GetNamedSecurityInfo Error %u\n", dwRes);
+        goto Cleanup;
+    }
+
+    ZeroMemory(&ea, sizeof(EXPLICIT_ACCESS));
+    ea.grfAccessPermissions = dwAccessRights;
+    ea.grfAccessMode = AccessMode;
+    ea.grfInheritance = dwInheritance;
+    ea.Trustee.TrusteeForm = TrusteeForm;
+    ea.Trustee.ptstrName = pszTrustee;
+
+    dwRes = SetEntriesInAclA(1, &ea, pOldDACL, &pNewDACL);
+    if (ERROR_SUCCESS != dwRes) {
+        ::redisLog(REDIS_WARNING, "SetEntriesInAcl Error %u\n", dwRes);
+        goto Cleanup;
+    }
+
+    dwRes = SetNamedSecurityInfoA(pszObjName, ObjectType,
+        DACL_SECURITY_INFORMATION,
+        NULL, NULL, pNewDACL, NULL);
+    if (ERROR_SUCCESS != dwRes) {
+        ::redisLog(REDIS_WARNING, "SetNamedSecurityInfo Error %u\n", dwRes);
+        goto Cleanup;
+    }
+
+Cleanup:
+
+    if (pSD != NULL)
+        LocalFree((HLOCAL)pSD);
+    if (pNewDACL != NULL)
+        LocalFree((HLOCAL)pNewDACL);
+
+    return dwRes;
+}
+
+VOID SetAccessACLOnFolder(string user, string folder) {
+    if (0 != AddAceToObjectsSecurityDescriptor( 
+                (LPSTR)(folder.c_str()), SE_OBJECT_TYPE::SE_FILE_OBJECT,
+                (LPSTR)(user.c_str()), TRUSTEE_FORM::TRUSTEE_IS_NAME,
+                GENERIC_ALL, GRANT_ACCESS, SUB_CONTAINERS_AND_OBJECTS_INHERIT)) {
+        throw std::system_error(GetLastError(), system_category(), "ServiceInstall: AddAceToObjectsSecurityDescriptor failed");
     }
 }
 
@@ -191,8 +253,9 @@ VOID ServiceInstall(int argc, char ** argv) {
     SmartServiceHandle shSCManager;
     SmartServiceHandle shService;
     CHAR szPath[MAX_PATH];
+    string userName = "NT AUTHORITY\\NetworkService";
 
-    InitializeServiceName(argc, argv);
+    InitializeServiceName();
 
     // build arguments to pass to service when it auto starts
     if (GetModuleFileNameA(NULL, szPath, MAX_PATH) == 0) {
@@ -206,7 +269,7 @@ VOID ServiceInstall(int argc, char ** argv) {
             args << " ";
             if (a == 1) {
                 // replace --service-install argument with --service-run
-                args << "--service-run";
+                args << "--" << cServiceRun;
             } else {
                 args << argv[a];
             }
@@ -227,7 +290,7 @@ VOID ServiceInstall(int argc, char ** argv) {
         SERVICE_ERROR_NORMAL,
         args.str().c_str(),
         NULL, NULL, NULL,
-        "NT AUTHORITY\\NetworkService",
+        userName.c_str(),
         NULL);
     if (shService.Invalid()) {
         throw std::system_error(GetLastError(), system_category(), "CreateService failed");
@@ -241,6 +304,11 @@ VOID ServiceInstall(int argc, char ** argv) {
 
     RedisEventLog().InstallEventLogSource(szPath);
 
+    // make sure NT AUTHORITY\\NetworkService" has rights to the directory the service is installed in (for RDB write)
+    string folder = szPath;
+    folder = folder.substr(0, folder.rfind('\\'));
+    SetAccessACLOnFolder(userName, folder);
+    
     WriteServiceInstallMessage("Redis successfully installed as a service.");
 }
 
@@ -248,7 +316,7 @@ VOID ServiceStart(int argc, char ** argv) {
     SmartServiceHandle shSCManager;
     SmartServiceHandle shService;
 
-    InitializeServiceName(argc, argv);
+    InitializeServiceName();
 
     shSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (shSCManager.Invalid()) {
@@ -266,7 +334,7 @@ VOID ServiceStart(int argc, char ** argv) {
     Sleep(2000);
 
     SERVICE_STATUS status;
-    ULONGLONG start = GetTickCount64();
+    DWORD start = GetTickCount();
     while (QueryServiceStatus(shService, &status) == TRUE) {
         if (status.dwCurrentState == SERVICE_RUNNING) {
             WriteServiceInstallMessage("Redis service successfully started.");
@@ -276,7 +344,7 @@ VOID ServiceStart(int argc, char ** argv) {
             break;
         }
 
-        ULONGLONG current = GetTickCount64();
+        DWORD current = GetTickCount();
         if (current - start >= cThirtySeconds) {
             WriteServiceInstallMessage("Redis service start timed out.");
             break;
@@ -289,7 +357,7 @@ VOID ServiceStop(int argc, char ** argv) {
     SmartServiceHandle shSCManager;
     SmartServiceHandle shService;
 
-    InitializeServiceName(argc, argv);
+    InitializeServiceName();
 
     shSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (shSCManager.Invalid()) {
@@ -304,13 +372,13 @@ VOID ServiceStop(int argc, char ** argv) {
         throw std::system_error(GetLastError(), system_category(), "ControlService failed");
     }
 
-    ULONGLONG start = GetTickCount64();
+    DWORD start = GetTickCount();
     while (QueryServiceStatus(shService, &status) == TRUE) {
         if (status.dwCurrentState == SERVICE_STOPPED) {
             WriteServiceInstallMessage("Redis service successfully stopped.");
             break;
         }
-        ULONGLONG current = GetTickCount64();
+        DWORD current = GetTickCount();
         if (current - start >= cThirtySeconds) {
             WriteServiceInstallMessage("Redis service stop timed out.");
             break;
@@ -322,7 +390,7 @@ VOID ServiceUninstall(int argc, char** argv) {
     SmartServiceHandle shSCManager;
     SmartServiceHandle shService;
 
-    InitializeServiceName(argc, argv);
+    InitializeServiceName();
 
     shSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (shSCManager.Invalid()) {
@@ -404,47 +472,47 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEve
     switch (dwControl) {
         case SERVICE_CONTROL_PRESHUTDOWN:
         {
-                                            SetEvent(g_ServiceStopEvent);
+            SetEvent(g_ServiceStopEvent);
 
-                                            g_ServiceStatus.dwControlsAccepted = 0;
-                                            g_ServiceStatus.dwCurrentState = SERVICE_STOP_PENDING;
-                                            g_ServiceStatus.dwWin32ExitCode = 0;
-                                            g_ServiceStatus.dwCheckPoint = 4;
+            g_ServiceStatus.dwControlsAccepted = 0;
+            g_ServiceStatus.dwCurrentState = SERVICE_STOP_PENDING;
+            g_ServiceStatus.dwWin32ExitCode = 0;
+            g_ServiceStatus.dwCheckPoint = 4;
 
-                                            if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
-                                                throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
-                                            }
+            if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
+                throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
+            }
 
-                                            break;
+            break;
         }
 
         case SERVICE_CONTROL_STOP:
         {
-                                     DWORD start = GetTickCount();
-                                     while (GetTickCount() - start > cPreshutdownInterval) {
-                                         if (WaitForSingleObject(g_ServiceStoppedEvent, cPreshutdownInterval / 10) == WAIT_OBJECT_0) {
-                                             break;
-                                         }
+            DWORD start = GetTickCount();
+            while (GetTickCount() - start > cPreshutdownInterval) {
+                if (WaitForSingleObject(g_ServiceStoppedEvent, cPreshutdownInterval / 10) == WAIT_OBJECT_0) {
+                    break;
+                }
 
-                                         g_ServiceStatus.dwControlsAccepted = 0;
-                                         g_ServiceStatus.dwCurrentState = SERVICE_STOP_PENDING;
-                                         g_ServiceStatus.dwWin32ExitCode = 0;
-                                         g_ServiceStatus.dwCheckPoint = 4;
+                g_ServiceStatus.dwControlsAccepted = 0;
+                g_ServiceStatus.dwCurrentState = SERVICE_STOP_PENDING;
+                g_ServiceStatus.dwWin32ExitCode = 0;
+                g_ServiceStatus.dwCheckPoint = 4;
 
-                                         if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
-                                             throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
-                                         }
-                                     }
+                if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
+                    throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
+                }
+            }
 
-                                     g_ServiceStatus.dwControlsAccepted = 0;
-                                     g_ServiceStatus.dwCurrentState = SERVICE_STOPPED;
-                                     g_ServiceStatus.dwWin32ExitCode = 0;
-                                     g_ServiceStatus.dwCheckPoint = 4;
+            g_ServiceStatus.dwControlsAccepted = 0;
+            g_ServiceStatus.dwCurrentState = SERVICE_STOPPED;
+            g_ServiceStatus.dwWin32ExitCode = 0;
+            g_ServiceStatus.dwCheckPoint = 4;
 
-                                     if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
-                                         throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
-                                     }
-                                     break;
+            if (SetServiceStatus(g_StatusHandle, &g_ServiceStatus) == FALSE) {
+                throw std::system_error(GetLastError(), system_category(), "SetServiceStatus failed");
+            }
+            break;
         }
 
         default:
@@ -529,7 +597,7 @@ void ServiceRun() {
 }
 
 void BuildServiceRunArguments(int argc, char** argv) {
-    InitializeServiceName(argc, argv);
+    InitializeServiceName();
 
     // build argument list to be used by ServiceRun
     for (int n = 0; n < argc; n++) {
@@ -545,7 +613,7 @@ void BuildServiceRunArguments(int argc, char** argv) {
             // bypass --service-run argument
             continue;
         } else {
-            if (_stricmp(argv[n], "--service-name") == 0) {
+            if (_stricmp(argv[n], cServiceName.c_str()) == 0) {
                 // bypass --service-name argument and the name of the service
                 n++;
                 continue; 
@@ -559,35 +627,36 @@ void BuildServiceRunArguments(int argc, char** argv) {
 extern "C" BOOL HandleServiceCommands(int argc, char **argv) {
     try {
         if (argc > 1) {
-            string servicearg = argv[1];
+            string servicearg = string(argv[1]);
+            servicearg = servicearg.substr(2, servicearg.length());
             std::transform(servicearg.begin(), servicearg.end(), servicearg.begin(), ::tolower);
-            if (servicearg == "--service-install") {
+            if (servicearg == cServiceInstall) {
                 if (!IsProcessElevated()) {
                     return RelaunchAsElevatedProcess(argc, argv);
                 } else {
                     ServiceInstall(argc, argv);
                     return TRUE;
                 }
-            } else if (servicearg == "--service-uninstall") {
+            } else if (servicearg == cServiceUninstall) {
                 if (!IsProcessElevated()) {
                     return RelaunchAsElevatedProcess(argc, argv);
                 } else {
                     ServiceUninstall(argc, argv);
                     return TRUE;
                 }
-            } else if (servicearg == "--service-run") {
+            } else if (servicearg == cServiceRun) {
                 g_isRunningAsService = TRUE;
                 BuildServiceRunArguments(argc, argv);
                 ServiceRun();
                 return TRUE;
-            } else if (servicearg == "--service-start") {
+            } else if (servicearg == cServiceStart) {
                 if (!IsProcessElevated()) {
                     return RelaunchAsElevatedProcess(argc, argv);
                 } else {
                     ServiceStart(argc, argv);
                     return TRUE;
                 }
-            } else if (servicearg == "--service-stop") {
+            } else if (servicearg == cServiceStop) {
                 if (!IsProcessElevated()) {
                     return RelaunchAsElevatedProcess(argc, argv);
                 } else {
@@ -606,7 +675,7 @@ extern "C" BOOL HandleServiceCommands(int argc, char **argv) {
         exit(1);
     } catch (std::runtime_error runerr) {
         stringstream err;
-        cout << "HandleServiceCommands: runtime error caught. message=" << runerr.what() << endl;
+        err << "HandleServiceCommands: runtime error caught. message=" << runerr.what() << endl;
         WriteServiceInstallMessage(err.str());
         exit(1);
     } catch (...) {
