@@ -357,70 +357,14 @@ static RedisParamterMapper g_redisArgMap =
     { cServiceStop,                     &fp0 },    // service-stop
 
     // redis commands
-    { "daemonize",                      &fp1 },    // daemonize [yes/no]
-    { "pidfile",                        &fp1 },    // pidfile [file]
-    { "port",                           &fp1 },    // port [port number]
-    { "tcp-backlog",                    &fp1 },    // tcp-backlog [number]
-    { "bind",                           &bp },     // bind [address] [address] ...
-    { "unixsocket",                     &fp1 },    // unixsocket [path] 
-    { "timeout",                        &fp1 },    // timeout [value] 
-    { "tcp-keepalive",                  &fp1 },    // tcp-keepalive [value]
-    { "loglevel",                       &fp1 },    // lovlevel [value]
-    { "logfile",                        &fp1 },    // logfile [file]
-    { "syslog-enabled",                 &fp1 },    // syslog-enabled [yes/no]
-    { "syslog-ident",                   &fp1 },    // syslog-ident [string]
-    { "syslog-facility",                &fp1 },    // syslog-facility [string]
-    { "databases",                      &fp1 },    // databases [number]
-    { "save",                           &savep },  // save [seconds] [changes] or save ""
-    { "stop-writes-on-bgsave-error",    &fp1 },    // stop-writes-on-bgsave-error [yes/no] 
-    { "rdbcompression",                 &fp1 },    // rdbcompression [yes/no]
-    { "rdbchecksum",                    &fp1 },    // rdbchecksum [yes/no]
-    { "dbfilename",                     &fp1 },    // dbfilename [filename]
-    { "dir",                            &fp1 },    // dir [path]
-    { "slaveof",                        &fp2 },    // slaveof [masterip] [master port] 
-    { "masterauth",                     &fp1 },    // masterauth [master-password]
-    { "slave-serve-stale-data",         &fp1 },    // slave-serve-stale-data [yes/no]
-    { "slave-read-only",                &fp1 },    // slave-read-only [yes/no]
-    { "repl-ping-slave-period",         &fp1 },    // repl-ping-slave-period [number]
-    { "repl-timeout",                   &fp1 },    // repl-timeout [number]
-    { "repl-disable-tcp-nodelay",       &fp1 },    // repl-disable-tcp-nodelay [yes/no]
-    { "repl-backlog-size",              &fp1 },    // repl-backlog-size [number]
-    { "repl-backlog-ttl",               &fp1 },    // repl-backlog-ttl [number]
-    { "slave-priority",                 &fp1 },    // slave-priority [number]
-    { "min-slaves-to-write",            &fp1 },    // min-slaves-to-write [number]
-    { "min-slaves-max-lag",             &fp1 },    // min-slaves-max-lag [number]
-    { "requirepass",                    &fp1 },    // requirepass [string]
-    { "rename-command",                 &fp2 },    // rename-command [command] [string]
-    { "maxclients",                     &fp1 },    // maxclients [number]
-    { "maxmemory",                      &fp1 },    // maxmemory [bytes]
-    { "maxmemory-policy",               &fp1 },    // maxmemory-policy [policy]
-    { "maxmemory-samples",              &fp1 },    // maxmemory-samples [number]
-    { "appendonly",                     &fp1 },    // appendonly [yes/no]
-    { "appendfilename",                 &fp1 },    // appendfilename [filename]
-    { "appendfsync",                    &fp1 },    // appendfsync [value]
-    { "no-appendfsync-on-rewrite",      &fp1 },    // no-appendfsync-on-rewrite [value]
-    { "auto-aof-rewrite-percentage",    &fp1 },    // auto-aof-rewrite-percentage [number]
-    { "auto-aof-rewrite-min-size",      &fp1 },    // auto-aof-rewrite-min-size [number]
-    { "lua-time-limit",                 &fp1 },    // lua-time-limit [number]
-    { "slowlog-log-slower-than",        &fp1 },    // slowlog-log-slower-than [number]
-    { "slowlog-max-len",                &fp1 },    // slowlog-max-len [number]
-    { "notify-keyspace-events",         &fp1 },    // notify-keyspace-events [string]
-    { "hash-max-ziplist-entries",       &fp1 },    // hash-max-ziplist-entries [number]
-    { "hash-max-ziplist-value",         &fp1 },    // hash-max-ziplist-value [number]
-    { "list-max-ziplist-entries",       &fp1 },    // list-max-ziplist-entries [number]
-    { "list-max-ziplist-value",         &fp1 },    // list-max-ziplist-value [number]
-    { "set-max-intset-entries",         &fp1 },    // set-max-intset-entries [number]
-    { "zset-max-ziplist-entries",       &fp1 },    // zset-max-ziplist-entries [number]
-    { "zset-max-ziplist-value",         &fp1 },    // zset-max-ziplist-value [number]
-    { "hll-sparse-max-bytes",           &fp1 },    // hll-sparse-max-bytes [number]
-    { "activerehashing",                &fp1 },    // activerehashing [yes/no]
-    { "client-output-buffer-limit",     &fp4 },    // client-output-buffer-limit [class] [hard limit] [soft limit] [soft seconds]
-    { "hz",                             &fp1 },    // hz [number]
-    { "aof-rewrite-incremental-fsync",  &fp1 },    // aof-rewrite-incremental-fsync [yes/no]
+    { cLogfile,                         &fp1 },    // logfile [file]
+    { cSyslogEnabled,                   &fp1 },    // syslog-enabled [yes/no]
+    { cSyslogIdent,                     &fp1 },    // syslog-ident [string]
+    { cMaxMemory,                       &fp1 },    // maxmemory [bytes]
     { cInclude,                         &fp1 },    // include [path]
 
     // sentinel commands
-    { "sentinel",                       &sp }
+    { cSentinel,                        &sp }
 };
 
 std::vector<std::string> &split(const std::string &s, char delim, std::vector<std::string> &elems) {
@@ -467,9 +411,7 @@ void ParseConfFile(string confFile, ArgumentMap& argMap) {
             } else if (parameter.compare(cInclude) == 0) {
                 ParseConfFile(tokens.at(1), argMap);
             } else if (g_redisArgMap.find(parameter) == g_redisArgMap.end()) {
-                stringstream err;
-                err << "unknown conf file parameter : " + parameter;
-                throw runtime_error(err.str());
+                continue;
             }
 
             vector<string> params = g_redisArgMap[parameter]->Extract(tokens);
@@ -489,9 +431,9 @@ void ParseCommandLineArguments(int argc, char** argv) {
             transform(argument.begin(), argument.end(), argument.begin(), ::tolower);
 
             if (g_redisArgMap.find(argument) == g_redisArgMap.end()) {
-                stringstream err;
-                err << "unknown argument: " << argument;
-                throw runtime_error(err.str());
+                // We ignore comamnd line args we don't care about, and any that follow
+                // this means that our added special commands have to come first
+                break;
             }
 
             vector<string> params;
@@ -526,6 +468,7 @@ void ParseCommandLineArguments(int argc, char** argv) {
         } else {
             confFile = true;
             confFilePath = argv[n];
+            break;
         }
     }
 
