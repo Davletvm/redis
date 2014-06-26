@@ -256,7 +256,7 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
             }
         }
         if (offsetRead >= offsetNextControl && inm->sendControlRead.sizeOfThis && inm->sendControlRead.sizeOfNext) {
-            if (offsetWritten >= (_off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
+            if (offsetWritten >= (off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
                 inm->posBufferRead[inm->activeBufferRead] = (unsigned long) (offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset[inm->activeBufferRead]);
                 memcpy(&inm->sendControlRead,
                     inm->buffer[inm->activeBufferRead] + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset[inm->activeBufferRead],

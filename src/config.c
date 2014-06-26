@@ -549,7 +549,9 @@ void loadServerConfigFromString(char *config) {
             }
 #ifdef _WIN32
         } else if (!strcasecmp(argv[0],"maxvirtualmemory")) {
-        // handled in qfork init. bypass here,
+            // ignore. This is taken care of in the qfork code.
+        } else if (!strcasecmp(argv[0],"service-name")) {
+            // ignore. This is taken care of in the win32_service code.
 #endif
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
@@ -560,10 +562,17 @@ void loadServerConfigFromString(char *config) {
     return;
 
 loaderr:
+#ifdef _WIN32
+    redisLog(REDIS_WARNING, "\n*** FATAL CONFIG FILE ERROR ***\n");
+    redisLog(REDIS_WARNING, "Reading the configuration file, at line %d\n", linenum);
+    redisLog(REDIS_WARNING, ">>> '%s'\n", lines[i]);
+    redisLog(REDIS_WARNING, "%s\n", err);
+#else
     fprintf(stderr, "\n*** FATAL CONFIG FILE ERROR ***\n");
     fprintf(stderr, "Reading the configuration file, at line %d\n", linenum);
     fprintf(stderr, ">>> '%s'\n", lines[i]);
     fprintf(stderr, "%s\n", err);
+#endif
     exit(1);
 }
 
