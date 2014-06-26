@@ -1073,9 +1073,9 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             readlen = inm->bufferSize;
         }
         size_t nextControlOffset = inm->sendControlWrite.sizeOfThis + inm->sendControlWrite.offset;
-        if (nextControlOffset < (size_t)inm->totalRead + readlen && (_off_t)(nextControlOffset + sizeof(redisInMemoryReplSendControl)) > inm->totalRead + readlen) {
+        if (nextControlOffset < (size_t)inm->totalRead + readlen && (off_t)(nextControlOffset + sizeof(redisInMemoryReplSendControl)) > inm->totalRead + readlen) {
             readlen -= sizeof(redisInMemoryReplSendControl);
-        } else if ((_off_t)(inm->totalRead + readlen) > (_off_t)(nextControlOffset + inm->sendControlWrite.sizeOfNext)) {
+        } else if ((off_t)(inm->totalRead + readlen) > (off_t)(nextControlOffset + inm->sendControlWrite.sizeOfNext)) {
             readlen = (ssize_t)(nextControlOffset + inm->sendControlWrite.sizeOfNext - inm->totalRead);
         }
         if (inm->posBufferWritten[inm->activeBufferWrite] == 0) {
@@ -1104,10 +1104,10 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         inm->posBufferRead[inm->activeBufferWrite] = sizeof(redisInMemoryReplSendControl);
     }
     if (inm->sendControlWrite.sizeOfThis) {
-        while (inm->totalRead >= (_off_t)(inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof (redisInMemoryReplSendControl)) && inm->sendControlWrite.sizeOfNext) {
+        while (inm->totalRead >= (off_t)(inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof (redisInMemoryReplSendControl)) && inm->sendControlWrite.sizeOfNext) {
             off_t offsetOfNewControl = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis;
-            redisAssert(offsetOfNewControl >= (_off_t)inm->posBufferStartOffset[inm->activeBufferWrite] &&
-                (_off_t)(offsetOfNewControl + sizeof(redisInMemoryReplSendControl)) <= (_off_t)(inm->posBufferStartOffset[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite]));
+            redisAssert(offsetOfNewControl >= (off_t)inm->posBufferStartOffset[inm->activeBufferWrite] &&
+                (off_t)(offsetOfNewControl + sizeof(redisInMemoryReplSendControl)) <= (off_t)(inm->posBufferStartOffset[inm->activeBufferWrite] + inm->posBufferWritten[inm->activeBufferWrite]));
             memcpy(&inm->sendControlWrite, inm->buffer[inm->activeBufferWrite] + offsetOfNewControl - inm->posBufferStartOffset[inm->activeBufferWrite], sizeof(redisInMemoryReplSendControl));
             inm->sendControlWrite.offset = offsetOfNewControl;
         }

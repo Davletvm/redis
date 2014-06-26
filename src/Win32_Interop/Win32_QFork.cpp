@@ -86,8 +86,6 @@ const wchar_t* cMapFileBaseName = L"RedisQFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
 
-const char* maxvirtualmemoryflag = "maxvirtualmemory";
-
 typedef enum BlockState {
     bsINVALID = 0,
     bsUNMAPPED = 1,   
