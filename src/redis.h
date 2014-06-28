@@ -611,29 +611,25 @@ typedef struct redisInMemoryReplSendControl{
     int sizeOfThis;
     int sizeOfNext;
     off_t offset;
-    uint64_t cksum;
 }redisInMemoryReplSendControl;
 
 typedef struct redisInMemoryVirtualBuffer
 {
     int size;
-    int sourceBuffer;
     int sourceOffset;
 }redisInMemoryVirtualBuffer;
 
 
 typedef struct redisInMemoryReplReceive {
-    char * buffer[2];
+    char * buffer;
     redisInMemoryVirtualBuffer virtualBuffer;
-    int activeBufferRead;
-    int activeBufferWrite;
     off_t totalRead;
     redisInMemoryReplSendControl sendControlWrite;
     redisInMemoryReplSendControl sendControlRead;
     unsigned long bufferSize;
-    unsigned long posBufferRead[2];
-    unsigned long posBufferWritten[2];
-    size_t posBufferStartOffset[2];
+    unsigned long posBufferRead;
+    unsigned long posBufferWritten;
+    size_t posBufferStartOffset;
     int endStateFlags;
 } redisInMemoryReplReceive;
 
