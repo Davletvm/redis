@@ -1060,16 +1060,32 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROROREND)
         return;
 
-
     if (!inm->sendControlWrite.sizeOfThis) {
         readlen = sizeof(redisInMemoryReplSendControl) - inm->posBufferWritten;
     } else {
 
-        redisAssert(inm->posBufferRead == inm->posBufferWritten);
+        redisAssert(inm->posBufferRead == inm->posBufferWritten ||
+            (inm->posBufferRead + inm->posBufferStartOffset == inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis &&
+            inm->posBufferWritten + inm->posBufferStartOffset < inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof(redisInMemoryReplSendControl) &&
+            inm->posBufferWritten > inm->posBufferRead &&
+            inm->posBufferWritten < inm->posBufferRead + sizeof(redisInMemoryReplSendControl)
+            ));
 
-        // make sure there's always some space left for the next control block
-        readlen = inm->bufferSize - inm->posBufferWritten - sizeof(redisInMemoryReplSendControl);
+        readlen = inm->bufferSize - inm->posBufferWritten;
 
+        off_t maxKnownOffset = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + inm->sendControlWrite.sizeOfNext;
+        if (readlen > (maxKnownOffset - inm->totalRead)) {
+            readlen = maxKnownOffset - inm->totalRead;
+        }
+
+#if 0
+        if (random() % 100 < 10) {
+            if (inm->totalRead + readlen > inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis) {
+                readlen = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis - inm->totalRead + 4;
+                if (readlen <= 0) readlen = 4;
+            }
+        }
+#endif 
         if (inm->posBufferWritten == 0) {
             inm->posBufferStartOffset = inm->totalRead;
         }
@@ -1593,7 +1609,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         sdsfree(err);
     }
 
-    {
+    if (server.repl_inMemoryUse) {
         err = sendSynchronousCommand(fd, "REPLCONF", "repl-inmemory", "1", NULL);
         if (err[0] == '-') {
             redisLog(REDIS_NOTICE, "(Non critical) Master does not understand REPLCONF repl-inmemory 1: %s", err);

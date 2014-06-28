@@ -631,6 +631,7 @@ typedef struct redisInMemoryReplReceive {
     unsigned long posBufferWritten;
     size_t posBufferStartOffset;
     int endStateFlags;
+    time_t lastTick;
 } redisInMemoryReplReceive;
 
 #define INMEMORY_STATE_INVALID -1

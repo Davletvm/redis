@@ -264,7 +264,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         g_SlaveExitCode = exitCode;
 
         // let parent know we are done
-        SetEvent(g_pQForkControl->operationComplete);
+        SetEvent(exitCode == 0 ? g_pQForkControl->operationComplete : g_pQForkControl->operationFailed);
 
         // parent will notify us when to quit
         WaitForSingleObject(g_pQForkControl->terminateForkedProcess, INFINITE);
