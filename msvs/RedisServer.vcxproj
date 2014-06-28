@@ -181,6 +181,11 @@
       <Command>
       </Command>
     </PostBuildEvent>
+    <CustomBuildStep>
+      <Command>$(TargetDir)\..\..\mkhash.bat</Command>
+      <Message>Generating git sha hash include</Message>
+      <Outputs>$(TargetDir)\..\..\mkhash.h</Outputs>
+    </CustomBuildStep>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
