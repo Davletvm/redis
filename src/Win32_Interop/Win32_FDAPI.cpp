@@ -27,10 +27,12 @@
 #include <sys/stat.h>
 #include "Win32_fdapi_crt.h"
 #include "Win32_variadicFunctor.h"
+#include "Win32_ANSI.h"
 #include <string>
+#include "..\redisLog.h"
 using namespace std;
 
-#define CATCH_AND_REPORT()  catch(const std::exception &){printf("std exception");}catch(...){printf("other exception");}
+#define CATCH_AND_REPORT()  catch(const std::exception &){::redisLog(REDIS_WARNING, "FDAPI: std exception");}catch(...){::redisLog(REDIS_WARNING, "FDAPI: other exception");}
 
 extern "C" {
 // FD lookup Winsock equivalents for Win32_wsiocp.c
@@ -178,9 +180,8 @@ bool IsWindowsVersionAtLeast(WORD wMajorVersion, WORD wMinorVersion, WORD wServi
 
 void EnableFastLoopback(SOCKET s) {
 #ifndef _WIN32_WINNT_WIN8
-#define _WIN32_WINNT_WIN8                   0x0602
+    #define _WIN32_WINNT_WIN8                   0x0602
 #endif
-
     // if Win8+, use fast path option on loopback 
     if (IsWindowsVersionAtLeast(HIBYTE(_WIN32_WINNT_WIN8), LOBYTE(_WIN32_WINNT_WIN8), 0)) {
 #ifndef SIO_LOOPBACK_FAST_PATH
@@ -404,7 +405,8 @@ int redis_fcntl_impl(int fd, int cmd, int flags = 0 ) {
     return -1;
 }
 
-auto f_WSAPoll = dllfunctor_stdcall<int, WSAPOLLFD*, ULONG, INT>("ws2_32.dll", "WSAPoll");
+#undef FD_ISSET
+#define FD_ISSET(fd, set) f_WSAFDIsSet((SOCKET)(fd), (fd_set *)(set))
 int redis_poll_impl(struct pollfd *fds, nfds_t nfds, int timeout) {
     try {
         struct pollfd* pollCopy = new struct pollfd[nfds];
@@ -412,7 +414,7 @@ int redis_poll_impl(struct pollfd *fds, nfds_t nfds, int timeout) {
             errno = ENOMEM;
             return -1;
         }
-    
+
         // NOTE: Treating the fds.fd as a Redis file descriptor and converting to a SOCKET for WSAPoll. 
         for (nfds_t n = 0; n < nfds; n ++) {
             pollCopy[n].fd = RFDMap::getInstance().lookupSocket((RFD)(fds[n].fd));
@@ -420,19 +422,80 @@ int redis_poll_impl(struct pollfd *fds, nfds_t nfds, int timeout) {
             pollCopy[n].revents = fds[n].revents;
         }
 
-        // See the community addition comments at http://msdn.microsoft.com/en-us/library/windows/desktop/ms741669%28v=vs.85%29.aspx for this API. 
-        // BugCheck seems to indicate that problems with this API in Win8 have been addressed, but this needs to be verified.
-        int ret = f_WSAPoll(pollCopy, nfds, timeout);
+        if (IsWindowsVersionAtLeast(HIBYTE(_WIN32_WINNT_WIN6), LOBYTE(_WIN32_WINNT_WIN6), 0)) {
+            static auto f_WSAPoll = dllfunctor_stdcall<int, WSAPOLLFD*, ULONG, INT>("ws2_32.dll", "WSAPoll");
 
-        for (nfds_t n = 0; n < nfds; n ++) {
-            fds[n].events = pollCopy[n].events;
-            fds[n].revents = pollCopy[n].revents;
+            // See the community addition comments at http://msdn.microsoft.com/en-us/library/windows/desktop/ms741669%28v=vs.85%29.aspx for this API. 
+            // BugCheck seems to indicate that problems with this API in Win8 have been addressed, but this needs to be verified.
+            int ret = f_WSAPoll(pollCopy, nfds, timeout);
+
+            for (nfds_t n = 0; n < nfds; n++) {
+                fds[n].events = pollCopy[n].events;
+                fds[n].revents = pollCopy[n].revents;
+            }
+
+            delete pollCopy;
+            pollCopy = NULL;
+
+            return ret;
+        } else {
+            static auto f_WSAFDIsSet = dllfunctor_stdcall<int, SOCKET, fd_set*>("ws2_32.dll", "__WSAFDIsSet");
+
+            int ret;
+            fd_set readSet;
+            fd_set writeSet;
+            fd_set excepSet;
+
+            FD_ZERO(&readSet);
+            FD_ZERO(&writeSet);
+            FD_ZERO(&excepSet);
+
+            if (nfds >= FD_SETSIZE) {
+                errno = EINVAL;
+                return -1;
+            }
+
+            nfds_t i;
+            for (i = 0; i < nfds; i++) {
+                if (fds[i].fd < 0) {
+                    continue;
+                }
+                if (pollCopy[i].fd >= FD_SETSIZE) {
+                    errno = EINVAL;
+                    return -1;
+                }
+
+                if (pollCopy[i].events & POLLIN) FD_SET(pollCopy[i].fd, &readSet);
+                if (pollCopy[i].events & POLLOUT) FD_SET(pollCopy[i].fd, &writeSet);
+                if (pollCopy[i].events & POLLERR) FD_SET(pollCopy[i].fd, &excepSet);
+            }
+
+            if (timeout < 0) {
+                ret = select(0, &readSet, &writeSet, &excepSet, NULL);
+            } else {
+                struct timeval tv;
+                tv.tv_sec = timeout / 1000;
+                tv.tv_usec = 1000 * (timeout % 1000);
+                ret = select(0, &readSet, &writeSet, &excepSet, &tv);
+            }
+
+            if (ret < 0) {
+                return ret;
+            }
+
+            for (i = 0; i < nfds; i++) {
+                fds[i].revents = 0;
+
+                if (FD_ISSET(pollCopy[i].fd, &readSet)) fds[i].revents |= POLLIN;
+                if (FD_ISSET(pollCopy[i].fd, &writeSet)) fds[i].revents |= POLLOUT;
+                if (FD_ISSET(pollCopy[i].fd, &excepSet)) fds[i].revents |= POLLERR;
+            }
+
+            delete pollCopy;
+            pollCopy = NULL;
+
+            return ret;
         }
-
-        delete pollCopy;
-        pollCopy = NULL;
-
-        return ret;
     } CATCH_AND_REPORT()
 
     errno = EBADF;
@@ -521,11 +584,29 @@ ssize_t redis_write_impl(int fd, const void *buf, size_t count) {
         } else {
             int posixFD = RFDMap::getInstance().lookupPosixFD( fd );
             if( posixFD != -1 ) {
-                int retval = crt_write(posixFD, buf,(unsigned int)count);
-                if(retval == -1) {
-                    errno = GetLastError();
+                if (posixFD == _fileno(stdout)) {
+                    DWORD bytesWritten = 0;
+                    if (FALSE != ParseAndPrintANSIString(GetStdHandle(STD_OUTPUT_HANDLE), buf, (DWORD)count, &bytesWritten)) {
+                        return (int)bytesWritten;
+                    } else {
+                        errno = GetLastError();
+                        return 0;
+                    }
+                } else if (posixFD == _fileno(stderr)) {
+                    DWORD bytesWritten = 0;
+                    if (FALSE != ParseAndPrintANSIString(GetStdHandle(STD_ERROR_HANDLE), buf, (DWORD)count, &bytesWritten)) {
+                        return (int)bytesWritten;
+                    } else {
+                        errno = GetLastError();
+                        return 0;
+                    }
+                } else {
+                    int retval = crt_write(posixFD, buf, (unsigned int)count);
+                    if (retval == -1) {
+                        errno = GetLastError();
+                    }
+                    return retval;
                 }
-                return retval;
             }
             else {
                 errno = EBADF;
@@ -919,9 +1000,23 @@ int redis_getaddrinfo_impl(const char *node, const char *service, const struct a
     return f_getaddrinfo(node, service,hints, res);
 }
 
-auto f_inet_ntop = dllfunctor_stdcall<const char*, int, const void*, char*, size_t>("ws2_32.dll", "inet_ntop");
 const char* redis_inet_ntop_impl(int af, const void *src, char *dst, size_t size) {
-    return f_inet_ntop(af, src, dst, size);
+    if (IsWindowsVersionAtLeast(HIBYTE(_WIN32_WINNT_WIN6), LOBYTE(_WIN32_WINNT_WIN6), 0)) {
+        static auto f_inet_ntop = dllfunctor_stdcall<const char*, int, const void*, char*, size_t>("ws2_32.dll", "inet_ntop");
+        return f_inet_ntop(af, src, dst, size);
+    } else {
+        static auto f_WSAAddressToStringA = dllfunctor_stdcall<int, LPSOCKADDR, DWORD, LPWSAPROTOCOL_INFO, LPSTR, LPDWORD>("ws2_32.dll", "WSAAddressToStringA");
+        struct sockaddr_in srcaddr;
+
+        memset(&srcaddr, 0, sizeof(struct sockaddr_in));
+        memcpy(&(srcaddr.sin_addr), src, sizeof(srcaddr.sin_addr));
+
+        srcaddr.sin_family = af;
+        if (f_WSAAddressToStringA((struct sockaddr*) &srcaddr, sizeof(struct sockaddr_in), 0, dst, (LPDWORD)&size) != 0) {
+            return NULL;
+        }
+        return dst;
+    }
 }
 
 class Win32_FDSockMap {

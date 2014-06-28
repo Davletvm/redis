@@ -34,12 +34,14 @@
 /* For now hard code these version strings.
    TODO: Modify build to write them to release.h from the environment */
 #ifdef _WIN32
-#define REDIS_GIT_SHA1 "00000000"
+#include "..\msvs\mshash.h"
 #define REDIS_GIT_DIRTY "0"
 #define REDIS_BUILD_ID "0000"
 #else
 #include "release.h"
 #endif
+
+#include <string.h>
 
 #include "version.h"
 #include "crc64.h"

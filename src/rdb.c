@@ -286,7 +286,7 @@ int rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
 
     /* Try LZF compression - under 20 bytes it's unable to compress even
      * aaaaaaaaaaaaaaaaaa so skip it */
-    if (server.rdb_compression && len > 20) {
+    if (server.rdb_compression && !server.repl_inMemorySend && len > 20) {
         n = rdbSaveLzfStringObject(rdb,s,len);
         if (n == -1) return -1;
         if (n > 0) return n;
@@ -1290,7 +1290,8 @@ readagain:
         if (rioRead(&rdb,&cksum,8) == 0) goto eoferr;
         memrev64ifbe(&cksum);
         if (cksum == 0) {
-            redisLog(REDIS_NOTICE,"RDB file was saved with checksum disabled: no check performed.");
+            if (fp) 
+                redisLog(REDIS_NOTICE,"RDB file was saved with checksum disabled: no check performed.");
         } else if (cksum != expected) {
             redisLog(REDIS_WARNING,"Wrong RDB checksum. Aborting now.");
             exit(1);
