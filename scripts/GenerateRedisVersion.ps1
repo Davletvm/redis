@@ -24,13 +24,15 @@ foreach ($line in $data)
 }
 
 $redisVersion = $redisVersion.Replace("`"","")
+Write-Host $redisVersion
+$redisVersionTokens =  $redisVersion.Split(".");
 
 $RedisServerResourceFile = "msvs\RedisServer.rc"
 $ResourceData = Get-Content $RedisServerResourceFile
-$oldFileVersion = '"FileVersion", "0.0.0.0"'
 $oldProductVersion = '"ProductVersion", "0.0.0.0"' 
-$newFileVersion = "`"FileVersion`", `"$($redisVersion).$($versionTag)`""
 $newProductVersion = "`"ProductVersion`", `"$($redisVersion).$($versionTag)`""
+$oldFileVersion = 'FILEVERSION 0,0,0,0'
+$newFileVersion = "FILEVERSION $($redisVersionTokens[0]),$($redisVersionTokens[1]),$($redisVersionTokens[2]),$($versionTag)"
 
 $NewResourceData = $ResourceData -replace $oldFileVersion, $newFileVersion
 $NewResourceData = $NewResourceData -replace $oldProductVersion, $newProductVersion
