@@ -1,11 +1,12 @@
-if($args.Length -ne 2)
+if($args.Length -ne 3)
 {
-    Write-Host "Exiting...Proper Usage: .\GenerateRedisVersion.ps1 <WorkingDir> <versionTag>"
+    Write-Host "Exiting...Proper Usage: .\GenerateRedisVersion.ps1 <WorkingDir> <buildNumber> <versionTag>"
     exit -1
 }
 
 $WorkingDir = $args[0]
-$versionTag = $args[1]
+$buildNumber = $args[1]
+$versionTag = $args[2]
 $redisVersion = ''
 
 Write-Host "Changing to Working Directory :" $WorkingDir
@@ -30,9 +31,9 @@ $redisVersionTokens =  $redisVersion.Split(".");
 $RedisServerResourceFile = "msvs\RedisServer.rc"
 $ResourceData = Get-Content $RedisServerResourceFile
 $oldProductVersion = '"ProductVersion", "0.0.0.0"' 
-$newProductVersion = "`"ProductVersion`", `"$($redisVersion).$($versionTag)`""
+$newProductVersion = "`"ProductVersion`", `"$($redisVersion).$($buildNumber)_$($versionTag)`""
 $oldFileVersion = 'FILEVERSION 0,0,0,0'
-$newFileVersion = "FILEVERSION $($redisVersionTokens[0]),$($redisVersionTokens[1]),$($redisVersionTokens[2]),$($versionTag)"
+$newFileVersion = "FILEVERSION $($redisVersionTokens[0]),$($redisVersionTokens[1]),$($redisVersionTokens[2]),$($buildNumber)"
 
 $NewResourceData = $ResourceData -replace $oldFileVersion, $newFileVersion
 $NewResourceData = $NewResourceData -replace $oldProductVersion, $newProductVersion
