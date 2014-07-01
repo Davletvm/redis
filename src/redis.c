@@ -1094,6 +1094,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         server.shutdown_asap = 0;
     }
 
+    run_with_period(2000) {
+        if (server.repl_inMemorySend) {
+            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld", server.repl_inMemorySend->totalSent);
+        }
+    }
+
+
     /* Show some info about non-empty databases */
     run_with_period(5000) {
         for (j = 0; j < server.dbnum; j++) {

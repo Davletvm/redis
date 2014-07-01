@@ -182,7 +182,6 @@ void EnableFastLoopback(SOCKET s) {
 #ifndef _WIN32_WINNT_WIN8
     #define _WIN32_WINNT_WIN8                   0x0602
 #endif
-    
     // if Win8+, use fast path option on loopback 
     if (IsWindowsVersionAtLeast(HIBYTE(_WIN32_WINNT_WIN8), LOBYTE(_WIN32_WINNT_WIN8), 0)) {
 #ifndef SIO_LOOPBACK_FAST_PATH

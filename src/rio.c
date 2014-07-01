@@ -138,7 +138,7 @@ static int WaitForFreeBuffer(rio * r)
 {
     redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, INFINITE);
+    WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
     BOOL found = FALSE;
     for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
         DWORD rval = WaitForSingleObject(inm->sentDoneEvents[x], 0);
@@ -215,6 +215,11 @@ static int PollForRead(redisInMemoryReplReceive * inm)
         return 0;
     }
 
+    if (server.unixtime % 2 == 0 && inm->lastTick != server.unixtime) {
+        inm->lastTick = server.unixtime;
+        redisLog(REDIS_VERBOSE, "Bytes Received In-Memory-Repl %lld", inm->totalRead);
+    }
+
     aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
 
     if (server.repl_inMemoryReceive != inm) {
@@ -231,51 +236,52 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 
 static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
     while (1) {
-
         if (!inm->sendControlRead.sizeOfThis) {
             if (!PollForRead(inm))
                 return 0;
             continue;
         }
 
-        off_t offsetWritten = inm->posBufferWritten[inm->activeBufferRead] + inm->posBufferStartOffset[inm->activeBufferRead];
-        off_t offsetRead = inm->posBufferRead[inm->activeBufferRead] + inm->posBufferStartOffset[inm->activeBufferRead];
+        off_t offsetWritten = inm->posBufferWritten + inm->posBufferStartOffset;
+        off_t offsetRead = inm->posBufferRead + inm->posBufferStartOffset;
         off_t offsetNextControl = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis;
 
         if (offsetRead == offsetWritten) {
-            int nextBuffer = (inm->activeBufferRead + 1) % 2;
-            inm->posBufferRead[inm->activeBufferRead] = 0;
-            inm->posBufferWritten[inm->activeBufferRead] = 0;
-            if (inm->posBufferWritten[nextBuffer]) {
-                inm->activeBufferRead = nextBuffer;
+            inm->posBufferRead = 0;
+            inm->posBufferWritten = 0;
+            if (!PollForRead(inm))
+                return 0;
+            continue;
+        }
+
+        if (offsetRead == offsetNextControl) {
+            if (offsetWritten >= (off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
+                inm->posBufferRead = (unsigned long) (offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset);
+                memcpy(&inm->sendControlRead,
+                    inm->buffer + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset,
+                    sizeof(redisInMemoryReplSendControl));
+                inm->sendControlRead.offset = offsetNextControl;
                 continue;
             } else {
+                redisLog(REDIS_VERBOSE, "In middle of control block");
+                memcpy(inm->buffer, offsetNextControl - inm->posBufferStartOffset + inm->buffer, offsetWritten - offsetNextControl);
+                inm->posBufferRead = 0;
+                inm->posBufferWritten = (unsigned long)(offsetWritten - offsetNextControl);
+                inm->posBufferStartOffset = offsetNextControl;
                 if (!PollForRead(inm))
                     return 0;
                 continue;
             }
         }
-        if (offsetRead >= offsetNextControl && inm->sendControlRead.sizeOfThis && inm->sendControlRead.sizeOfNext) {
-            if (offsetWritten >= (off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
-                inm->posBufferRead[inm->activeBufferRead] = (unsigned long) (offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset[inm->activeBufferRead]);
-                memcpy(&inm->sendControlRead,
-                    inm->buffer[inm->activeBufferRead] + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset[inm->activeBufferRead],
-                    sizeof(redisInMemoryReplSendControl));
-                inm->sendControlRead.offset = offsetNextControl;
-            } else {
-                inm->posBufferRead[inm->activeBufferRead] = (unsigned long) (offsetWritten - inm->posBufferStartOffset[inm->activeBufferRead]);
-            }
-            continue;
-        }
+
 
         if (offsetNextControl < offsetWritten) {
             inm->virtualBuffer.size = (int)(offsetNextControl - offsetRead);
         } else {
             inm->virtualBuffer.size = (int)(offsetWritten- offsetRead);
         }
-        inm->virtualBuffer.sourceBuffer = inm->activeBufferRead;
-        inm->virtualBuffer.sourceOffset = inm->posBufferRead[inm->activeBufferRead];
-        inm->posBufferRead[inm->activeBufferRead] += inm->virtualBuffer.size;
+        inm->virtualBuffer.sourceOffset = inm->posBufferRead;
+        inm->posBufferRead += inm->virtualBuffer.size;
         return 1;
     }
 }
@@ -295,7 +301,7 @@ static size_t rioMemoryRead(rio *r, void *buf, size_t len) {
             lenToCopy = inm->virtualBuffer.size;
         else
             lenToCopy = len;
-        memcpy(buf, inm->virtualBuffer.sourceOffset + inm->buffer[inm->virtualBuffer.sourceBuffer], lenToCopy);
+        memcpy(buf, inm->virtualBuffer.sourceOffset + inm->buffer, lenToCopy);
         inm->virtualBuffer.size -= (int) lenToCopy;
         inm->virtualBuffer.sourceOffset += (int) lenToCopy;
         if (lenToCopy == len)

@@ -150,7 +150,7 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         if (inMemoryRepl.sendState[x] == INMEMORY_STATE_READYTOSEND) {
             redisLog(REDIS_DEBUG, "Waiting for send complete on buffer %d", x);
-            rval = WaitForSingleObject(doneSent[x], INFINITE);
+            rval = WaitForSingleObject(doneSent[x], server.repl_timeout * 1000);
             if (rval != WAIT_OBJECT_0) return REDIS_ERR;
             redisLog(REDIS_DEBUG, "Send complete received on %d", x);
         }
