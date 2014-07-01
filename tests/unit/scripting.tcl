@@ -110,17 +110,21 @@ start_server {tags {"scripting"}} {
         } 0
     } {boolean 1}
 
-    test {EVAL - Is Lua affecting the currently selected DB?} {
+    test {EVAL - Is the Lua client using the currently selected DB?} {
         r set mykey "this is DB 9"
         r select 10
         r set mykey "this is DB 10"
         r eval {return redis.pcall('get','mykey')} 0
     } {this is DB 10}
 
-    test {EVAL - Is Lua seleced DB retained?} {
+    test {EVAL - SELECT inside Lua should not affect the caller} {
+        # here we DB 10 is selected
+        r set mykey "original value"
         r eval {return redis.pcall('select','9')} 0
-        r get mykey
-    } {this is DB 9}
+        set res [r get mykey]
+        r select 9
+        set res
+    } {original value}
 
     if 0 {
         test {EVAL - Script can't run more than configured time limit} {
@@ -469,6 +473,28 @@ start_server {tags {"scripting repl"}} {
                 [r -1 get x] eq {1}
             } else {
                 fail "Expected 1 in x, but value is '[r -1 get x]'"
+            }
+        }
+
+        test {Lua scripts using SELECT are replicated correctly} {
+            r eval {
+                redis.call("set","foo1","bar1")
+                redis.call("select","10")
+                redis.call("incr","x")
+                redis.call("select","11")
+                redis.call("incr","z")
+            } 0
+            r eval {
+                redis.call("set","foo1","bar1")
+                redis.call("select","10")
+                redis.call("incr","x")
+                redis.call("select","11")
+                redis.call("incr","z")
+            } 0
+            wait_for_condition 50 100 {
+                [r -1 debug digest] eq [r debug digest]
+            } else {
+                fail "Master-Slave desync after Lua script using SELECT."
             }
         }
     }

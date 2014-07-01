@@ -37,6 +37,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#include <signal.h>
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
@@ -121,6 +122,7 @@ static struct config {
     char *eval;
 } config;
 
+static volatile sig_atomic_t force_cancel_loop = 0;
 static void usage();
 static void slaveMode(void);
 char *redisGitSHA1(void);
@@ -1787,6 +1789,35 @@ static void statMode() {
  * Scan mode
  *--------------------------------------------------------------------------- */
 
+static void scanMode() {
+    redisReply *reply;
+    unsigned long long cur = 0;
+
+    do {
+        if (config.pattern)
+            reply = redisCommand(context,"SCAN %llu MATCH %s",
+                cur,config.pattern);
+        else
+            reply = redisCommand(context,"SCAN %llu",cur);
+        if (reply == NULL) {
+            printf("I/O error\n");
+            exit(1);
+        } else if (reply->type == REDIS_REPLY_ERROR) {
+            printf("ERROR: %s\n", reply->str);
+            exit(1);
+        } else {
+            int j;
+
+            cur = strtoull(reply->element[0]->str,NULL,10);
+            for (j = 0; j < reply->element[1]->elements; j++)
+                printf("%s\n", reply->element[1]->element[j]->str);
+        }
+        freeReplyObject(reply);
+    } while(cur != 0);
+
+    exit(0);
+}
+
 /*------------------------------------------------------------------------------
  * Intrisic latency mode.
  *
@@ -1818,11 +1849,17 @@ unsigned long compute_something_fast(void) {
     return output;
 }
 
+static void intrinsicLatencyModeStop(int s) {
+    REDIS_NOTUSED(s);
+    force_cancel_loop = 1;
+}
+
 static void intrinsicLatencyMode(void) {
     long long test_end, run_time, max_latency = 0, runs = 0;
 
     run_time = config.intrinsic_latency_duration*1000000;
     test_end = ustime() + run_time;
+    signal(SIGINT, intrinsicLatencyModeStop);
 
     while(1) {
         long long start, end, latency;
@@ -1840,7 +1877,7 @@ static void intrinsicLatencyMode(void) {
             printf("Max latency so far: %lld microseconds.\n", max_latency);
         }
 
-        if (end > test_end) {
+        if (force_cancel_loop || end > test_end) {
             printf("\n%lld total runs (avg %lld microseconds per run).\n",
                 runs, run_time/runs);
             printf("Worst run took %.02fx times the average.\n",
@@ -1872,7 +1909,10 @@ int main(int argc, char **argv) {
     config.cluster_mode = 0;
     config.slave_mode = 0;
     config.getrdb_mode = 0;
+    config.stat_mode = 0;
+    config.scan_mode = 0;
     config.intrinsic_latency_mode = 0;
+    config.pattern = NULL;
     config.rdb_filename = NULL;
     config.pipe_mode = 0;
     config.pipe_timeout = REDIS_CLI_DEFAULT_PIPE_TIMEOUT;
@@ -1934,6 +1974,11 @@ int main(int argc, char **argv) {
         statMode();
     }
 
+    /* Scan mode */
+    if (config.scan_mode) {
+        if (cliConnect(0) == REDIS_ERR) exit(1);
+        scanMode();
+    }
 
     /* Intrinsic latency mode */
     if (config.intrinsic_latency_mode) intrinsicLatencyMode();

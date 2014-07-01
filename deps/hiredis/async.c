@@ -91,8 +91,8 @@ static int callbackKeyCompare(void *privdata, const void *key1, const void *key2
     size_t l1, l2;
     ((void) privdata);
 
-    l1 = sdslen((sds)key1);
-    l2 = sdslen((sds)key2);
+    l1 = sdslen((const sds)key1);
+    l2 = sdslen((const sds)key2);
     if (l1 != l2) return 0;
     return memcmp(key1,key2,l1) == 0;
 }
@@ -117,7 +117,12 @@ static dictType callbackDict = {
 };
 
 static redisAsyncContext *redisAsyncInitialize(redisContext *c) {
-    redisAsyncContext *ac = realloc(c,sizeof(redisAsyncContext));
+    redisAsyncContext *ac;
+
+    ac = realloc(c,sizeof(redisAsyncContext));
+    if (ac == NULL)
+        return NULL;
+
     c = &(ac->c);
 
     /* The regular connect functions will always set the flag REDIS_CONNECTED.
@@ -173,7 +178,26 @@ redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
 }
 #else
 redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
-    redisContext *c = redisConnectNonBlock(ip,port);
+    redisContext *c;
+    redisAsyncContext *ac;
+
+    c = redisConnectNonBlock(ip,port);
+    if (c == NULL)
+        return NULL;
+
+    ac = redisAsyncInitialize(c);
+    if (ac == NULL) {
+        redisFree(c);
+        return NULL;
+    }
+
+    __redisAsyncCopyError(ac);
+    return ac;
+}
+
+redisAsyncContext *redisAsyncConnectBind(const char *ip, int port,
+                                         const char *source_addr) {
+    redisContext *c = redisConnectBindNonBlock(ip,port,source_addr);
     redisAsyncContext *ac = redisAsyncInitialize(c);
     __redisAsyncCopyError(ac);
     return ac;
@@ -181,8 +205,19 @@ redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
 #endif
 
 redisAsyncContext *redisAsyncConnectUnix(const char *path) {
-    redisContext *c = redisConnectUnixNonBlock(path);
-    redisAsyncContext *ac = redisAsyncInitialize(c);
+    redisContext *c;
+    redisAsyncContext *ac;
+
+    c = redisConnectUnixNonBlock(path);
+    if (c == NULL)
+        return NULL;
+
+    ac = redisAsyncInitialize(c);
+    if (ac == NULL) {
+        redisFree(c);
+        return NULL;
+    }
+
     __redisAsyncCopyError(ac);
     return ac;
 }
@@ -214,6 +249,9 @@ static int __redisPushCallback(redisCallbackList *list, redisCallback *source) {
 
     /* Copy callback from stack to heap */
     cb = malloc(sizeof(*cb));
+    if (cb == NULL)
+        return REDIS_ERR_OOM;
+
     if (source != NULL) {
         memcpy(cb,source,sizeof(*cb));
         cb->next = NULL;
@@ -392,7 +430,7 @@ static int __redisGetSubscribeCallback(redisAsyncContext *ac, redisReply *reply,
 
 void redisProcessCallbacks(redisAsyncContext *ac) {
     redisContext *c = &(ac->c);
-    redisCallback cb;
+    redisCallback cb = {NULL, NULL, NULL};
     void *reply = NULL;
     int status;
 
@@ -404,7 +442,7 @@ void redisProcessCallbacks(redisAsyncContext *ac) {
                 __redisAsyncDisconnect(ac);
                 return;
             }
-            
+
             /* If monitor mode, repush callback */
             if(c->flags & REDIS_MONITORING) {
                 __redisPushCallback(&ac->replies,&cb);
