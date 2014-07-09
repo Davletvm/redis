@@ -32,6 +32,9 @@ CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
         of an implementation error (lack of checking of
         SRI_PROMOTED flag). (Salvatore Sanfilippo)
 * [FIX] Cancel SHUTDOWN if initial AOF is being written. (Matt Stancliff)
+* [FIX] Sentinel: bind source address for outcoming connections. (Matt
+ Stancliff).
+
 * [FIX] Less timing sensitive Sentinel tests. (Salvatore Sanfilippo).
 
 * [NEW] redis-cli --intrinsic-latency stopped with SIGINT still reports
