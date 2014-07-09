@@ -525,7 +525,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
 #else
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
 #endif
-        if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) goto error;
+        if (anetListen(err,s,p->ai_addr,(socklen_t)p->ai_addrlen,backlog) == ANET_ERR) goto error;
         goto end;
     }
     if (p == NULL) {

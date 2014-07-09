@@ -663,7 +663,7 @@ int redisReaderGetReply(redisReader *r, void **reply) {
     /* Discard part of the buffer when we've consumed at least 1k, to avoid
      * doing unnecessary calls to memmove() in sds.c. */
     if (r->pos >= 1024) {
-        sdsrange(r->buf,r->pos,-1);
+        sdsrange(r->buf,(int)r->pos,-1);
         r->pos = 0;
         r->len = sdslen(r->buf);
     }
@@ -1078,7 +1078,6 @@ redisContext *redisConnectNonBlock(const char *ip, int port) {
     return c;
 }
 
-#ifndef _WIN32
 redisContext *redisConnectBindNonBlock(const char *ip, int port,
                                        const char *source_addr) {
     redisContext *c = redisContextInit();
@@ -1086,7 +1085,6 @@ redisContext *redisConnectBindNonBlock(const char *ip, int port,
     redisContextConnectBindTcp(c,ip,port,NULL,source_addr);
     return c;
 }
-#endif
 
 redisContext *redisConnectUnix(const char *path) {
     redisContext *c;
@@ -1124,11 +1122,15 @@ redisContext *redisConnectUnixNonBlock(const char *path) {
     return c;
 }
 
-/* initializers if caller handles connection */
-redisContext *redisConnected() {
-    redisContext *c = redisContextInit();
-    c->fd = -1;
-    c->flags |= REDIS_BLOCK;
+redisContext *redisConnectFd(int fd) {
+    redisContext *c;
+
+    c = redisContextInit();
+    if (c == NULL)
+        return NULL;
+
+    c->fd = fd;
+    c->flags |= REDIS_BLOCK | REDIS_CONNECTED;
     return c;
 }
 

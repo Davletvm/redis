@@ -1827,7 +1827,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
     /* Commands connection. */
     if (ri->cc == NULL) {
-        ri->cc = redisAsyncConnect(ri->addr->ip,ri->addr->port);
+        ri->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
         if (ri->cc->err) {
             sentinelEvent(REDIS_DEBUG,"-cmd-link-reconnection",ri,"%@ #%s",
                 ri->cc->errstr);
@@ -1849,7 +1849,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
     }
     /* Pub / Sub */
     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL) {
-        ri->pc = redisAsyncConnect(ri->addr->ip,ri->addr->port);
+        ri->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
         if (ri->pc->err) {
             sentinelEvent(REDIS_DEBUG,"-pubsub-link-reconnection",ri,"%@ #%s",
                 ri->pc->errstr);
@@ -3493,12 +3493,9 @@ int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
         if (master->failover_delay_logged != master->failover_start_time) {
             time_t clock = (master->failover_start_time +
                             master->failover_timeout*2) / 1000;
-#ifdef _WIN32
-            char* ctimebuf = ctime(&clock);
-#else
             char ctimebuf[26];
+
             ctime_r(&clock,ctimebuf);
-#endif
             ctimebuf[24] = '\0'; /* Remove newline. */
             master->failover_delay_logged = master->failover_start_time;
             redisLog(REDIS_WARNING,
