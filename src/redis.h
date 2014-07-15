@@ -663,7 +663,6 @@ typedef struct redisInMemoryReplSend {
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
-    size_t heapOffset;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie
@@ -856,7 +855,6 @@ struct redisServer {
     /* Limits */
     int maxclients;                 /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
-    unsigned long long maxvirtualmemorytarget;
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
     int protects_used;              /* Whether any objects are protected */
