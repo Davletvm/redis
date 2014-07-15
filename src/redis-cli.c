@@ -751,7 +751,9 @@ static int parseOptions(int argc, char **argv) {
             config.output = OUTPUT_RAW;
         } else if (!strcmp(argv[i],"--csv")) {
             config.output = OUTPUT_CSV;
-        } else if (!strcmp(argv[i],"--latency")) {
+        } else if (!strcmp(argv[i], "--mon")) {
+            config.monitor_mode = 1;
+        } else if (!strcmp(argv[i], "--latency")) {
             config.latency_mode = 1;
         } else if (!strcmp(argv[i],"--latency-history")) {
             config.latency_mode = 1;
