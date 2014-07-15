@@ -1,11 +1,12 @@
-if($args.Length -ne 2)
+if($args.Length -ne 3)
 {
-    Write-Host "Exiting...Proper Usage: .\GenerateRedisVersion.ps1 <WorkingDir> <versionTag>"
+    Write-Host "Exiting...Proper Usage: .\GenerateRedisVersion.ps1 <WorkingDir> <buildNumber> <versionTag>"
     exit -1
 }
 
 $WorkingDir = $args[0]
-$versionTag = $args[1]
+$buildNumber = $args[1]
+$versionTag = $args[2]
 $redisVersion = ''
 
 Write-Host "Changing to Working Directory :" $WorkingDir
@@ -23,20 +24,29 @@ foreach ($line in $data)
    break;
 }
 
+$redisVersion = $redisVersion.Replace("`"","")
+Write-Host $redisVersion
+$redisVersionTokens =  $redisVersion.Split(".");
+
 $RedisServerResourceFile = "msvs\RedisServer.rc"
 $ResourceData = Get-Content $RedisServerResourceFile
-$oldFileVersion = '"FileVersion", "0.0.0.0"'
 $oldProductVersion = '"ProductVersion", "0.0.0.0"' 
-$newFileVersion = '"FileVersion", ' + $redisVersion + $versionTag
-$newProductVersion = '"ProductVersion", ' + $redisVersion + $versionTag 
+$newProductVersion = "`"ProductVersion`", `"$($redisVersion).$($buildNumber)_$($versionTag)`""
 
-$NewResourceData = $ResourceData -replace $oldFileVersion, $newFileVersion
+$oldFileVersionHeader = 'FILEVERSION 0,0,0,0'
+$newFileVersionHeader = "FILEVERSION $($redisVersionTokens[0]),$($redisVersionTokens[1]),$($redisVersionTokens[2]),$($buildNumber)"
+$oldFileVersion = '"FileVersion", "0.0.0.0"'
+$newFileVersion = "`"FileVersion`", `"$($redisVersion).$($buildNumber)`""
+
+$NewResourceData = $ResourceData -replace $oldFileVersionHeader, $newFileVersionHeader
+$NewResourceData = $NewResourceData -replace $oldFileVersion, $newFileVersion
 $NewResourceData = $NewResourceData -replace $oldProductVersion, $newProductVersion
 Set-Content -path $RedisServerResourceFile  -value $NewResourceData
 
 Write-Host "Done updating RedisServer.rc file..."
-Write-Host "New File Version: " + $newFileVersion
-Write-Host "New Product Version: " + $newProductVersion
+Write-Host "New File Version Header: " $newFileVersionHeader
+Write-Host "New File Version: " $newFileVersion
+Write-Host "New Product Version: " $newProductVersion
 
 
 

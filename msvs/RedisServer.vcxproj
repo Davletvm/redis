@@ -83,6 +83,7 @@
     <LinkIncremental>false</LinkIncremental>
     <TargetName>redis-server</TargetName>
     <GenerateManifest>false</GenerateManifest>
+    <CustomBuildBeforeTargets>ClCompile</CustomBuildBeforeTargets>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>

@@ -249,6 +249,7 @@ struct redisCommand redisCommandTable[] = {
     {"pttl",pttlCommand,2,"r",0,NULL,1,1,1,0,0},
     {"persist",persistCommand,2,"w",0,NULL,1,1,1,0,0},
     {"slaveof",slaveofCommand,3,"ast",0,NULL,0,0,0,0,0},
+    {"role",roleCommand,1,"last",0,NULL,0,0,0,0,0},
     {"debug",debugCommand,-2,"as",0,NULL,0,0,0,0,0},
     {"config",configCommand,-2,"art",0,NULL,0,0,0,0,0},
     {"subscribe",subscribeCommand,-2,"rpslt",0,NULL,0,0,0,0,0},
@@ -1503,6 +1504,7 @@ void initServerConfig() {
     server.lua_client = NULL;
     server.lua_inKeyspaceScript = 0;
     server.lua_timedout = 0;
+    server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.loading_process_events_interval_bytes = (1024*1024*2);
 
     updateLRUClock();
@@ -1544,7 +1546,7 @@ void initServerConfig() {
     /* Client output buffer limits */
     server.orphaned_outstanding_writes = 0;
     server.orphaned_sent_bytes = 0;
-    for (j = 0; j < REDIS_CLIENT_LIMIT_NUM_CLASSES; j++)
+    for (j = 0; j < REDIS_CLIENT_TYPE_COUNT; j++)
         server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
     /* Double constants initialization */
@@ -1693,10 +1695,16 @@ int listenToPort(int port, int *fds, int *count) {
              * server.bindaddr_count == 0. */
             fds[*count] = anetTcp6Server(server.neterr,port,NULL,
                 server.tcp_backlog);
-            if (fds[*count] != ANET_ERR) (*count)++;
+            if (fds[*count] != ANET_ERR) {
+                anetNonBlock(NULL,fds[*count]);
+                (*count)++;
+            }
             fds[*count] = anetTcpServer(server.neterr,port,NULL,
                 server.tcp_backlog);
-            if (fds[*count] != ANET_ERR) (*count)++;
+            if (fds[*count] != ANET_ERR) {
+                anetNonBlock(NULL,fds[*count]);
+                (*count)++;
+            }
             /* Exit the loop if we were able to bind * on IPv4 or IPv6,
              * otherwise fds[*count] will be ANET_ERR and we'll print an
              * error and return to the caller with an error. */
@@ -1717,6 +1725,7 @@ int listenToPort(int port, int *fds, int *count) {
                 server.port, server.neterr);
             return REDIS_ERR;
         }
+        anetNonBlock(NULL,fds[*count]);
         (*count)++;
     }
     return REDIS_OK;
@@ -1803,6 +1812,7 @@ void initServer() {
             redisLog(REDIS_WARNING, "Opening socket: %s", server.neterr);
             exit(1);
         }
+        anetNonBlock(NULL,server.sofd);
     }
 
     /* Abort if there are no listening sockets at all. */
@@ -2223,7 +2233,8 @@ int processCommand(redisClient *c) {
 
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
-    if (server.repl_min_slaves_to_write &&
+    if (server.masterhost == NULL &&
+        server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
         c->cmd->flags & REDIS_CMD_WRITE &&
         server.repl_good_slaves_count < server.repl_min_slaves_to_write)
@@ -2342,6 +2353,12 @@ int prepareForShutdown(int flags) {
         /* Kill the AOF saving child as the AOF we already have may be longer
          * but contains the full dataset anyway. */
         if (server.aof_child_pid != -1) {
+            /* If we have AOF enabled but haven't written the AOF yet, don't
+             * shutdown or else the dataset will be lost. */
+            if (server.aof_state == REDIS_AOF_WAIT_REWRITE) {
+                redisLog(REDIS_WARNING, "Writing initial AOF, can't exit.");
+                return REDIS_ERR;
+            }
             redisLog(REDIS_WARNING,
                 "There is a child rewriting the AOF. Killing it!");
 #ifdef _WIN32
