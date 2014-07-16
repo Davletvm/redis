@@ -65,11 +65,16 @@ int listMatchPubsubPattern(void *a, void *b) {
            (equalStringObjects(pa->pattern,pb->pattern));
 }
 
-
 int listMatchPubsubScript(void *a, void *b) {
     pubsubScript *pa = a, *pb = b;
 
     return equalStringObjects(pa->patternKey, pb->patternKey) && equalStringObjects(pa->patternEvent, pb->patternEvent);
+}
+
+/* Return the number of channels + patterns a client is subscribed to. */
+int clientSubscriptionsCount(redisClient *c) {
+    return dictSize(c->pubsub_channels)+
+           listLength(c->pubsub_patterns);
 }
 
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
@@ -98,7 +103,7 @@ int pubsubSubscribeChannel(redisClient *c, robj *channel) {
     addReply(c,shared.mbulkhdr[3]);
     addReply(c,shared.subscribebulk);
     addReplyBulk(c,channel);
-    addReplyLongLong(c,dictSize(c->pubsub_channels)+listLength(c->pubsub_patterns));
+    addReplyLongLong(c,clientSubscriptionsCount(c));
     return retval;
 }
 
@@ -160,7 +165,7 @@ int pubsubSubscribePattern(redisClient *c, robj *pattern) {
     addReply(c,shared.mbulkhdr[3]);
     addReply(c,shared.psubscribebulk);
     addReplyBulk(c,pattern);
-    addReplyLongLong(c,dictSize(c->pubsub_channels)+listLength(c->pubsub_patterns));
+    addReplyLongLong(c,clientSubscriptionsCount(c));
     return retval;
 }
 
@@ -193,7 +198,7 @@ int pubsubUnsubscribePattern(redisClient *c, robj *pattern, int notify) {
 }
 
 /* Unsubscribe from all the channels. Return the number of channels the
- * client was subscribed from. */
+ * client was subscribed to. */
 int pubsubUnsubscribeAllChannels(redisClient *c, int notify) {
     dictIterator *di = dictGetSafeIterator(c->pubsub_channels);
     dictEntry *de;
@@ -298,6 +303,7 @@ void subscribeCommand(redisClient *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
+    c->flags |= REDIS_PUBSUB;
 }
 
 void unsubscribeCommand(redisClient *c) {
@@ -309,6 +315,7 @@ void unsubscribeCommand(redisClient *c) {
         for (j = 1; j < c->argc; j++)
             pubsubUnsubscribeChannel(c,c->argv[j],1);
     }
+    if (clientSubscriptionsCount(c) == 0) c->flags &= ~REDIS_PUBSUB;
 }
 
 void psubscribeCommand(redisClient *c) {
@@ -316,6 +323,7 @@ void psubscribeCommand(redisClient *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribePattern(c,c->argv[j]);
+    c->flags |= REDIS_PUBSUB;
 }
 
 void punsubscribeCommand(redisClient *c) {
@@ -327,6 +335,7 @@ void punsubscribeCommand(redisClient *c) {
         for (j = 1; j < c->argc; j++)
             pubsubUnsubscribePattern(c,c->argv[j],1);
     }
+    if (clientSubscriptionsCount(c) == 0) c->flags &= ~REDIS_PUBSUB;
 }
 
 void publishCommand(redisClient *c) {
