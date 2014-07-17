@@ -608,6 +608,21 @@ typedef struct redisOpArray {
     int numops;
 } redisOpArray;
 
+
+#define THROTTLE_NONE 0
+#define THROTTLE_IN_THROTTLE_WINDOW 1
+#define THROTTLE_IN_FREE_WINDOW 2
+
+typedef struct redisThrottling {
+    long long dataSetSize;
+    mstime_t replicationStart;
+    mstime_t throttleStart;
+    mstime_t throttleWindow;
+    mstime_t freeWindow;
+    list throttledClients;
+    int state;
+} redisThrottling;
+
 #define INMEMORY_ENDSTATE_NONE 0
 #define INMEMORY_ENDSTATE_ENDFOUND 2
 #define INMEMORY_ENDSTATE_ERROR 4
