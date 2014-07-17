@@ -81,7 +81,7 @@ BOOL WriteToProcmon (wstring message)
 #endif
 
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
-const int cMaxBlocks = 1 << 16;                                  // 64MB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
+const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K sections = 1TB.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
