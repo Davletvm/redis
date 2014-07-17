@@ -934,11 +934,11 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     if (totwritten > 0) {
-		/* For clients representing masters we don't count sending data
-		* as an interaction, since we always send REPLCONF ACK commands
-		* that take some time to just fill the socket output buffer.
-		* We just rely on data / pings received for timeout detection. */
-		if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
+        /* For clients representing masters we don't count sending data
+        * as an interaction, since we always send REPLCONF ACK commands
+        * that take some time to just fill the socket output buffer.
+        * We just rely on data / pings received for timeout detection. */
+        if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
     }
 
 }
@@ -1442,7 +1442,7 @@ char *getClientPeerId(redisClient *c) {
 /* Concatenate a string representing the state of a client in an human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, redisClient *client) {
-    char flags[16], events[3], *p;
+    char flags[32], events[3], *p;
     int emask;
 
     p = flags;
@@ -1460,6 +1460,7 @@ sds catClientInfoString(sds s, redisClient *client) {
     if (client->flags & REDIS_UNBLOCKED) *p++ = 'u';
     if (client->flags & REDIS_CLOSE_ASAP) *p++ = 'A';
     if (client->flags & REDIS_UNIX_SOCKET) *p++ = 'U';
+    if (client->flags & REDIS_PRIVILIDGED_CLIENT) *p++ = 'P';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -1492,7 +1493,7 @@ sds catClientInfoString(sds s, redisClient *client) {
         client->lastcmd ? client->lastcmd->name : "NULL");
 }
 
-sds getAllClientsInfoString(void) {
+sds getAllClientsInfoString(redisClient * cc) {
     listNode *ln;
     listIter li;
     redisClient *client;
@@ -1502,6 +1503,8 @@ sds getAllClientsInfoString(void) {
     listRewind(server.clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         client = listNodeValue(ln);
+        if (client->flags & REDIS_PRIVILIDGED_CLIENT && !(cc->flags & REDIS_PRIVILIDGED_CLIENT))
+            continue;
         o = catClientInfoString(o,client);
         o = sdscatlen(o,"\n",1);
     }
@@ -1515,7 +1518,7 @@ void clientCommand(redisClient *c) {
 
     if (!strcasecmp(c->argv[1]->ptr,"list") && c->argc == 2) {
         /* CLIENT LIST */
-        sds o = getAllClientsInfoString();
+        sds o = getAllClientsInfoString(c);
         addReplyBulkCBuffer(c,o,sdslen(o));
         sdsfree(o);
     } else if (!strcasecmp(c->argv[1]->ptr,"kill")) {

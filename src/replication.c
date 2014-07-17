@@ -268,6 +268,8 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         redisClient *monitor = ln->value;
+        if (c->flags & REDIS_PRIVILIDGED_CLIENT && !(monitor->flags & REDIS_PRIVILIDGED_CLIENT))
+            continue;
         addReply(monitor,cmdobj);
     }
     decrRefCount(cmdobj);

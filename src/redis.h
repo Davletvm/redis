@@ -254,6 +254,8 @@
 #define REDIS_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
 #define REDIS_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
 
+#define REDIS_PRIVILIDGED_CLIENT (1<<17) 
+
 /* Client request types */
 #define REDIS_REQ_INLINE 1
 #define REDIS_REQ_MULTIBULK 2
@@ -1521,6 +1523,7 @@ void setkeyspacescriptCommand(redisClient *c);
 void protectkeyCommand(redisClient *c);
 void unprotectkeyCommand(redisClient *c);
 void isprotectkeyCommand(redisClient *c);
+void privilidgeClientCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
 void restoreCommand(redisClient *c);
