@@ -1634,11 +1634,22 @@ void clientCommand(redisClient *c) {
         c->name = c->argv[2];
         incrRefCount(c->name);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"getname") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "getname") && c->argc == 2) {
         if (c->name)
-            addReplyBulk(c,c->name);
+            addReplyBulk(c, c->name);
         else
-            addReply(c,shared.nullbulk);
+            addReply(c, shared.nullbulk);
+    } else if (!strcasecmp(c->argv[1]->ptr, "setaddr") && c->argc == 4 && c->flags & REDIS_PRIVILIDGED_CLIENT) {
+        char * addr = c->argv[2]->ptr;
+        listRewindTail(server.clients, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            client = listNodeValue(ln);
+            if (addr && strcmp(getClientPeerId(client), addr) != 0) continue;
+            client->peerid = sdscpy(client->peerid, c->argv[3]->ptr);
+            addReply(c, shared.ok);
+            break;
+        }
+        if (!ln) addReplyError(c, "No such client");
     } else {
         addReplyError(c, "Syntax error, try CLIENT (LIST | KILL ip:port | GETNAME | SETNAME connection-name)");
     }
