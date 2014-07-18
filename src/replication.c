@@ -469,10 +469,147 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
 }
 
 
+
+void TransitionToFreeWindow(int final)
+{
+    redisClient *c;
+    listNode *ln;
+    listIter li;
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return 0;
+
+    if (inm->throttle.throttledClients) {
+        listRewind(inm->throttle.throttledClients, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            c = listNodeValue(ln);
+            c->throttled_list_node = NULL;
+            if (!(c->flags & (REDIS_CLOSE_ASAP | REDIS_CLOSE_AFTER_REPLY))) {
+                aeWinReceiveDone(c->fd);
+            }
+        }
+        if (!final) {
+            listClear(inm->throttle.throttledClients);
+        } else {
+            listRelease(inm->throttle.throttledClients);
+        }
+    }
+    if (final) {
+        inm->throttle.throttledClients = NULL;
+        inm->throttle.state = THROTTLE_ABORTED;
+    }
+}
+
+
+int CheckThrottleWindowUpdate(redisClient * c) 
+{
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return FALSE;
+
+    if (inm->throttle.state == THROTTLE_NONE || inm->throttle.state == THROTTLE_ABORTED) return FALSE;
+    if (server.mstime > inm->throttle.nextWindow) {
+
+        if ((inm->throttle.state == THROTTLE_TESTING || inm->throttle.state == THROTTLE_IN_FREE_WINDOW) && inm->throttle.throttleWindowDuration) {
+            inm->throttle.state = THROTTLE_IN_THROTTLE_WINDOW;
+            inm->throttle.nextWindow = server.mstime + inm->throttle.throttleWindowDuration;
+        } else {
+            if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+                TransitionToFreeWindow(FALSE);
+            }
+            inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
+            inm->throttle.nextWindow = server.mstime + inm->throttle.freeWindowDuration;
+        }
+    }
+    if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+        if (c) {
+            listAddNodeHead(inm->throttle.throttledClients, c);
+            c->throttled_list_node = listFirst(inm->throttle.throttledClients);
+        }
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+
+void updateThrottleState() {
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return;
+
+    long long dataRemaining = inm->throttle.dataSetSize - inm->totalSent;
+    if (dataRemaining < server.repl_inMemorySendBuffer) {
+        dataRemaining = server.repl_inMemorySendBuffer;
+    }
+
+    long long transferInLastTest = inm->totalSent - inm->throttle.dataTransferredAtStart;
+    long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
+    long outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
+    long outputBufferMax = server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].soft_limit_bytes;
+    long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
+    mstime_t timeDelta = server.mstime - inm->throttle.testStart;
+
+    long long transferSpeedNow = transferInLastTest / timeDelta;
+    long long transferSpeedReq = 0;
+    mstime_t timeLeft = server.repl_inMemoryThrottleMaxTime - (server.mstime - inm->throttle.replStart);
+    if (outputBufferGrowth > 0 && outputBufferMax) {
+        mstime_t timeToFillOB = (outputBufferSpaceLeft / outputBufferGrowth) * timeDelta;
+        if (timeToFillOB < timeLeft) {
+            timeLeft = timeToFillOB;
+        }
+    }
+
+    if (timeLeft < 0) {
+        inm->throttle.throttleIndex = 9;
+        redisLog(REDIS_VERBOSE, "Throttle maxed (%d) sn(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft);
+    } else {
+        transferSpeedReq = dataRemaining / timeLeft;
+        if (transferSpeedReq < transferSpeedNow) {
+            inm->throttle.throttleIndex--;
+            if (inm->throttle.throttleIndex < 0) {
+                inm->throttle.throttleIndex = 0;
+            } else {
+                redisLog(REDIS_VERBOSE, "Throttle decreased(%d) sn(%lld) sr(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft);
+            }
+        } else {
+            redisLog(REDIS_VERBOSE, "Throttle increased(%d) sn(%lld) sr(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft);
+            inm->throttle.throttleIndex++;
+            if (inm->throttle.throttleIndex > 9) {
+                inm->throttle.throttleIndex = 9;
+            }
+        }
+    }
+    inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 10;
+    inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
+
+    inm->throttle.testStart = server.mstime;
+    inm->throttle.dataTransferredAtStart = inm->totalSent;
+    inm->throttle.outputBufferAtStart = outputBufferNow;
+}
+
+
 void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
+
+    if (server.repl_inMemoryThrottle) {
+        updateCachedTime();
+        if (inm->throttle.state == THROTTLE_NONE) {
+            inm->throttle.throttledClients = listCreate();
+            inm->throttle.dataSetSize = zmalloc_used_memory() - server.repl_backlog_size;
+            inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
+            inm->throttle.dataTransferredAtStart = 0;
+            inm->throttle.replStart = inm->throttle.testStart = server.mstime;
+            inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow;
+            inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
+            inm->throttle.state = THROTTLE_TESTING;
+        } else {
+            if (inm->throttle.state != THROTTLE_NONE && server.mstime > inm->throttle.testStart + THROTTLE_TEST_WINDOW) {
+                updateThrottleState();
+            }
+            CheckThrottleWindowUpdate(NULL);
+        }
+    }
+
     cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
     cookie->sequence = inm->sequence[which];

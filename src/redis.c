@@ -998,6 +998,7 @@ void FinishInMemoryRepl()
         freeClient(inm->slave);
         return;
     }
+    TransitionToFreeWindow(TRUE);
     redisLog(REDIS_NOTICE, "In memory synchronization with slave succeeded");
 
 }
@@ -1064,6 +1065,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Update the time cache. */
     updateCachedTime();
+    CheckThrottleWindowUpdate(NULL);
 
     run_with_period(100) trackOperationsPerSecond();
 
@@ -1531,6 +1533,9 @@ void initServerConfig() {
     server.repl_inMemorySend = NULL;
     server.repl_inMemoryReceive = NULL;
     server.repl_inMemoryUse = REDIS_DEFAULT_INMEMORYREPL;
+    server.repl_inMemoryThrottle = REDIS_DEFAULT_INMEMORYTHROTTLE;
+    server.repl_inMemoryThrottleMaxTime = REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME;
+    server.repl_inMemoryThrottleWindow = REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
 

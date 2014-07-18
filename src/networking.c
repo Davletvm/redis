@@ -114,6 +114,7 @@ redisClient *createClient(int fd) {
     c->pubsub_channels = dictCreate(&setDictType,NULL);
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
+    c->throttled_list_node = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
     if (fd != -1) listAddNodeTail(server.clients,c);
@@ -772,6 +773,10 @@ void freeClient(redisClient *c) {
         listDelNode(server.clients_to_close,ln);
     }
 
+    if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
+        listDelNode(server.repl_inMemorySend->throttle.throttledClients, c->throttled_list_node);
+    }
+
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
     if (c->name) decrRefCount(c->name);
@@ -1292,6 +1297,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     size_t qblen;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
+
+
+    if (CheckThrottleWindowUpdate(c)) return;
 
     server.current_client = c;
     readlen = REDIS_IOBUF_LEN;

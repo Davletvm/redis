@@ -530,6 +530,18 @@ void loadServerConfigFromString(char *config) {
             if ((server.repl_inMemoryUse = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "repl-throttle") && argc == 2) {
+            if ((server.repl_inMemoryThrottle = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "repl-throttle-window") && argc == 2) {
+            if ((server.repl_inMemoryThrottleWindow = atoi(argv[1])) < 0) {
+                err = "invalid value for repl-throttle-window"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0], "repl-throttle-target") && argc == 2) {
+            if ((server.repl_inMemoryThrottleMaxTime = atoi(argv[1])) < 0) {
+                err = "invalid value for repl-throttle-target"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "repl-inmemory-send-buffer-size") &&
             argc == 2) {
             server.repl_inMemorySendBuffer = (int)memtoll(argv[1], NULL);
@@ -942,6 +954,16 @@ void configSetCommand(redisClient *c) {
         int yn = yesnotoi(o->ptr);
         if (yn == -1) goto badfmt;
         server.repl_inMemoryUse = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.repl_inMemoryThrottle = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-window")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 10 || ll > 5000) goto badfmt;
+        server.repl_inMemoryThrottleWindow = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-target")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1 || ll > 60*60) goto badfmt;
+        server.repl_inMemoryThrottleMaxTime = ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-send-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
         server.repl_inMemorySendBuffer = ll;
@@ -1073,6 +1095,8 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("hz",server.hz);
     config_get_numerical_field("repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer);
     config_get_numerical_field("repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer);
+    config_get_numerical_field("repl-throttle-window", server.repl_inMemoryThrottleWindow);
+    config_get_numerical_field("repl-throttle-target", server.repl_inMemoryThrottleMaxTime);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1091,8 +1115,8 @@ void configGetCommand(redisClient *c) {
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",
             server.aof_rewrite_incremental_fsync);
-    config_get_bool_field("repl-inmemory",
-        server.repl_inMemoryUse);
+    config_get_bool_field("repl-inmemory", server.repl_inMemoryUse);
+    config_get_bool_field("repl-throttle", server.repl_inMemoryThrottle);
 
 
     /* Everything we can't handle with macros follows. */
@@ -1875,8 +1899,11 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"hz",server.hz,REDIS_DEFAULT_HZ);
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
     rewriteConfigYesNoOption(state, "repl-inmemory", server.repl_inMemoryUse, REDIS_DEFAULT_INMEMORYREPL);
+    rewriteConfigYesNoOption(state, "repl-throttle", server.repl_inMemoryThrottle, REDIS_DEFAULT_INMEMORYTHROTTLE);
     rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
+    rewriteConfigNumericalOption(state, "repl-throttle-window", server.repl_inMemoryThrottleWindow, REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW);
+    rewriteConfigNumericalOption(state, "repl-throttle-target", server.repl_inMemoryThrottleMaxTime, REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines

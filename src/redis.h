@@ -138,6 +138,9 @@
 #define REDIS_MIN_RESERVED_FDS 32
 
 #define REDIS_DEFAULT_INMEMORYREPL 0
+#define REDIS_DEFAULT_INMEMORYTHROTTLE 0
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME (5 * 60)
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW 100
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 
@@ -527,6 +530,7 @@ typedef struct redisClient {
     dict *pubsub_channels;  /* channels a client is interested in (SUBSCRIBE) */
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
     sds peerid;             /* Cached peer ID. */
+    listNode * throttled_list_node;
 
     /* Response buffer */
     int bufpos;
@@ -610,17 +614,26 @@ typedef struct redisOpArray {
 
 
 #define THROTTLE_NONE 0
-#define THROTTLE_IN_THROTTLE_WINDOW 1
-#define THROTTLE_IN_FREE_WINDOW 2
+#define THROTTLE_TESTING 1
+#define THROTTLE_IN_THROTTLE_WINDOW 2
+#define THROTTLE_IN_FREE_WINDOW 3
+#define THROTTLE_ABORTED 4
+
+#define THROTTLE_TEST_WINDOW 5000
+#define THROTTLE_MAX_TARGET (1000 * 60 * 10)
 
 typedef struct redisThrottling {
     long long dataSetSize;
-    mstime_t replicationStart;
-    mstime_t throttleStart;
-    mstime_t throttleWindow;
-    mstime_t freeWindow;
-    list throttledClients;
+    mstime_t replStart;
+    mstime_t testStart;
+    mstime_t nextWindow;
+    mstime_t throttleWindowDuration;
+    mstime_t freeWindowDuration;
+    list * throttledClients;
     int state;
+    int throttleIndex;
+    long outputBufferAtStart;
+    size_t dataTransferredAtStart;
 } redisThrottling;
 
 #define INMEMORY_ENDSTATE_NONE 0
@@ -680,6 +693,7 @@ typedef struct redisInMemoryReplSend {
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
+    redisThrottling throttle;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie
@@ -855,6 +869,9 @@ struct redisServer {
     redisInMemoryReplReceive * repl_inMemoryReceive;
     redisInMemoryReplSend * repl_inMemorySend;
     int repl_inMemoryUse; /* Don't use disk to synchornize with slaves */
+    int repl_inMemoryThrottle; /* Potentially throttle reads when needed */
+    int repl_inMemoryThrottleMaxTime; /* Target this completion time when throttling */
+    int repl_inMemoryThrottleWindow; /* Max free\throttled window */
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
@@ -1203,6 +1220,8 @@ void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void replicationSendNewlineToMaster(void);
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
+void TransitionToFreeWindow(int final);
+int CheckThrottleWindowUpdate(redisClient * c);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
