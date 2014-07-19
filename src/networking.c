@@ -1766,7 +1766,8 @@ int checkClientOutputBufferLimits(redisClient *c) {
         used_mem >= server.client_obuf_limits[class].hard_limit_bytes)
         hard = 1;
     if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
+        used_mem >= server.client_obuf_limits[class].soft_limit_bytes &&
+        (!server.repl_inMemorySend || server.repl_inMemorySend->slave != c))
         soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the

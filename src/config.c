@@ -538,8 +538,12 @@ void loadServerConfigFromString(char *config) {
             if ((server.repl_inMemoryThrottleWindow = atoi(argv[1])) < 0) {
                 err = "invalid value for repl-throttle-window"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "repl-throttle-check") && argc == 2) {
+            if ((server.repl_inMemoryThrottleCheck = atoi(argv[1])) < 0) {
+                err = "invalid value for repl-throttle-check"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "repl-throttle-target") && argc == 2) {
-            if ((server.repl_inMemoryThrottleMaxTime = atoi(argv[1])) < 0) {
+            if ((server.repl_inMemoryThrottleMaxTime = 1000 * atoi(argv[1])) < 0) {
                 err = "invalid value for repl-throttle-target"; goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "repl-inmemory-send-buffer-size") &&
@@ -961,9 +965,12 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-window")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 10 || ll > 5000) goto badfmt;
         server.repl_inMemoryThrottleWindow = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-check")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 100 || ll > 60 * 1000) goto badfmt;
+        server.repl_inMemoryThrottleCheck = ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-target")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1 || ll > 60*60) goto badfmt;
-        server.repl_inMemoryThrottleMaxTime = ll;
+        server.repl_inMemoryThrottleMaxTime = ll * 1000;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-send-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
         server.repl_inMemorySendBuffer = ll;
@@ -1096,6 +1103,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer);
     config_get_numerical_field("repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer);
     config_get_numerical_field("repl-throttle-window", server.repl_inMemoryThrottleWindow);
+    config_get_numerical_field("repl-throttle-check", server.repl_inMemoryThrottleCheck);
     config_get_numerical_field("repl-throttle-target", server.repl_inMemoryThrottleMaxTime);
 
     /* Bool (yes/no) values */
@@ -1903,6 +1911,7 @@ int rewriteConfig(char *path) {
     rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
     rewriteConfigNumericalOption(state, "repl-throttle-window", server.repl_inMemoryThrottleWindow, REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW);
+    rewriteConfigNumericalOption(state, "repl-throttle-check", server.repl_inMemoryThrottleCheck, REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK);
     rewriteConfigNumericalOption(state, "repl-throttle-target", server.repl_inMemoryThrottleMaxTime, REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 

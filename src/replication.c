@@ -543,12 +543,14 @@ void updateThrottleState() {
     long long transferInLastTest = inm->totalSent - inm->throttle.dataTransferredAtStart;
     long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
     long outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
-    long outputBufferMax = server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].soft_limit_bytes;
+    long outputBufferMax = server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+    outputBufferMax -= outputBufferMax / 5;
     long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
     mstime_t timeDelta = server.mstime - inm->throttle.testStart;
+    if (timeDelta == 0) timeDelta = 1;
 
     long long transferSpeedNow = transferInLastTest / timeDelta;
-    long long transferSpeedReq = 0;
+    if (transferSpeedNow == 0) transferSpeedNow = 1;
     mstime_t timeLeft = server.repl_inMemoryThrottleMaxTime - (server.mstime - inm->throttle.replStart);
     if (outputBufferGrowth > 0 && outputBufferMax) {
         mstime_t timeToFillOB = (outputBufferSpaceLeft / outputBufferGrowth) * timeDelta;
@@ -557,27 +559,31 @@ void updateThrottleState() {
         }
     }
 
-    if (timeLeft < 0) {
-        inm->throttle.throttleIndex = 9;
-        redisLog(REDIS_VERBOSE, "Throttle maxed (%d) sn(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft);
+    if (timeLeft <= 0) {
+        inm->throttle.throttleIndex = 19;
+        redisLog(REDIS_VERBOSE, "Throttle maxed (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
     } else {
-        transferSpeedReq = dataRemaining / timeLeft;
+        long long transferSpeedReq = dataRemaining / timeLeft;
+        if (transferSpeedReq == 0) transferSpeedReq = 1;
         if (transferSpeedReq < transferSpeedNow) {
-            inm->throttle.throttleIndex--;
+            inm->throttle.throttleIndex -= max(1, transferSpeedNow / transferSpeedReq);
             if (inm->throttle.throttleIndex < 0) {
                 inm->throttle.throttleIndex = 0;
+                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
             } else {
-                redisLog(REDIS_VERBOSE, "Throttle decreased(%d) sn(%lld) sr(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft);
+                redisLog(REDIS_VERBOSE, "Throttle decreased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
             }
         } else {
-            redisLog(REDIS_VERBOSE, "Throttle increased(%d) sn(%lld) sr(%lld) tl(%lld)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft);
-            inm->throttle.throttleIndex++;
-            if (inm->throttle.throttleIndex > 9) {
-                inm->throttle.throttleIndex = 9;
+            inm->throttle.throttleIndex += max(1, transferSpeedReq / transferSpeedNow);
+            if (inm->throttle.throttleIndex > 19) {
+                inm->throttle.throttleIndex = 19;
+                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+            } else {
+                redisLog(REDIS_VERBOSE, "Throttle increased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
             }
         }
     }
-    inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 10;
+    inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 20;
     inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
 
     inm->throttle.testStart = server.mstime;
@@ -1360,7 +1366,7 @@ int readSyncBulkPayloadInMemory(int fd)
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
     initInMemoryBuffersSlave();
     server.repl_transfer_lastio = server.unixtime;
-
+    mstime_t start = server.mstime;
     if (rdbLoad(NULL) != REDIS_OK) {  // now read, which will keep blocking on incoming data
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         if (server.repl_inMemoryReceive) 
@@ -1371,7 +1377,7 @@ int readSyncBulkPayloadInMemory(int fd)
         replicationAbortSyncTransfer();
         return REDIS_ERR;
     } else {
-        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loaded DB into memory from network.  Size: %lld", server.repl_inMemoryReceive->totalRead);
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loaded DB into memory from network.  Size: %lld Time:%lld ms", server.repl_inMemoryReceive->totalRead, server.mstime - start);
     }
     return finishedReadingBulkPayload();
 }

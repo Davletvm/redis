@@ -141,6 +141,7 @@
 #define REDIS_DEFAULT_INMEMORYTHROTTLE 0
 #define REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME (5 * 60)
 #define REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW 100
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK 5000
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 
@@ -619,7 +620,7 @@ typedef struct redisOpArray {
 #define THROTTLE_IN_FREE_WINDOW 3
 #define THROTTLE_ABORTED 4
 
-#define THROTTLE_TEST_WINDOW 5000
+#define THROTTLE_TEST_WINDOW 1000
 #define THROTTLE_MAX_TARGET (1000 * 60 * 10)
 
 typedef struct redisThrottling {
@@ -872,6 +873,7 @@ struct redisServer {
     int repl_inMemoryThrottle; /* Potentially throttle reads when needed */
     int repl_inMemoryThrottleMaxTime; /* Target this completion time when throttling */
     int repl_inMemoryThrottleWindow; /* Max free\throttled window */
+    int repl_inMemoryThrottleCheck; /* Time between throttling adjustments */
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
