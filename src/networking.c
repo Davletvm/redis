@@ -1298,8 +1298,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-
-    if (CheckThrottleWindowUpdate(c)) return;
+    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) return;
 
     server.current_client = c;
     readlen = REDIS_IOBUF_LEN;

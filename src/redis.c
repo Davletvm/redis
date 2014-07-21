@@ -259,7 +259,7 @@ struct redisCommand redisCommandTable[] = {
     {"publish",publishCommand,3,"pltr",0,NULL,0,0,0,0,0},
     {"pubsub",pubsubCommand,-2,"pltrR",0,NULL,0,0,0,0,0},
     {"setksscript", setkeyspacescriptCommand, -1, "rplt", 0, NULL, 0, 0, 0, 0, 0 },
-    {"privilidge", privilidgeClientCommand, 1, "arltM", 0, NULL, 0, 0, 0, 0, 0 },
+    {"privilidge", privilidgeClientCommand, -1, "arltM", 0, NULL, 0, 0, 0, 0, 0 },
     {"protect", protectkeyCommand, -2, "w",0,noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"unprotect", unprotectkeyCommand, -2, "w", 0, noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"isprotect", isprotectkeyCommand, 2, "r", 0, NULL, 1, 1, 1, 0, 0 },
@@ -2194,7 +2194,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Check if the user is authenticated */
-    if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)
+    if ((server.requirepass || server.requirepass2) && !c->authenticated && c->cmd->proc != authCommand && c->cmd->proc != privilidgeClientCommand)
     {
         flagTransaction(c);
         addReply(c,shared.noautherr);
@@ -3252,9 +3252,24 @@ int freeMemoryIfNeeded(void) {
 }
 
 
-void privilidgeClientCommand(redisClient *c) {
-    addReplyLongLong(c, (c->flags & REDIS_PRIVILIDGED_CLIENT) ? 1 : 0);
-    c->flags |= REDIS_PRIVILIDGED_CLIENT;
+void privilidgeClientCommand(redisClient *c) 
+{
+    if ((server.requirepass || server.requirepass2) && !c->authenticated) {
+        if (c->argc == 2) {
+            authCommand(c);
+            if (c->authenticated) {
+                c->flags |= REDIS_PRIVILIDGED_CLIENT;
+            } else {
+                flagTransaction(c);
+            }
+        } else {
+            flagTransaction(c);
+            addReply(c, shared.noautherr);
+        }
+    } else {
+        c->flags |= REDIS_PRIVILIDGED_CLIENT;
+        addReply(c, shared.ok);
+    }
 }
 
 void protectkeyCommand(redisClient *c) {
