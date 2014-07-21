@@ -88,12 +88,13 @@ int anetNonBlock(char *err, int fd)
 int anetKeepAlive(char *err, int fd, int interval)
 {
 	int val = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1)
+    {
+        anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
+        return ANET_ERR;
+    }
+
 #ifdef __linux__
-	if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1)
-	{
-		anetSetError(err, "setsockopt SO_KEEPALIVE: %s", strerror(errno));
-		return ANET_ERR;
-	}
     /* Default settings are more or less garbage, with the keepalive time
      * set to 7200 by default on Linux. Modify settings to make the feature
      * actually useful. */
@@ -123,24 +124,19 @@ int anetKeepAlive(char *err, int fd, int interval)
         return ANET_ERR;
     }
 #else
-	struct tcp_keepalive alive;
-	DWORD dwBytesRet = 0;
-	alive.onoff = TRUE;
-	alive.keepalivetime = interval * 1000;
-	/* According to http://msdn.microsoft.com/en-us/library/windows/desktop/ee470551(v=vs.85).aspx
-	   On Windows Vista and later, the number of keep-alive probes (data retransmissions) is set to 10 and cannot be changed.
-	   So we set the keep alive interval as interval/10, as 10 probes will be send before
-	   detecting an error
-	*/
-	val = interval / 10;
-	if (val == 0) val = 1;
-	alive.keepaliveinterval = val * 1000;
-	if (WSAIoctl(fd, SIO_KEEPALIVE_VALS, &alive, sizeof(alive),
-		NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR)
-	{
-		anetSetError(err, "WSAIotcl(SIO_KEEPALIVE_VALS) failed with error code %d\n", WSAGetLastError());
-		return ANET_ERR;
-	}
+    struct tcp_keepalive settings;
+    DWORD bytesReturned;
+    WSAOVERLAPPED overlapped;
+    settings.onoff = 1;
+    settings.keepalivetime = interval * 1000;
+    settings.keepaliveinterval = interval * 1000 / 3;
+    overlapped.hEvent = NULL;
+    if (WSAIoctl(fd, SIO_KEEPALIVE_VALS, &settings, sizeof(settings),
+        NULL, 0, &bytesReturned, &overlapped, NULL) == SOCKET_ERROR)
+    {
+        anetSetError(err, "WSAIotcl(SIO_KEEPALIVE_VALS) failed with error code %d\n", WSAGetLastError());
+        return ANET_ERR;
+    }
 #endif
 
     return ANET_OK;
