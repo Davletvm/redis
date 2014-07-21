@@ -2500,10 +2500,13 @@ void bytesToHuman(char *s, unsigned long long n) {
     }
 }
 
+#define PR(a,d) (privilidged?(a):(d))
+
+
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(char *section) {
+sds genRedisInfoString(char *section, int privilidged) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
@@ -2516,6 +2519,7 @@ sds genRedisInfoString(char *section) {
         allsections = strcasecmp(section,"all") == 0;
         defsections = strcasecmp(section,"default") == 0;
     }
+
 
     getrusage(RUSAGE_SELF, &self_ru);
     getrusage(RUSAGE_CHILDREN, &c_ru);
@@ -2567,9 +2571,9 @@ sds genRedisInfoString(char *section) {
             "lru_clock:%ld\r\n"
             "config_file:%s\r\n",
             REDIS_VERSION,
-            redisGitSHA1(),
+            PR(redisGitSHA1(), ""),
             strtol(redisGitDirty(),NULL,10) > 0,
-            (unsigned long long) redisBuildId(),
+            PR(((unsigned long long) redisBuildId()),0),
             mode,
 #ifndef _WIN32
             name.sysname, name.release, name.machine,
@@ -2583,14 +2587,14 @@ sds genRedisInfoString(char *section) {
 #else
             0,0,0,
 #endif
-            (long) getpid(),
+            PR(((long) getpid()),0),
             server.runid,
-            server.port,
-            (intmax_t)uptime,
-            (intmax_t)(uptime/(3600*24)),
+            PR(server.port,0),
+            PR(((intmax_t)uptime),0),
+            PR(((intmax_t)(uptime/(3600*24))),0),
             server.hz,
-            (unsigned long) server.lruclock,
-            server.configfile ? server.configfile : "");
+            PR(((unsigned long) server.lruclock),0),
+            (server.configfile && privilidged) ? server.configfile : "");
     }
 
     /* Clients */
@@ -2674,7 +2678,7 @@ sds genRedisInfoString(char *section) {
 
 #ifdef _WIN32
     /* Persistence */
-    if (allsections || defsections || !strcasecmp(section,"persistence")) {
+    if ((allsections || defsections || !strcasecmp(section,"persistence")) && privilidged) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Persistence\r\n"
@@ -2784,7 +2788,7 @@ sds genRedisInfoString(char *section) {
         }
 #endif
 
-        if (server.loading) {
+        if (server.loading && privilidged) {
             double perc;
             time_t eta, elapsed;
 #ifdef _WIN32
@@ -2844,16 +2848,16 @@ sds genRedisInfoString(char *section) {
             server.stat_numcommands,
             getOperationsPerSecond(),
             server.stat_rejected_conn,
-            server.stat_sync_full,
-            server.stat_sync_partial_ok,
-            server.stat_sync_partial_err,
+            PR(server.stat_sync_full,0),
+            PR(server.stat_sync_partial_ok,0),
+            PR(server.stat_sync_partial_err,0),
             server.stat_expiredkeys,
             server.stat_evictedkeys,
             server.stat_keyspace_hits,
             server.stat_keyspace_misses,
             dictSize(server.pubsub_channels),
             listLength(server.pubsub_patterns),
-            server.stat_fork_time);
+            PR(server.stat_fork_time,0));
     }
 
     /* Replication */
@@ -2863,7 +2867,7 @@ sds genRedisInfoString(char *section) {
             "# Replication\r\n"
             "role:%s\r\n",
             server.masterhost == NULL ? "master" : "slave");
-        if (server.masterhost) {
+        if (server.masterhost && privilidged) {
             long long slave_repl_offset = 1;
 
             if (server.master)
@@ -2909,69 +2913,71 @@ sds genRedisInfoString(char *section) {
                 server.slave_priority,
                 server.repl_slave_ro);
         }
+        if (privilidged) {
 
-        info = sdscatprintf(info,
-            "connected_slaves:%lu\r\n",
-            listLength(server.slaves));
-
-        /* If min-slaves-to-write is active, write the number of slaves
-         * currently considered 'good'. */
-        if (server.repl_min_slaves_to_write &&
-            server.repl_min_slaves_max_lag) {
             info = sdscatprintf(info,
-                "min_slaves_good_slaves:%d\r\n",
-                server.repl_good_slaves_count);
-        }
+                "connected_slaves:%lu\r\n",
+                listLength(server.slaves));
 
-        if (listLength(server.slaves)) {
-            int slaveid = 0;
-            listNode *ln;
-            listIter li;
-
-            listRewind(server.slaves,&li);
-            while((ln = listNext(&li))) {
-                redisClient *slave = listNodeValue(ln);
-                char *state = NULL;
-                char ip[REDIS_IP_STR_LEN];
-                int port;
-                long lag = 0;
-
-                if (anetPeerToString(slave->fd,ip,sizeof(ip),&port) == -1) continue;
-                switch(slave->replstate) {
-                case REDIS_REPL_WAIT_BGSAVE_START:
-                case REDIS_REPL_WAIT_BGSAVE_END:
-                    state = "wait_bgsave";
-                    break;
-                case REDIS_REPL_SEND_BULK:
-                    state = "send_bulk";
-                    break;
-                case REDIS_REPL_ONLINE:
-                    state = "online";
-                    break;
-                }
-                if (state == NULL) continue;
-                if (slave->replstate == REDIS_REPL_ONLINE)
-                    lag = (long)(time(NULL) - slave->repl_ack_time);
-
+            /* If min-slaves-to-write is active, write the number of slaves
+             * currently considered 'good'. */
+            if (server.repl_min_slaves_to_write &&
+                server.repl_min_slaves_max_lag) {
                 info = sdscatprintf(info,
-                    "slave%d:ip=%s,port=%d,state=%s,"
-                    "offset=%lld,lag=%ld\r\n",
-                    slaveid,ip,slave->slave_listening_port,state,
-                    slave->repl_ack_off, lag);
-                slaveid++;
+                    "min_slaves_good_slaves:%d\r\n",
+                    server.repl_good_slaves_count);
             }
+
+            if (listLength(server.slaves)) {
+                int slaveid = 0;
+                listNode *ln;
+                listIter li;
+
+                listRewind(server.slaves, &li);
+                while ((ln = listNext(&li))) {
+                    redisClient *slave = listNodeValue(ln);
+                    char *state = NULL;
+                    char ip[REDIS_IP_STR_LEN];
+                    int port;
+                    long lag = 0;
+
+                    if (anetPeerToString(slave->fd, ip, sizeof(ip), &port) == -1) continue;
+                    switch (slave->replstate) {
+                    case REDIS_REPL_WAIT_BGSAVE_START:
+                    case REDIS_REPL_WAIT_BGSAVE_END:
+                        state = "wait_bgsave";
+                        break;
+                    case REDIS_REPL_SEND_BULK:
+                        state = "send_bulk";
+                        break;
+                    case REDIS_REPL_ONLINE:
+                        state = "online";
+                        break;
+                    }
+                    if (state == NULL) continue;
+                    if (slave->replstate == REDIS_REPL_ONLINE)
+                        lag = (long)(time(NULL) - slave->repl_ack_time);
+
+                    info = sdscatprintf(info,
+                        "slave%d:ip=%s,port=%d,state=%s,"
+                        "offset=%lld,lag=%ld\r\n",
+                        slaveid, ip, slave->slave_listening_port, state,
+                        slave->repl_ack_off, lag);
+                    slaveid++;
+                }
+            }
+            info = sdscatprintf(info,
+                "master_repl_offset:%lld\r\n"
+                "repl_backlog_active:%d\r\n"
+                "repl_backlog_size:%lld\r\n"
+                "repl_backlog_first_byte_offset:%lld\r\n"
+                "repl_backlog_histlen:%lld\r\n",
+                server.master_repl_offset,
+                server.repl_backlog != NULL,
+                server.repl_backlog_size,
+                server.repl_backlog_off,
+                server.repl_backlog_histlen);
         }
-        info = sdscatprintf(info,
-            "master_repl_offset:%lld\r\n"
-            "repl_backlog_active:%d\r\n"
-            "repl_backlog_size:%lld\r\n"
-            "repl_backlog_first_byte_offset:%lld\r\n"
-            "repl_backlog_histlen:%lld\r\n",
-            server.master_repl_offset,
-            server.repl_backlog != NULL,
-            server.repl_backlog_size,
-            server.repl_backlog_off,
-            server.repl_backlog_histlen);
     }
 
     /* CPU */
@@ -3032,7 +3038,7 @@ void infoCommand(redisClient *c) {
         addReply(c,shared.syntaxerr);
         return;
     }
-    info = genRedisInfoString(section);
+    info = genRedisInfoString(section, c->flags & REDIS_PRIVILIDGED_CLIENT);
     addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
         (unsigned long)sdslen(info)));
     addReplySds(c,info);
