@@ -114,6 +114,7 @@ redisClient *createClient(int fd) {
     c->pubsub_channels = dictCreate(&setDictType,NULL);
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
+    c->throttled_list_node = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
     if (fd != -1) listAddNodeTail(server.clients,c);
@@ -772,6 +773,10 @@ void freeClient(redisClient *c) {
         listDelNode(server.clients_to_close,ln);
     }
 
+    if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
+        listDelNode(server.repl_inMemorySend->throttle.throttledClients, c->throttled_list_node);
+    }
+
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
     if (c->name) decrRefCount(c->name);
@@ -936,11 +941,11 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     if (totwritten > 0) {
-		/* For clients representing masters we don't count sending data
-		* as an interaction, since we always send REPLCONF ACK commands
-		* that take some time to just fill the socket output buffer.
-		* We just rely on data / pings received for timeout detection. */
-		if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
+        /* For clients representing masters we don't count sending data
+        * as an interaction, since we always send REPLCONF ACK commands
+        * that take some time to just fill the socket output buffer.
+        * We just rely on data / pings received for timeout detection. */
+        if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
     }
 
 }
@@ -1295,6 +1300,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
+    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) return;
+
     server.current_client = c;
     readlen = REDIS_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -1445,7 +1452,7 @@ char *getClientPeerId(redisClient *c) {
 /* Concatenate a string representing the state of a client in an human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, redisClient *client) {
-    char flags[16], events[3], *p;
+    char flags[32], events[3], *p;
     int emask;
 
     p = flags;
@@ -1463,6 +1470,7 @@ sds catClientInfoString(sds s, redisClient *client) {
     if (client->flags & REDIS_UNBLOCKED) *p++ = 'u';
     if (client->flags & REDIS_CLOSE_ASAP) *p++ = 'A';
     if (client->flags & REDIS_UNIX_SOCKET) *p++ = 'U';
+    if (client->flags & REDIS_PRIVILIDGED_CLIENT) *p++ = 'P';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -1495,7 +1503,7 @@ sds catClientInfoString(sds s, redisClient *client) {
         client->lastcmd ? client->lastcmd->name : "NULL");
 }
 
-sds getAllClientsInfoString(void) {
+sds getAllClientsInfoString(redisClient * cc) {
     listNode *ln;
     listIter li;
     redisClient *client;
@@ -1505,6 +1513,8 @@ sds getAllClientsInfoString(void) {
     listRewind(server.clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         client = listNodeValue(ln);
+        if (client->flags & REDIS_PRIVILIDGED_CLIENT && !(cc->flags & REDIS_PRIVILIDGED_CLIENT))
+            continue;
         o = catClientInfoString(o,client);
         o = sdscatlen(o,"\n",1);
     }
@@ -1518,7 +1528,7 @@ void clientCommand(redisClient *c) {
 
     if (!strcasecmp(c->argv[1]->ptr,"list") && c->argc == 2) {
         /* CLIENT LIST */
-        sds o = getAllClientsInfoString();
+        sds o = getAllClientsInfoString(c);
         addReplyBulkCBuffer(c,o,sdslen(o));
         sdsfree(o);
     } else if (!strcasecmp(c->argv[1]->ptr,"kill")) {
@@ -1634,11 +1644,22 @@ void clientCommand(redisClient *c) {
         c->name = c->argv[2];
         incrRefCount(c->name);
         addReply(c,shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr,"getname") && c->argc == 2) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "getname") && c->argc == 2) {
         if (c->name)
-            addReplyBulk(c,c->name);
+            addReplyBulk(c, c->name);
         else
-            addReply(c,shared.nullbulk);
+            addReply(c, shared.nullbulk);
+    } else if (!strcasecmp(c->argv[1]->ptr, "setaddr") && c->argc == 4 && c->flags & REDIS_PRIVILIDGED_CLIENT) {
+        char * addr = c->argv[2]->ptr;
+        listRewindTail(server.clients, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            client = listNodeValue(ln);
+            if (addr && strcmp(getClientPeerId(client), addr) != 0) continue;
+            client->peerid = sdscpy(client->peerid, c->argv[3]->ptr);
+            addReply(c, shared.ok);
+            break;
+        }
+        if (!ln) addReplyError(c, "No such client");
     } else {
         addReplyError(c, "Syntax error, try CLIENT (LIST | KILL ip:port | GETNAME | SETNAME connection-name)");
     }
@@ -1758,7 +1779,8 @@ int checkClientOutputBufferLimits(redisClient *c) {
         used_mem >= server.client_obuf_limits[class].hard_limit_bytes)
         hard = 1;
     if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
+        used_mem >= server.client_obuf_limits[class].soft_limit_bytes &&
+        (!server.repl_inMemorySend || server.repl_inMemorySend->slave != c))
         soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the

@@ -151,6 +151,7 @@ extern "C"
 {
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
+    void TransitionToFreeWindow(int final);
 }
 
 
@@ -916,6 +917,7 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
 {
     try {
         redisLog(REDIS_NOTICE, "Aborting child process");
+        TransitionToFreeWindow(TRUE);
         if (blockUntilCleanedup)
             SetEvent(g_pQForkControl->operationFailed);
         OperationStatus os = GetForkOperationStatus(blockUntilCleanedup);

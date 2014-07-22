@@ -268,6 +268,8 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         redisClient *monitor = ln->value;
+        if (c->flags & REDIS_PRIVILIDGED_CLIENT && !(monitor->flags & REDIS_PRIVILIDGED_CLIENT))
+            continue;
         addReply(monitor,cmdobj);
     }
     decrRefCount(cmdobj);
@@ -468,10 +470,153 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
 }
 
 
+
+void TransitionToFreeWindow(int final)
+{
+    redisClient *c;
+    listNode *ln;
+    listIter li;
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return 0;
+
+    if (inm->throttle.throttledClients) {
+        listRewind(inm->throttle.throttledClients, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            c = listNodeValue(ln);
+            c->throttled_list_node = NULL;
+            if (!(c->flags & (REDIS_CLOSE_ASAP | REDIS_CLOSE_AFTER_REPLY))) {
+                aeWinReceiveDone(c->fd);
+            }
+        }
+        if (!final) {
+            listClear(inm->throttle.throttledClients);
+        } else {
+            listRelease(inm->throttle.throttledClients);
+        }
+    }
+    if (final) {
+        inm->throttle.throttledClients = NULL;
+        inm->throttle.state = THROTTLE_ABORTED;
+    }
+}
+
+
+int CheckThrottleWindowUpdate(redisClient * c) 
+{
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return FALSE;
+
+    if (inm->throttle.state == THROTTLE_NONE || inm->throttle.state == THROTTLE_ABORTED) return FALSE;
+    if (server.mstime > inm->throttle.nextWindow) {
+
+        if ((inm->throttle.state == THROTTLE_TESTING || inm->throttle.state == THROTTLE_IN_FREE_WINDOW) && inm->throttle.throttleWindowDuration) {
+            inm->throttle.state = THROTTLE_IN_THROTTLE_WINDOW;
+            inm->throttle.nextWindow = server.mstime + inm->throttle.throttleWindowDuration;
+        } else {
+            if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+                TransitionToFreeWindow(FALSE);
+            }
+            inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
+            inm->throttle.nextWindow = server.mstime + inm->throttle.freeWindowDuration;
+        }
+    }
+    if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+        if (c) {
+            listAddNodeHead(inm->throttle.throttledClients, c);
+            c->throttled_list_node = listFirst(inm->throttle.throttledClients);
+        }
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+
+void updateThrottleState() {
+    redisInMemoryReplSend * inm = server.repl_inMemorySend;
+    if (!inm || !inm->slave) return;
+
+    long long dataRemaining = inm->throttle.dataSetSize - inm->totalSent;
+    if (dataRemaining < server.repl_inMemorySendBuffer) {
+        dataRemaining = server.repl_inMemorySendBuffer;
+    }
+
+    long long transferInLastTest = inm->totalSent - inm->throttle.dataTransferredAtStart;
+    long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
+    long outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
+    long outputBufferMax = server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+    outputBufferMax -= outputBufferMax / 5;
+    long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
+    mstime_t timeDelta = server.mstime - inm->throttle.testStart;
+    if (timeDelta == 0) timeDelta = 1;
+
+    long long transferSpeedNow = transferInLastTest / timeDelta;
+    if (transferSpeedNow == 0) transferSpeedNow = 1;
+    mstime_t timeLeft = server.repl_inMemoryThrottleMaxTime - (server.mstime - inm->throttle.replStart);
+    if (outputBufferGrowth > 0 && outputBufferMax) {
+        mstime_t timeToFillOB = (outputBufferSpaceLeft / outputBufferGrowth) * timeDelta;
+        if (timeToFillOB < timeLeft) {
+            timeLeft = timeToFillOB;
+        }
+    }
+
+    if (timeLeft <= 0) {
+        inm->throttle.throttleIndex = 19;
+        redisLog(REDIS_VERBOSE, "Throttle maxed (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+    } else {
+        long long transferSpeedReq = dataRemaining / timeLeft;
+        if (transferSpeedReq == 0) transferSpeedReq = 1;
+        if (transferSpeedReq < transferSpeedNow) {
+            inm->throttle.throttleIndex -= max(1, transferSpeedNow / transferSpeedReq);
+            if (inm->throttle.throttleIndex < 0) {
+                inm->throttle.throttleIndex = 0;
+                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+            } else {
+                redisLog(REDIS_VERBOSE, "Throttle decreased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+            }
+        } else {
+            inm->throttle.throttleIndex += max(1, transferSpeedReq / transferSpeedNow);
+            if (inm->throttle.throttleIndex > 19) {
+                inm->throttle.throttleIndex = 19;
+                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+            } else {
+                redisLog(REDIS_VERBOSE, "Throttle increased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+            }
+        }
+    }
+    inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 20;
+    inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
+
+    inm->throttle.testStart = server.mstime;
+    inm->throttle.dataTransferredAtStart = inm->totalSent;
+    inm->throttle.outputBufferAtStart = outputBufferNow;
+}
+
+
 void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
+
+    if (server.repl_inMemoryThrottle) {
+        updateCachedTime();
+        if (inm->throttle.state == THROTTLE_NONE) {
+            inm->throttle.throttledClients = listCreate();
+            inm->throttle.dataSetSize = zmalloc_used_memory() - server.repl_backlog_size;
+            inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
+            inm->throttle.dataTransferredAtStart = 0;
+            inm->throttle.replStart = inm->throttle.testStart = server.mstime;
+            inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow;
+            inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
+            inm->throttle.state = THROTTLE_TESTING;
+        } else {
+            if (inm->throttle.state != THROTTLE_NONE && server.mstime > inm->throttle.testStart + THROTTLE_TEST_WINDOW) {
+                updateThrottleState();
+            }
+            CheckThrottleWindowUpdate(NULL);
+        }
+    }
+
     cookie = zmalloc(sizeof(redisInMemorySendCookie));
     cookie->id = inm->id;
     cookie->sequence = inm->sequence[which];
@@ -1224,7 +1369,7 @@ int readSyncBulkPayloadInMemory(int fd)
     redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loading DB in memory");
     initInMemoryBuffersSlave();
     server.repl_transfer_lastio = server.unixtime;
-
+    mstime_t start = server.mstime;
     if (rdbLoad(NULL) != REDIS_OK) {  // now read, which will keep blocking on incoming data
         redisLog(REDIS_WARNING, "Failed trying to load the MASTER synchronization DB from network");
         if (server.repl_inMemoryReceive) 
@@ -1235,7 +1380,7 @@ int readSyncBulkPayloadInMemory(int fd)
         replicationAbortSyncTransfer();
         return REDIS_ERR;
     } else {
-        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loaded DB into memory from network.  Size: %lld", server.repl_inMemoryReceive->totalRead);
+        redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Loaded DB into memory from network.  Size: %lld Time:%lld ms", server.repl_inMemoryReceive->totalRead, server.mstime - start);
     }
     return finishedReadingBulkPayload();
 }
