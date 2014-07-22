@@ -2867,6 +2867,12 @@ sds genRedisInfoString(char *section) {
     /* Stats */
     if (allsections || defsections || !strcasecmp(section,"stats")) {
         if (sections++) info = sdscat(info,"\r\n");
+        char bytes_sent_hmem[64];
+        char bytes_received_hmem[64];
+        unsigned long long bytes_sent = getBytesSentPerSecond();
+        unsigned long long bytes_received = getBytesReceivedPerSecond();
+        bytesToHuman(bytes_sent_hmem, bytes_sent);
+        bytesToHuman(bytes_received_hmem, bytes_received);
         info = sdscatprintf(info,
             "# Stats\r\n"
             "total_connections_received:%lld\r\n"
@@ -2874,6 +2880,8 @@ sds genRedisInfoString(char *section) {
             "instantaneous_ops_per_sec:%lld\r\n"
             "bytes_received_per_sec:%llu\r\n"
             "bytes_sent_per_sec:%llu\r\n"
+            "bytes_received_per_sec_human:%s\r\n"
+            "bytes_sent_per_sec_human:%s\r\n"
             "rejected_connections:%lld\r\n"
             "sync_full:%lld\r\n"
             "sync_partial_ok:%lld\r\n"
@@ -2888,8 +2896,10 @@ sds genRedisInfoString(char *section) {
             server.stat_numconnections,
             server.stat_numcommands,
             getOperationsPerSecond(),
-            getBytesReceivedPerSecond(),
-            getBytesSentPerSecond(),
+            bytes_received,
+            bytes_sent,
+            bytes_received_hmem,
+            bytes_sent_hmem,
             server.stat_rejected_conn,
             server.stat_sync_full,
             server.stat_sync_partial_ok,
