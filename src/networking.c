@@ -887,6 +887,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                 freeClient(c);
                 return;
             }
+            server.stat_bytes_sent += nwritten;
             c->outstanding_writes++;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -912,6 +913,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                 freeClient(c);
                 return;
             }
+            server.stat_bytes_sent += objlen;
             totwritten += objlen;
             /* remove from list - object kept alive due to incrRefCount */
             listDelNode(c->reply,listFirst(c->reply));
@@ -1330,6 +1332,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         freeClient(c);
         return;
     }
+    server.stat_bytes_received += nread;
 #ifdef WIN32_IOCP
     aeWinReceiveDone(fd);
 #endif

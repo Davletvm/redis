@@ -842,12 +842,22 @@ void trackOperationsPerSecond(void) {
     long long ops = server.stat_numcommands - server.ops_sec_last_sample_ops;
     long long ops_sec;
 
+    unsigned long long received = server.stat_bytes_received - server.stat_bytes_received_last_sample;
+    unsigned long long sent = server.stat_bytes_sent - server.stat_bytes_sent_last_sample;
+    unsigned long long sent_sec = t > 0 ? (sent * 1000 / t) : 0;
+    unsigned long long received_sec = t > 0 ? (received * 1000 / t) : 0;
+
     ops_sec = t > 0 ? (ops*1000/t) : 0;
 
     server.ops_sec_samples[server.ops_sec_idx] = ops_sec;
+    server.stat_bytes_received_samples[server.ops_sec_idx] = received_sec;
+    server.stat_bytes_sent_samples[server.ops_sec_idx] = sent_sec;
     server.ops_sec_idx = (server.ops_sec_idx+1) % REDIS_OPS_SEC_SAMPLES;
     server.ops_sec_last_sample_time = mstime();
     server.ops_sec_last_sample_ops = server.stat_numcommands;
+    server.stat_bytes_received_last_sample = server.stat_bytes_received;
+    server.stat_bytes_sent_last_sample = server.stat_bytes_sent;
+
 }
 
 /* Return the mean of all the samples. */
@@ -857,6 +867,24 @@ long long getOperationsPerSecond(void) {
 
     for (j = 0; j < REDIS_OPS_SEC_SAMPLES; j++)
         sum += server.ops_sec_samples[j];
+    return sum / REDIS_OPS_SEC_SAMPLES;
+}
+
+unsigned long long getBytesReceivedPerSecond() {
+    int j;
+    unsigned long long sum = 0;
+
+    for (j = 0; j < REDIS_OPS_SEC_SAMPLES; j++)
+        sum += server.stat_bytes_received_samples[j];
+    return sum / REDIS_OPS_SEC_SAMPLES;
+}
+
+unsigned long long getBytesSentPerSecond() {
+    int j;
+    unsigned long long sum = 0;
+
+    for (j = 0; j < REDIS_OPS_SEC_SAMPLES; j++)
+        sum += server.stat_bytes_sent_samples[j];
     return sum / REDIS_OPS_SEC_SAMPLES;
 }
 
@@ -1748,6 +1776,8 @@ void resetServerStats(void) {
     server.ops_sec_idx = 0;
     server.ops_sec_last_sample_time = mstime();
     server.ops_sec_last_sample_ops = 0;
+    server.stat_bytes_received = 0;
+    server.stat_bytes_sent = 0;
 }
 
 void initServer() {
@@ -2842,6 +2872,8 @@ sds genRedisInfoString(char *section) {
             "total_connections_received:%lld\r\n"
             "total_commands_processed:%lld\r\n"
             "instantaneous_ops_per_sec:%lld\r\n"
+            "bytes_received_per_sec:%llu\r\n"
+            "bytes_sent_per_sec:%llu\r\n"
             "rejected_connections:%lld\r\n"
             "sync_full:%lld\r\n"
             "sync_partial_ok:%lld\r\n"
@@ -2856,6 +2888,8 @@ sds genRedisInfoString(char *section) {
             server.stat_numconnections,
             server.stat_numcommands,
             getOperationsPerSecond(),
+            getBytesReceivedPerSecond(),
+            getBytesSentPerSecond(),
             server.stat_rejected_conn,
             server.stat_sync_full,
             server.stat_sync_partial_ok,

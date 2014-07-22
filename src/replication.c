@@ -442,6 +442,7 @@ void sendInMemoryBuffersToSlavePrefix(aeEventLoop *el, int fd, void *privdata, i
             freeClient(slave);
             return;
         }
+        server.stat_bytes_sent += (int)sdslen(bulkcount);
         slave->repldboff = 1;
         aeSetReadyForCallback(el);
     }
@@ -486,7 +487,7 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
         inm->slave = NULL;
         return;
     }
-
+    server.stat_bytes_sent += inm->sizeFilled[which][0];
     if (inm->totalSent / ((long long)1024 * 1024 * 128) != (inm->totalSent + inm->sizeFilled[which][0]) / ((long long)1024 * 1024 * 128)) {
         redisLog(REDIS_DEBUG, "Total sent: %lld", inm->totalSent + inm->sizeFilled[which][0]);
     }
@@ -794,6 +795,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
             freeClient(slave);
             return;
         }
+        server.stat_bytes_sent += (int)sdslen(bulkcount);
     }
     lseek64(slave->repldbfd,slave->repldboff,SEEK_SET);
     buf = (char *)zmalloc(REDIS_IOBUF_LEN);
@@ -813,7 +815,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
         freeClient(slave);
         return;
     }
-
+    server.stat_bytes_sent += buflen;
 }
 
 
@@ -1099,6 +1101,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         replicationAbortSyncTransfer();
         return;
     }
+    server.stat_bytes_received += nread;
     redisLog(REDIS_DEBUG, "Requested: %d, Read: %d, Total: %lld", readlen, nread, inm->totalRead + nread);
     server.repl_transfer_lastio = server.unixtime;
     inm->totalRead += nread;
@@ -1306,6 +1309,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         replicationAbortSyncTransfer();
         return;
     }
+    server.stat_bytes_received += nread;
     aeWinReceiveDone(fd);
 #else
     nread = read(fd,buf,readlen);
@@ -2172,6 +2176,7 @@ void replicationCron(void) {
 #endif
                     /* Don't worry, it's just a ping. */
                 }
+                server.stat_bytes_sent += 1;
             }
         }
     }

@@ -738,6 +738,8 @@ struct redisServer {
     long long stat_sync_full;       /* Number of full resyncs with slaves. */
     long long stat_sync_partial_ok; /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;/* Number of unaccepted PSYNC requests. */
+    unsigned long long stat_bytes_sent;
+    unsigned long long stat_bytes_received;
     list *slowlog;                  /* SLOWLOG list of commands */
     long long slowlog_entry_id;     /* SLOWLOG current entry ID */
     long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
@@ -748,6 +750,10 @@ struct redisServer {
     long long ops_sec_last_sample_time; /* Timestamp of last sample (in ms) */
     long long ops_sec_last_sample_ops;  /* numcommands in last sample */
     long long ops_sec_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_bytes_received_last_sample;
+    unsigned long long stat_bytes_received_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_bytes_sent_last_sample;
+    unsigned long long stat_bytes_sent_samples[REDIS_OPS_SEC_SAMPLES];
     int ops_sec_idx;
     /* Configuration */
     int verbosity;                  /* Loglevel in redis.conf */
