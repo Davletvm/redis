@@ -534,6 +534,10 @@ void loadServerConfigFromString(char *config) {
             if ((server.repl_inMemoryThrottle = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "privilidge") && argc == 2) {
+            if ((server.privilidgeEnabled = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "repl-throttle-window") && argc == 2) {
             if ((server.repl_inMemoryThrottleWindow = atoi(argv[1])) < 0) {
                 err = "invalid value for repl-throttle-window"; goto loaderr;
@@ -962,6 +966,10 @@ void configSetCommand(redisClient *c) {
         int yn = yesnotoi(o->ptr);
         if (yn == -1) goto badfmt;
         server.repl_inMemoryThrottle = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr, "privilidge")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.privilidgeEnabled = yn;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-window")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 10 || ll > 5000) goto badfmt;
         server.repl_inMemoryThrottleWindow = ll;
@@ -1125,6 +1133,7 @@ void configGetCommand(redisClient *c) {
             server.aof_rewrite_incremental_fsync);
     config_get_bool_field("repl-inmemory", server.repl_inMemoryUse);
     config_get_bool_field("repl-throttle", server.repl_inMemoryThrottle);
+    config_get_bool_field("privilidge", server.privilidgeEnabled);
 
 
     /* Everything we can't handle with macros follows. */
@@ -1908,6 +1917,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
     rewriteConfigYesNoOption(state, "repl-inmemory", server.repl_inMemoryUse, REDIS_DEFAULT_INMEMORYREPL);
     rewriteConfigYesNoOption(state, "repl-throttle", server.repl_inMemoryThrottle, REDIS_DEFAULT_INMEMORYTHROTTLE);
+    rewriteConfigYesNoOption(state, "privilidge", server.privilidgeEnabled, 0);
     rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
     rewriteConfigNumericalOption(state, "repl-throttle-window", server.repl_inMemoryThrottleWindow, REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW);

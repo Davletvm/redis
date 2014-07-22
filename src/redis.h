@@ -878,6 +878,7 @@ struct redisServer {
     int repl_inMemoryThrottleCheck; /* Time between throttling adjustments */
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
+    int privilidgeEnabled;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */

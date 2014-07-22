@@ -1538,6 +1538,7 @@ void initServerConfig() {
     server.repl_inMemoryThrottleCheck = REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
+    server.privilidgeEnabled = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -3058,7 +3059,7 @@ void infoCommand(redisClient *c) {
         addReply(c,shared.syntaxerr);
         return;
     }
-    info = genRedisInfoString(section, c->flags & REDIS_PRIVILIDGED_CLIENT);
+    info = genRedisInfoString(section, (c->flags & REDIS_PRIVILIDGED_CLIENT) || !server.privilidgeEnabled);
     addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
         (unsigned long)sdslen(info)));
     addReplySds(c,info);
@@ -3274,21 +3275,25 @@ int freeMemoryIfNeeded(void) {
 
 void privilidgeClientCommand(redisClient *c) 
 {
-    if ((server.requirepass || server.requirepass2) && !c->authenticated) {
-        if (c->argc == 2) {
-            authCommand(c);
-            if (c->authenticated) {
-                c->flags |= REDIS_PRIVILIDGED_CLIENT;
+    if (server.privilidgeEnabled) {
+        if ((server.requirepass || server.requirepass2) && !c->authenticated) {
+            if (c->argc == 2) {
+                authCommand(c);
+                if (c->authenticated) {
+                    c->flags |= REDIS_PRIVILIDGED_CLIENT;
+                } else {
+                    flagTransaction(c);
+                }
             } else {
                 flagTransaction(c);
+                addReply(c, shared.noautherr);
             }
         } else {
-            flagTransaction(c);
-            addReply(c, shared.noautherr);
+            c->flags |= REDIS_PRIVILIDGED_CLIENT;
+            addReply(c, shared.ok);
         }
     } else {
-        c->flags |= REDIS_PRIVILIDGED_CLIENT;
-        addReply(c, shared.ok);
+        addReply(c, shared.syntaxerr);
     }
 }
 
