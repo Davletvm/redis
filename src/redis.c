@@ -1030,6 +1030,24 @@ void FinishInMemoryRepl()
 
 }
 
+void updateCpuTime() {
+    struct rusage usage_now;
+    getrusage(RUSAGE_SELF, &usage_now);
+    unsigned long long ms_usage_now =
+        usage_now.ru_stime.tv_sec * 1000
+        + usage_now.ru_stime.tv_usec / 1000
+        + usage_now.ru_utime.tv_sec * 1000
+        + usage_now.ru_utime.tv_usec / 1000;
+    mstime_t time_delta = server.mstime - server.cpu_time_lastreported;
+    unsigned long long cpu_delta = ms_usage_now - server.cpu_time_lastusage_ms;
+
+    server.cpu_time_ms_per_sec = cpu_delta * 1000 / time_delta;
+    server.cpu_time_lastusage_ms = ms_usage_now;
+    server.cpu_time_lastreported = server.mstime;
+}
+
+
+
 int forkCleanupCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (server.forkcleanup) {
         OperationStatus opStatus = GetForkOperationStatus(FALSE);
@@ -1095,6 +1113,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     CheckThrottleWindowUpdate(NULL);
 
     run_with_period(100) trackOperationsPerSecond();
+
+    run_with_period(5000) updateCpuTime();
+    
 
     /* We have just 22 bits per object for LRU information.
      * So we use an (eventually wrapping) LRU clock with 10 seconds resolution.
@@ -1566,6 +1587,8 @@ void initServerConfig() {
     server.repl_inMemoryThrottleCheck = REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
+    server.cpu_time_lastreported = mstime();
+    server.cpu_time_lastusage_ms = 0;
     server.privilidgeEnabled = 0;
 
     /* Replication partial resync backlog */
@@ -2571,6 +2594,10 @@ sds genRedisInfoString(char *section, int privilidged) {
         defsections = strcasecmp(section,"default") == 0;
     }
 
+    char bytes_sent_hmem[64];
+    char bytes_received_hmem[64];
+    unsigned long long bytes_sent = 0; 
+    unsigned long long bytes_received = 0; 
 
     getrusage(RUSAGE_SELF, &self_ru);
     getrusage(RUSAGE_CHILDREN, &c_ru);
@@ -2879,10 +2906,8 @@ sds genRedisInfoString(char *section, int privilidged) {
     /* Stats */
     if (allsections || defsections || !strcasecmp(section,"stats")) {
         if (sections++) info = sdscat(info,"\r\n");
-        char bytes_sent_hmem[64];
-        char bytes_received_hmem[64];
-        unsigned long long bytes_sent = getBytesSentPerSecond();
-        unsigned long long bytes_received = getBytesReceivedPerSecond();
+        bytes_sent = getBytesSentPerSecond();
+        bytes_received = getBytesReceivedPerSecond();
         bytesToHuman(bytes_sent_hmem, bytes_sent);
         bytesToHuman(bytes_received_hmem, bytes_received);
         info = sdscatprintf(info,
@@ -2958,12 +2983,28 @@ sds genRedisInfoString(char *section, int privilidged) {
             );
 
             if (server.repl_state == REDIS_REPL_TRANSFER) {
+                if (!bytes_sent) {
+                    bytes_sent = getBytesSentPerSecond();
+                    bytes_received = getBytesReceivedPerSecond();
+                    bytesToHuman(bytes_sent_hmem, bytes_sent);
+                    bytesToHuman(bytes_received_hmem, bytes_received);
+                }
                 info = sdscatprintf(info,
                     "master_sync_left_bytes:%lld\r\n"
                     "master_sync_last_io_seconds_ago:%d\r\n"
+                    "bytes_received_per_sec:%llu\r\n"
+                    "bytes_sent_per_sec:%llu\r\n"
+                    "bytes_received_per_sec_human:%s\r\n"
+                    "bytes_sent_per_sec_human:%s\r\n"
+
                     , (long long)
                         (server.repl_transfer_size - server.repl_transfer_read),
-                    (int)(server.unixtime-server.repl_transfer_lastio)
+                    (int)(server.unixtime-server.repl_transfer_lastio),
+                    bytes_received,
+                    bytes_sent,
+                    bytes_received_hmem,
+                    bytes_sent_hmem
+
                 );
             }
 
@@ -3053,11 +3094,13 @@ sds genRedisInfoString(char *section, int privilidged) {
         "used_cpu_sys:%.2f\r\n"
         "used_cpu_user:%.2f\r\n"
         "used_cpu_sys_children:%.2f\r\n"
-        "used_cpu_user_children:%.2f\r\n",
+        "used_cpu_user_children:%.2f\r\n"
+        "used_cpu_avg_ms_per_sec:%d\r\n",
         (float)self_ru.ru_stime.tv_sec+(float)self_ru.ru_stime.tv_usec/1000000,
         (float)self_ru.ru_utime.tv_sec+(float)self_ru.ru_utime.tv_usec/1000000,
         (float)c_ru.ru_stime.tv_sec+(float)c_ru.ru_stime.tv_usec/1000000,
-        (float)c_ru.ru_utime.tv_sec+(float)c_ru.ru_utime.tv_usec/1000000);
+        (float)c_ru.ru_utime.tv_sec+(float)c_ru.ru_utime.tv_usec/1000000,
+        server.cpu_time_ms_per_sec);
     }
 
     /* cmdtime */

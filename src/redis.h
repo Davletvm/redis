@@ -885,6 +885,9 @@ struct redisServer {
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
     int privilidgeEnabled;
+    int cpu_time_ms_per_sec;
+    unsigned long long cpu_time_lastusage_ms;
+    mstime_t cpu_time_lastreported;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
