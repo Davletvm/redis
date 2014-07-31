@@ -115,9 +115,16 @@ redisClient *createClient(int fd) {
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
     c->throttled_list_node = NULL;
+    c->unauthenticated_list_node = NULL;
+    c->client_to_close_node = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
-    if (fd != -1) listAddNodeTail(server.clients,c);
+    if (fd != -1) {
+        listAddNodeTail(server.clients, c);
+        c->client_list_node = listLast(server.clients);
+    } else {
+        c->client_list_node = NULL;
+    }
     initClientMultiState(c);
     return c;
 }
@@ -567,16 +574,24 @@ static void acceptCommonHandler(int fd, int flags) {
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
     if (listLength(server.clients) > server.maxclients) {
-        char *err = "-ERR max number of clients reached\r\n";
+        // The client we want to free is the oldest non-authenticated client, if any
+        if (listLength(server.unauthenticated_clients)) {
+            redisClient *tof = listFirst(server.unauthenticated_clients)->value;
+            freeClient(tof);
+        } else {
+            char *err = "-ERR max number of clients reached\r\n";
 
-        /* That's a best effort error message, don't check write errors */
-        if (write(c->fd,err,strlen(err)) == -1) {
-            /* Nothing to do, Just to avoid the warning... */
+            /* That's a best effort error message, don't check write errors */
+            if (write(c->fd, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
+            server.stat_rejected_conn++;
+            freeClient(c);
+            return;
         }
-        server.stat_rejected_conn++;
-        freeClient(c);
-        return;
     }
+    listAddNodeTail(server.unauthenticated_clients, c);
+    c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
     server.stat_numconnections++;
     c->flags |= flags;
 }
@@ -722,9 +737,7 @@ void freeClient(redisClient *c) {
 #endif
     /* Remove from the list of clients */
     if (c->fd != -1) {
-        ln = listSearchKey(server.clients,c);
-        redisAssert(ln != NULL);
-        listDelNode(server.clients,ln);
+        listDelNode(server.clients, c->client_list_node);
     }
 
     /* When client was just unblocked because of a blocking operation,
@@ -768,13 +781,14 @@ void freeClient(redisClient *c) {
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. */
     if (c->flags & REDIS_CLOSE_ASAP) {
-        ln = listSearchKey(server.clients_to_close,c);
-        redisAssert(ln != NULL);
-        listDelNode(server.clients_to_close,ln);
+        listDelNode(server.clients_to_close,c->client_to_close_node);
     }
 
     if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
         listDelNode(server.repl_inMemorySend->throttle.throttledClients, c->throttled_list_node);
+    }
+    if (c->unauthenticated_list_node) {
+        listDelNode(server.unauthenticated_clients, c->unauthenticated_list_node);
     }
 
     /* Release other dynamically allocated client structure fields,
@@ -794,6 +808,7 @@ void freeClientAsync(redisClient *c) {
     if (c->flags & REDIS_CLOSE_ASAP) return;
     c->flags |= REDIS_CLOSE_ASAP;
     listAddNodeTail(server.clients_to_close,c);
+    c->client_to_close_node = listLast(server.clients_to_close);
 }
 
 void freeClientsInAsyncFreeQueue(void) {
@@ -1320,6 +1335,17 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
+    if (!c->authenticated && (server.requirepass || server.requirepass2) && readlen + sdslen(c->querybuf) >= REDIS_IOBUF_LEN) {
+        readlen = REDIS_IOBUF_LEN - sdslen(c->querybuf);
+        if (readlen <= 0) {
+            sds ci = catClientInfoString(sdsempty(), c);
+            redisLog(REDIS_WARNING, "Closing unauthenticated client for exceeding buffer limit (%s)", ci);
+            sdsfree(ci);
+            freeClient(c);
+            return;
+        }
+    }
+
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
     nread = read(fd, c->querybuf+qblen, readlen);
     if (nread == -1) {

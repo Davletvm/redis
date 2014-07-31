@@ -143,11 +143,12 @@ void aeStop(aeEventLoop *eventLoop) {
     eventLoop->stop = 1;
 }
 
+static int cookie = 0;
+
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData)
 {
     aeFileEvent *fe;
-
 
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
@@ -157,6 +158,9 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
     if (aeApiAddEvent(eventLoop, fd, mask) == -1)
         return AE_ERR;
+    if ((fe->mask & (AE_READABLE | AE_WRITABLE)) == 0) {
+        fe->cookie = ++cookie;
+    }
     fe->mask |= mask;
     if (mask & AE_READABLE) fe->rfileProc = proc;
     if (mask & AE_WRITABLE) fe->wfileProc = proc;
@@ -442,17 +446,21 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             int rfired = 0;
 
             fe = &eventLoop->events[eventLoop->fired[j].fd];
+            if (fe->cookie == eventLoop->fired[j].cookie) {
 
-            /* note the fe->mask & mask & ... code: maybe an already processed
-             * event removed an element that fired and we still didn't
-             * processed, so we check if the event is still valid. */
-            if (fe->mask & mask & AE_READABLE) {
-                rfired = 1;
-                fe->rfileProc(eventLoop,fd,fe->clientData,mask);
-            }
-            if (fe->mask & mask & AE_WRITABLE) {
-                if (!rfired || fe->wfileProc != fe->rfileProc)
-                    fe->wfileProc(eventLoop,fd,fe->clientData,mask);
+                /* note the fe->mask & mask & ... code: maybe an already processed
+                 * event removed an element that fired and we still didn't
+                 * processed, so we check if the event is still valid. */
+                if (fe->mask & mask & AE_READABLE) {
+                    rfired = 1;
+                    fe->rfileProc(eventLoop, fd, fe->clientData, mask);
+                }
+                if (fe->mask & mask & AE_WRITABLE) {
+                    if (!rfired || fe->wfileProc != fe->rfileProc)
+                        fe->wfileProc(eventLoop, fd, fe->clientData, mask);
+                }
+            } else {
+                redisLog(REDIS_NOTICE, "Skipping stale event.");
             }
             processed++;
         }

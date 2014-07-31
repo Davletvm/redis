@@ -531,6 +531,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                     if (sockstate->masks & AE_READABLE) {
                         eventLoop->fired[numevents].fd = rfd;
                         eventLoop->fired[numevents].mask = AE_READABLE;
+                        eventLoop->fired[numevents].cookie = eventLoop->events[rfd].cookie;
                         numevents++;
                     }
                 } else if (sockstate->masks & CONNECT_PENDING) {
@@ -549,6 +550,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                         if (sockstate->masks & AE_READABLE) {
                             eventLoop->fired[numevents].fd = rfd;
                             eventLoop->fired[numevents].mask = AE_READABLE;
+                            eventLoop->fired[numevents].cookie = eventLoop->events[rfd].cookie;
                             numevents++;
                         }
                     } else if (sockstate->wreqs > 0 && entry->lpOverlapped != NULL) {
@@ -569,6 +571,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                             if (sockstate->wreqs == 0 && sockstate->masks & AE_WRITABLE) {
                                 eventLoop->fired[numevents].fd = rfd;
                                 eventLoop->fired[numevents].mask = AE_WRITABLE;
+                                eventLoop->fired[numevents].cookie = eventLoop->events[rfd].cookie;
                                 numevents++;
                             }
                         }

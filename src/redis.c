@@ -1894,6 +1894,7 @@ void initServer() {
     server.pubsub_patterns = listCreate();
     server.pubsub_scripts = listCreate();
     server.pubsub_script_queue = listCreate();
+    server.unauthenticated_clients = listCreate();
     listSetFreeMethod(server.pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(server.pubsub_patterns,listMatchPubsubPattern);
     listSetFreeMethod(server.pubsub_scripts, freePubsubScript);
@@ -2506,6 +2507,10 @@ void authCommand(redisClient *c) {
     } else if ((server.requirepass && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) ||
                (server.requirepass2 && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass2))) {
       c->authenticated = 1;
+      if (c->unauthenticated_list_node) {
+          listDelNode(server.unauthenticated_clients, c->unauthenticated_list_node);
+          c->unauthenticated_list_node = NULL;
+      }
       addReply(c,shared.ok);
     } else {
       c->authenticated = 0;

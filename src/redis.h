@@ -534,6 +534,9 @@ typedef struct redisClient {
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
     sds peerid;             /* Cached peer ID. */
     listNode * throttled_list_node;
+    listNode * unauthenticated_list_node;
+    listNode * client_list_node;
+    listNode * client_to_close_node;
 
     /* Response buffer */
     int bufpos;
@@ -888,6 +891,7 @@ struct redisServer {
     int cpu_time_ms_per_sec;
     unsigned long long cpu_time_lastusage_ms;
     mstime_t cpu_time_lastreported;
+    list *unauthenticated_clients;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
