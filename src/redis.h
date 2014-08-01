@@ -890,6 +890,7 @@ struct redisServer {
     int privilidgeEnabled;
     int cpu_time_ms_per_sec;
     unsigned long long cpu_time_lastusage_ms;
+    mstime_t time_last_slave_ping;
     mstime_t cpu_time_lastreported;
     list *unauthenticated_clients;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */

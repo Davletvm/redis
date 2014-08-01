@@ -1588,6 +1588,7 @@ void initServerConfig() {
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
     server.cpu_time_lastreported = mstime();
+    server.time_last_slave_ping = server.cpu_time_lastreported;
     server.cpu_time_lastusage_ms = 0;
     server.privilidgeEnabled = 0;
 
