@@ -548,10 +548,17 @@ void updateThrottleState() {
     outputBufferMax -= outputBufferMax / 5;
     long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
     mstime_t timeDelta = server.mstime - inm->throttle.testStart;
-    if (timeDelta == 0) timeDelta = 1;
+    if (timeDelta == 0)
+    {
+        timeDelta = 1;
+    }
 
     long long transferSpeedNow = transferInLastTest / timeDelta;
-    if (transferSpeedNow == 0) transferSpeedNow = 1;
+    if (transferSpeedNow == 0)
+    {
+        transferSpeedNow = 1;
+    }
+
     mstime_t timeLeft = server.repl_inMemoryThrottleMaxTime - (server.mstime - inm->throttle.replStart);
     if (outputBufferGrowth > 0 && outputBufferMax) {
         mstime_t timeToFillOB = (outputBufferSpaceLeft / outputBufferGrowth) * timeDelta;
