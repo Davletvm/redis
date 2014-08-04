@@ -762,6 +762,10 @@ void EndForkOperation(int * pExitCode)
     memset(&g_CleanupState, 0, sizeof(g_CleanupState));
 }
 
+#ifndef PAGE_REVERT_TO_FILE_MAP
+#define PAGE_REVERT_TO_FILE_MAP     0x80000000     
+#endif
+
 void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
     try {
         if (exitCode != NULL) {
