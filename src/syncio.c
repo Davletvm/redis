@@ -62,6 +62,7 @@ ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
         if (nwritten == -1) {
             if (errno != EAGAIN) return -1;
         } else {
+            server.stat_bytes_sent += nwritten;
             ptr += nwritten;
             size -= nwritten;
         }
@@ -106,6 +107,7 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
                 return -1;
             }
         } else {
+            server.stat_bytes_received += nread;
             ptr += nread;
             size -= nread;
             totread += nread;

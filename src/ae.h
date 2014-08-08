@@ -65,6 +65,7 @@ typedef struct aeFileEvent {
     aeFileProc *rfileProc;
     aeFileProc *wfileProc;
     void *clientData;
+    int cookie;
 } aeFileEvent;
 
 /* Time event structure */
@@ -82,6 +83,7 @@ typedef struct aeTimeEvent {
 typedef struct aeFiredEvent {
     int fd;
     int mask;
+    int cookie;
 } aeFiredEvent;
 
 /* State of an event based program */

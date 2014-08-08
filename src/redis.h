@@ -138,6 +138,10 @@
 #define REDIS_MIN_RESERVED_FDS 32
 
 #define REDIS_DEFAULT_INMEMORYREPL 0
+#define REDIS_DEFAULT_INMEMORYTHROTTLE 0
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME (5 * 60)
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW 100
+#define REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK 5000
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 
@@ -253,6 +257,10 @@
 #define REDIS_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd. */
 #define REDIS_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
 #define REDIS_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
+#define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
+#define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
+
+#define REDIS_PRIVILIDGED_CLIENT (1<<17) 
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -260,10 +268,10 @@
 
 /* Client classes for client limits, currently used only for
  * the max-client-output-buffer limit implementation. */
-#define REDIS_CLIENT_LIMIT_CLASS_NORMAL 0
-#define REDIS_CLIENT_LIMIT_CLASS_SLAVE 1
-#define REDIS_CLIENT_LIMIT_CLASS_PUBSUB 2
-#define REDIS_CLIENT_LIMIT_NUM_CLASSES 3
+#define REDIS_CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients + MONITORs */
+#define REDIS_CLIENT_TYPE_SLAVE 1  /* Slaves. */
+#define REDIS_CLIENT_TYPE_PUBSUB 2 /* Clients subscribed to PubSub channels. */
+#define REDIS_CLIENT_TYPE_COUNT 3
 
 /* Slave replication state - from the point of view of the slave. */
 #define REDIS_REPL_NONE 0 /* No active replication */
@@ -384,6 +392,9 @@
 #define REDIS_NOTIFY_EVICTED (1<<9)     /* e */
 #define REDIS_NOTIFY_ALL (REDIS_NOTIFY_GENERIC | REDIS_NOTIFY_STRING | REDIS_NOTIFY_LIST | REDIS_NOTIFY_SET | REDIS_NOTIFY_HASH | REDIS_NOTIFY_ZSET | REDIS_NOTIFY_EXPIRED | REDIS_NOTIFY_EVICTED)      /* A */
 
+/* Get the first bind addr or NULL */
+#define REDIS_BIND_ADDR (server.bindaddr_count ? server.bindaddr[0] : NULL)
+
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
  * The actual resolution depends on server.hz. */
@@ -476,6 +487,7 @@ typedef struct readyList {
 /* With multiplexing we need to take per-client state.
  * Clients are taken in a liked list. */
 typedef struct redisClient {
+    uint64_t id;            /* Client incremental unique ID. */
     int fd;
     redisDb *db;
     int dictid;
@@ -520,6 +532,11 @@ typedef struct redisClient {
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
     dict *pubsub_channels;  /* channels a client is interested in (SUBSCRIBE) */
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
+    sds peerid;             /* Cached peer ID. */
+    listNode * throttled_list_node;
+    listNode * unauthenticated_list_node;
+    listNode * client_list_node;
+    listNode * client_to_close_node;
 
     /* Response buffer */
     int bufpos;
@@ -575,7 +592,7 @@ typedef struct clientBufferLimitsConfig {
     time_t soft_limit_seconds;
 } clientBufferLimitsConfig;
 
-extern clientBufferLimitsConfig clientBufferLimitsDefaults[REDIS_CLIENT_LIMIT_NUM_CLASSES];
+extern clientBufferLimitsConfig clientBufferLimitsDefaults[REDIS_CLIENT_TYPE_COUNT];
 
 /* The redisOp structure defines a Redis Operation, that is an instance of
  * a command with an argument vector, database ID, propagation target
@@ -600,6 +617,30 @@ typedef struct redisOpArray {
     redisOp *ops;
     int numops;
 } redisOpArray;
+
+
+#define THROTTLE_NONE 0
+#define THROTTLE_TESTING 1
+#define THROTTLE_IN_THROTTLE_WINDOW 2
+#define THROTTLE_IN_FREE_WINDOW 3
+#define THROTTLE_ABORTED 4
+
+#define THROTTLE_TEST_WINDOW 1000
+#define THROTTLE_MAX_TARGET (1000 * 60 * 10)
+
+typedef struct redisThrottling {
+    long long dataSetSize;
+    mstime_t replStart;
+    mstime_t testStart;
+    mstime_t nextWindow;
+    mstime_t throttleWindowDuration;
+    mstime_t freeWindowDuration;
+    list * throttledClients;
+    int state;
+    int throttleIndex;
+    long outputBufferAtStart;
+    size_t dataTransferredAtStart;
+} redisThrottling;
 
 #define INMEMORY_ENDSTATE_NONE 0
 #define INMEMORY_ENDSTATE_ENDFOUND 2
@@ -658,7 +699,7 @@ typedef struct redisInMemoryReplSend {
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
-    size_t heapOffset;
+    redisThrottling throttle;
 } redisInMemoryReplSend;
 
 typedef struct redisInMemorySendCookie
@@ -705,7 +746,8 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *slaves, *monitors;    /* List of slaves and MONITORs */
     redisClient *current_client; /* Current client, only used on crash report */
-    char neterr[ANET_ERR_LEN];  /* Error buffer for anet.c */
+    char neterr[ANET_ERR_LEN];   /* Error buffer for anet.c */
+    uint64_t next_client_id;    /* Next client unique ID. Incremental. */
     /* RDB / AOF loading information */
     int loading;                /* We are loading data from disk if true */
     off_t loading_total_bytes;
@@ -731,6 +773,8 @@ struct redisServer {
     long long stat_sync_full;       /* Number of full resyncs with slaves. */
     long long stat_sync_partial_ok; /* Number of accepted PSYNC requests. */
     long long stat_sync_partial_err;/* Number of unaccepted PSYNC requests. */
+    unsigned long long stat_bytes_sent;
+    unsigned long long stat_bytes_received;
     list *slowlog;                  /* SLOWLOG list of commands */
     long long slowlog_entry_id;     /* SLOWLOG current entry ID */
     long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
@@ -741,6 +785,10 @@ struct redisServer {
     long long ops_sec_last_sample_time; /* Timestamp of last sample (in ms) */
     long long ops_sec_last_sample_ops;  /* numcommands in last sample */
     long long ops_sec_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_bytes_received_last_sample;
+    unsigned long long stat_bytes_received_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_bytes_sent_last_sample;
+    unsigned long long stat_bytes_sent_samples[REDIS_OPS_SEC_SAMPLES];
     int ops_sec_idx;
     /* Configuration */
     int verbosity;                  /* Loglevel in redis.conf */
@@ -750,7 +798,7 @@ struct redisServer {
     size_t client_max_querybuf_len; /* Limit for client query buffer length */
     int dbnum;                      /* Total number of configured DBs */
     int daemonize;                  /* True if running as a daemon */
-    clientBufferLimitsConfig client_obuf_limits[REDIS_CLIENT_LIMIT_NUM_CLASSES];
+    clientBufferLimitsConfig client_obuf_limits[REDIS_CLIENT_TYPE_COUNT];
     /* AOF persistence */
     int aof_state;                  /* REDIS_AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
@@ -833,8 +881,18 @@ struct redisServer {
     redisInMemoryReplReceive * repl_inMemoryReceive;
     redisInMemoryReplSend * repl_inMemorySend;
     int repl_inMemoryUse; /* Don't use disk to synchornize with slaves */
+    int repl_inMemoryThrottle; /* Potentially throttle reads when needed */
+    int repl_inMemoryThrottleMaxTime; /* Target this completion time when throttling */
+    int repl_inMemoryThrottleWindow; /* Max free\throttled window */
+    int repl_inMemoryThrottleCheck; /* Time between throttling adjustments */
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
+    int privilidgeEnabled;
+    int cpu_time_ms_per_sec;
+    unsigned long long cpu_time_lastusage_ms;
+    mstime_t time_last_slave_ping;
+    mstime_t cpu_time_lastreported;
+    list *unauthenticated_clients;
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
@@ -850,7 +908,6 @@ struct redisServer {
     /* Limits */
     int maxclients;                 /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
-    unsigned long long maxvirtualmemorytarget;
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
     int protects_used;              /* Whether any objects are protected */
@@ -1068,18 +1125,20 @@ void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *writes_outstanding,
                           unsigned long *total_sent_bytes);
 void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port);
-int getClientPeerId(redisClient *client, char *peerid, size_t peerid_len);
-sds getClientInfoString(redisClient *client);
+char *getClientPeerId(redisClient *client);
+sds catClientInfoString(sds s, redisClient *client);
 sds getAllClientsInfoString(void);
 void rewriteClientCommandVector(redisClient *c, int argc, ...);
 void rewriteClientCommandArgument(redisClient *c, int i, robj *newval);
 unsigned long getClientOutputBufferMemoryUsage(redisClient *c);
 void freeClientsInAsyncFreeQueue(void);
 void asyncCloseClientOnOutputBufferLimitReached(redisClient *c);
-int getClientLimitClassByName(char *name);
-char *getClientLimitClassName(int cl);
+int getClientType(redisClient *c);
+int getClientTypeByName(char *name);
+char *getClientTypeName(int class);
 void flushSlavesOutputBuffers(void);
 void disconnectSlaves(void);
+int processEventsWhileBlocked(void);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(redisClient *c, const char *fmt, ...)
@@ -1107,6 +1166,7 @@ void listTypeConvert(robj *subject, int enc);
 void unblockClientWaitingData(redisClient *c);
 void handleClientsBlockedOnLists(void);
 void popGenericCommand(redisClient *c, int where);
+void signalListAsReady(redisDb *db, robj *key);
 
 /* MULTI/EXEC/WATCH... */
 void unwatchAllKeys(redisClient *c);
@@ -1179,6 +1239,8 @@ void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void replicationSendNewlineToMaster(void);
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
+void TransitionToFreeWindow(int final);
+int CheckThrottleWindowUpdate(redisClient * c);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
@@ -1456,6 +1518,7 @@ void ttlCommand(redisClient *c);
 void pttlCommand(redisClient *c);
 void persistCommand(redisClient *c);
 void slaveofCommand(redisClient *c);
+void roleCommand(redisClient *c);
 void debugCommand(redisClient *c);
 void msetCommand(redisClient *c);
 void msetnxCommand(redisClient *c);
@@ -1513,6 +1576,7 @@ void setkeyspacescriptCommand(redisClient *c);
 void protectkeyCommand(redisClient *c);
 void unprotectkeyCommand(redisClient *c);
 void isprotectkeyCommand(redisClient *c);
+void privilidgeClientCommand(redisClient *c);
 void watchCommand(redisClient *c);
 void unwatchCommand(redisClient *c);
 void restoreCommand(redisClient *c);

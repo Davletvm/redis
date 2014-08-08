@@ -32,7 +32,6 @@ typedef struct InMemoryBuffersControl {
     int bufferState[MAXSENDBUFFER];
     int id;
     int bufferSize;
-    size_t heapOffset;
     SPBuffer * buffer[MAXSENDBUFFER];
 } InMemoryBuffersControl;
 
