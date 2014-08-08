@@ -50,9 +50,6 @@ const string cSyslogIdent= "syslog-ident";
 const string cLogfile = "logfile";
 const string cInclude = "include";
 
-const string cMaxHeap = "maxvirtualmemory";
-const string cMaxMemory = "maxmemory";
-
 const string cSentinel = "sentinel";
 
 const string cYes = "yes";

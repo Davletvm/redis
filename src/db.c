@@ -93,6 +93,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
     int retval = dictAdd(db->dict, copy, val);
 
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
+    if (val->type == REDIS_LIST) signalListAsReady(db, key);
  }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
@@ -245,17 +246,31 @@ void signalFlushedDb(int dbid) {
  * Type agnostic commands operating on the key space
  *----------------------------------------------------------------------------*/
 
+void flushPingCallback(void * data) {
+    updateCachedTime();
+    if (server.time_last_slave_ping + 2000 < server.mstime) {
+        robj *ping_argv[1];
+        server.time_last_slave_ping = server.mstime;
+        /* First, send PING */
+        ping_argv[0] = createStringObject("PING", 4);
+        replicationFeedSlaves(server.slaves, server.slaveseldb, ping_argv, 1);
+        decrRefCount(ping_argv[0]);
+        flushSlavesOutputBuffers();
+    }
+}
+
+
 void flushdbCommand(redisClient *c) {
     server.dirty += dictSize(c->db->dict);
     signalFlushedDb(c->db->id);
-    dictEmpty(c->db->dict,NULL);
-    dictEmpty(c->db->expires,NULL);
+    dictEmpty(c->db->dict,flushPingCallback);
+    dictEmpty(c->db->expires,flushPingCallback);
     addReply(c,shared.ok);
 }
 
 void flushallCommand(redisClient *c) {
     signalFlushedDb(-1);
-    server.dirty += emptyDb(NULL);
+    server.dirty += emptyDb(flushPingCallback);
     addReply(c,shared.ok);
     if (server.rdb_child_pid != -1) {
 #ifdef _WIN32
@@ -279,6 +294,7 @@ void delCommand(redisClient *c) {
     int deleted = 0, j;
 
     for (j = 1; j < c->argc; j++) {
+        expireIfNeeded(c->db,c->argv[j]);
         if (dbDelete(c->db,c->argv[j])) {
             signalModifiedKey(c->db,c->argv[j]);
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,

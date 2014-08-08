@@ -134,7 +134,6 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     inMemoryRepl.sentDoneEvents = doneSent;
     inMemoryRepl.sequence = buffers->bufferSequence;
     inMemoryRepl.sendState = buffers->bufferState;
-    inMemoryRepl.heapOffset = buffers->heapOffset;
     inMemoryRepl.prevActiveBuffer = -1;
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();

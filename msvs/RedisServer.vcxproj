@@ -83,6 +83,7 @@
     <LinkIncremental>false</LinkIncremental>
     <TargetName>redis-server</TargetName>
     <GenerateManifest>false</GenerateManifest>
+    <CustomBuildBeforeTargets>ClCompile</CustomBuildBeforeTargets>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
@@ -99,6 +100,7 @@
       <Optimization>Disabled</Optimization>
       <DisableSpecificWarnings>4996;4146</DisableSpecificWarnings>
       <WholeProgramOptimization>true</WholeProgramOptimization>
+      <AdditionalOptions>/J %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -166,6 +168,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <DisableSpecificWarnings>4996;4146</DisableSpecificWarnings>
       <WholeProgramOptimization>true</WholeProgramOptimization>
+      <AdditionalOptions>/J %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>

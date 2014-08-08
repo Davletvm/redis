@@ -81,27 +81,28 @@ BOOL WriteToProcmon (wstring message)
 #endif
 
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
-const int cMaxBlocks = 1 << 16;                                  // 64MB*64K sections = 4TB. 4TB is the largest memory config Windows supports at present.
+const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K sections = 1TB.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
 
 typedef enum BlockState {
     bsINVALID = 0,
-    bsUNMAPPED = 1,   
+    bsUNMAPPED = 1,
     bsMAPPED = 2
 }BlockState;
 
-
-
-struct QForkControl {
+struct BlockData {
+    BlockState state;
     HANDLE heapMemoryMapFile;
     HANDLE heapMemoryMap;
+};
+
+struct QForkControl {
     int availableBlocksInHeap;                 // number of blocks in blockMap (dynamically determined at run time)
     SIZE_T heapBlockSize;           
-    BlockState heapBlockMap[cMaxBlocks];
+    BlockData heapBlockMap[cMaxBlocks];
     LPVOID heapStart;
-    LPVOID altHeapStart;
 
     OperationType typeOfOperation;
     HANDLE forkedProcessReady;
@@ -129,6 +130,7 @@ struct CleanupState {
     size_t copyBatchSize;
     int copiedPages;
     int exitCode;
+    int heapBlocksToCleanup;
     time_t forkExitTimeout;
 };
 
@@ -138,8 +140,6 @@ HANDLE g_hQForkControlFileMap;
 
 HANDLE g_hForkedProcess;
 HANDLE g_hEndForkThread;
-SIZE_T g_win64maxmemory;
-SIZE_T g_win64maxvirtualmemory;
 BOOL g_isForkedProcess;
 CleanupState g_CleanupState;
 int g_SlaveExitCode; // For slave process
@@ -151,6 +151,7 @@ extern "C"
 {
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
+    void TransitionToFreeWindow(int final);
 }
 
 
@@ -158,14 +159,11 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     SmartHandle shParent;
     SmartHandle shMMFile;
     SmartFileView<QForkControl> sfvMasterQForkControl;
-    SmartHandle dupHeapFileHandle;
     SmartHandle dupForkedProcessReady; 
     SmartHandle dupStartOperation;
     SmartHandle dupOperationComplete;
     SmartHandle dupOperationFailed;
     SmartHandle dupTerminateProcess;
-    SmartFileMapHandle sfmhMapFile;
-    SmartFileView<byte> sfvHeap;
     SmartHandle sfMMFileInMemoryControlHandle;
     SmartFileView<InMemoryBuffersControl> sfvInMemory;
     SmartHandle dupSendBuffer[MAXSENDBUFFER];
@@ -184,9 +182,6 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
             string("Could not map view of QForkControl in slave. Is system swap file large enough?"));
         g_pQForkControl = sfvMasterQForkControl;
 
-        // duplicate handles and stuff into control structure (master protected by PAGE_WRITECOPY)
-        dupHeapFileHandle.Assign(shParent, sfvMasterQForkControl->heapMemoryMapFile);
-        g_pQForkControl->heapMemoryMapFile = dupHeapFileHandle;
         dupForkedProcessReady.Assign(shParent,sfvMasterQForkControl->forkedProcessReady);
         g_pQForkControl->forkedProcessReady = dupForkedProcessReady;
         dupStartOperation.Assign(shParent, sfvMasterQForkControl->startOperation);
@@ -201,27 +196,36 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         // signal parent that we are ready.  We can do the rest later.
         SetEvent(g_pQForkControl->forkedProcessReady);
 
-
         // create section handle on MM file
-        SIZE_T mmSize = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
-        sfmhMapFile.Assign(
-           g_pQForkControl->heapMemoryMapFile, 
-           PAGE_READONLY, 
-#ifdef _WIN64           
-           HIDWORD(mmSize),
-#else      
-           0,
-#endif
-           LODWORD(mmSize),
-           string("QForkSlaveInit: Could not open file mapping object in slave"));
-        g_pQForkControl->heapMemoryMap = sfmhMapFile;
+        SIZE_T mmSize = cAllocationGranularity;
 
-        sfvHeap.Assign(
-            g_pQForkControl->heapMemoryMap,
-            FILE_MAP_READ,
-            0, 0, 0,
-            g_pQForkControl->heapStart,
-            string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
+        vector<SmartHandle> dupHeapFileHandle(g_pQForkControl->availableBlocksInHeap);
+
+        vector<SmartFileMapHandle>  sfmhMapFile(g_pQForkControl->availableBlocksInHeap);
+
+        vector<SmartFileView<byte>> sfvHeap(g_pQForkControl->availableBlocksInHeap);
+
+
+        // duplicate handles and stuff into control structure (master protected by PAGE_WRITECOPY)
+        for (int x = 0; x < g_pQForkControl->availableBlocksInHeap; x++) {
+            dupHeapFileHandle[x].Assign(shParent, sfvMasterQForkControl->heapBlockMap[x].heapMemoryMapFile);
+            g_pQForkControl->heapBlockMap[x].heapMemoryMapFile = dupHeapFileHandle[x];
+
+            sfmhMapFile[x].Assign(
+                g_pQForkControl->heapBlockMap[x].heapMemoryMapFile,
+                PAGE_READONLY,
+                HIDWORD(mmSize),
+                LODWORD(mmSize),
+                string("QForkSlaveInit: Could not open file mapping object in slave"));
+            g_pQForkControl->heapBlockMap[x].heapMemoryMap = sfmhMapFile[x];
+
+            sfvHeap[x].Assign(
+                g_pQForkControl->heapBlockMap[x].heapMemoryMap,
+                FILE_MAP_READ,
+                0, 0, 0,
+                x * g_pQForkControl->heapBlockSize + (byte*)g_pQForkControl->heapStart,
+                string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
+        }
 
         if (g_pQForkControl->inMemoryBuffersControlHandle) {
             sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
@@ -274,8 +278,9 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         g_pQForkControl = NULL;
         return TRUE;
     }
-    catch(std::system_error syserr) {
-        if(g_pQForkControl != NULL) {
+    catch (std::system_error syserr) {
+        redisLog(REDIS_WARNING, "QForkSlaveInit: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
+        if (g_pQForkControl != NULL) {
             if(g_pQForkControl->operationFailed != NULL) {
                 SetEvent(g_pQForkControl->operationFailed);
             }
@@ -284,8 +289,23 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         return FALSE;
     }
     catch(std::runtime_error runerr) {
-        SetEvent(g_pQForkControl->operationFailed);
-        g_pQForkControl = NULL;
+        redisLog(REDIS_WARNING, "QForkSlaveInit: runtime error caught. message=%s", runerr.what());
+        if (g_pQForkControl != NULL) {
+            if (g_pQForkControl->operationFailed != NULL) {
+                SetEvent(g_pQForkControl->operationFailed);
+            }
+            g_pQForkControl = NULL;
+        }
+        return FALSE;
+    }
+    catch (...) {
+        redisLog(REDIS_WARNING, "QForkSlaveInit: other exception caught.");
+        if (g_pQForkControl != NULL) {
+            if (g_pQForkControl->operationFailed != NULL) {
+                SetEvent(g_pQForkControl->operationFailed);
+            }
+            g_pQForkControl = NULL;
+        }
         return FALSE;
     }
     return FALSE;
@@ -335,29 +355,7 @@ BOOL QForkMasterInit() {
         
         g_pQForkControl->heapBlockSize = cAllocationGranularity;
 
-        // determine the number of blocks we can allocate (heap must be completely mappable in physical memory for qfork to succeed)
-        PERFORMANCE_INFORMATION perfinfo;
-        perfinfo.cb = sizeof(PERFORMANCE_INFORMATION);
-        IFFAILTHROW(GetPerformanceInfo(&perfinfo, sizeof(PERFORMANCE_INFORMATION)), "GetPerformanceInfo failed");
-        
-        SIZE_T desiredMaxHeap = g_win64maxvirtualmemory;
-        SIZE_T maxPhysicalPagesToUse = perfinfo.PhysicalTotal;
-        SIZE_T maxVirtualMapping = (maxPhysicalPagesToUse * pageSize * 14i64) / 10i64;
-        if (g_win64maxvirtualmemory != -1) {
-            SIZE_T allocationBlocks = g_win64maxvirtualmemory / cAllocationGranularity;
-            allocationBlocks += ((g_win64maxvirtualmemory % cAllocationGranularity) != 0);
-            allocationBlocks = max(2, allocationBlocks);
-            maxVirtualMapping = allocationBlocks * cAllocationGranularity;
-        }
-        g_pQForkControl->availableBlocksInHeap = (int)(maxVirtualMapping / cAllocationGranularity);
-        g_win64maxvirtualmemory = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
-        if (g_win64maxmemory == -1) {
-            g_win64maxmemory = maxVirtualMapping * 7i64 / 10i64;
-        }
-        if (g_pQForkControl->availableBlocksInHeap <= 0) {
-            throw std::runtime_error(
-                "Invalid number of heap blocks.");
-        }
+        g_pQForkControl->availableBlocksInHeap = 0;
 
         // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
         // Clean up anything we can to prevent excessive disk usage.
@@ -379,42 +377,8 @@ BOOL QForkMasterInit() {
             }
         }
 
-        wchar_t heapMemoryMapPath[MAX_PATH];
-        swprintf_s( 
-            heapMemoryMapPath, 
-            MAX_PATH, 
-            L"%s_%d.dat", 
-            cMapFileBaseName, 
-            GetCurrentProcessId());
 
-
-        g_pQForkControl->heapMemoryMapFile = 
-            CreateFileW( 
-                heapMemoryMapPath,
-                GENERIC_READ | GENERIC_WRITE,
-                0,
-                NULL,
-                CREATE_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL| FILE_FLAG_DELETE_ON_CLOSE,
-                NULL );
-        IFFAILTHROW(g_pQForkControl->heapMemoryMapFile != INVALID_HANDLE_VALUE, "QForkMasterInit: CreateFileW failed.");
-        
-
-        SIZE_T mmSize = g_pQForkControl->availableBlocksInHeap * cAllocationGranularity;
-        g_pQForkControl->heapMemoryMap = 
-            CreateFileMappingW( 
-                g_pQForkControl->heapMemoryMapFile,
-                NULL,
-                PAGE_READWRITE,
-#ifdef _WIN64           
-                HIDWORD(mmSize),
-#else      
-                0,
-#endif
-                LODWORD(mmSize),
-                NULL);
-        IFFAILTHROW(g_pQForkControl->heapMemoryMap, "QForkMasterInit: CreateFileMapping failed.");
-        
+        SIZE_T mmSize = cMaxBlocks * cAllocationGranularity;
             
         // Find a place in the virtual memory space where we can reserve space for our allocations that is likely
         // to be available in the forked process.  (If this ever fails in the forked process, we will have to launch
@@ -426,28 +390,20 @@ BOOL QForkMasterInit() {
             MEM_RESERVE | MEM_TOP_DOWN, 
             PAGE_READWRITE);
         IFFAILTHROW(pHigh, "QForkMasterInit: VirtualAllocEx failed.");
-        
-        IFFAILTHROW(VirtualFree(pHigh, 0, MEM_RELEASE), "QForkMasterInit: VirtualFree failed.");
-        
-        g_pQForkControl->heapStart = 
-            MapViewOfFileEx(
-                g_pQForkControl->heapMemoryMap,
-                FILE_MAP_ALL_ACCESS,
-                0,0,                            
-                0,  
-                pHigh);
-        IFFAILTHROW(g_pQForkControl->heapStart, "QForkMasterInit: MapViewOfFileEx failed.");
-        
-        g_pQForkControl->altHeapStart =
-            MapViewOfFile(
-            g_pQForkControl->heapMemoryMap,
-            FILE_MAP_ALL_ACCESS,
-            0, 0,
-            0);
-        IFFAILTHROW(g_pQForkControl->altHeapStart, "QForkMasterInit: MapViewOfFileEx 2 failed.");
+
+        IFFAILTHROW(VirtualFree(pHigh, 0, MEM_RELEASE), "PhysicalMapMemory: VirtualFree failed.");
+
+        g_pQForkControl->heapStart = pHigh;        
 
         for (int n = 0; n < cMaxBlocks; n++) {
-            g_pQForkControl->heapBlockMap[n] = 
+            LPVOID reserved = VirtualAlloc(
+                (byte*)pHigh + n * g_pQForkControl->heapBlockSize,
+                g_pQForkControl->heapBlockSize,
+                MEM_RESERVE,
+                PAGE_READWRITE);
+            IFFAILTHROW(reserved, "QForkMasterInit: VirtualAllocEx of reserve segment failed.");
+
+            g_pQForkControl->heapBlockMap[n].state = 
                 ((n < g_pQForkControl->availableBlocksInHeap) ?
                 BlockState::bsUNMAPPED : BlockState::bsINVALID);
         }
@@ -486,8 +442,6 @@ StartupStatus QForkStartup(int argc, char** argv) {
     HANDLE QForkConrolMemoryMapHandle = NULL;
     DWORD PPID = 0;
     int memtollerr = 0;
-    g_win64maxvirtualmemory = -1;
-    g_win64maxmemory = -1;
 
     if (g_argMap.find(cQFork) != g_argMap.end()) {
         // slave command line looks like: --QFork [QForkConrolMemoryMap handle] [parent process id]
@@ -496,23 +450,6 @@ StartupStatus QForkStartup(int argc, char** argv) {
         QForkConrolMemoryMapHandle = (HANDLE)strtoul(g_argMap[cQFork].at(0).at(0).c_str(),&endPtr,10);
         char* end = NULL;
         PPID = strtoul(g_argMap[cQFork].at(0).at(1).c_str(), &end, 10);
-    } else {
-        if (g_argMap.find(cMaxHeap) != g_argMap.end()) {
-            int mtollerr = 0;
-            g_win64maxvirtualmemory = memtoll(g_argMap[cMaxHeap].at(0).at(0).c_str(), &memtollerr);
-        }
-        if (g_argMap.find(cMaxMemory) != g_argMap.end()) {
-            int mtollerr = 0;
-            g_win64maxmemory = memtoll(g_argMap[cMaxMemory].at(0).at(0).c_str(), &memtollerr);
-        }
-    }
-
-    if (g_win64maxvirtualmemory == -1)
-    {
-        if (checkForSentinelMode(argc, argv)) {
-            // Sentinel mode does not need a large heap. This conserves disk space and page file reservation requirements.
-            g_win64maxvirtualmemory = cSentinelHeapSize;
-        }
     }
 
     if (foundSlaveFlag) {
@@ -543,28 +480,11 @@ BOOL QForkShutdown() {
         CloseEventHandle(&g_pQForkControl->operationComplete);
         CloseEventHandle(&g_pQForkControl->operationFailed);
         CloseEventHandle(&g_pQForkControl->terminateForkedProcess);
-        CloseEventHandle(&g_pQForkControl->heapMemoryMap);
         for (int x = 0; x < MAXSENDBUFFER; x++) {
             CloseEventHandle(&g_pQForkControl->doneSentBuffer[x]);
             CloseEventHandle(&g_pQForkControl->doSendBuffer[x]);
         }
 
-        if (g_pQForkControl->heapMemoryMapFile != INVALID_HANDLE_VALUE) {
-            CloseHandle(g_pQForkControl->heapMemoryMapFile);
-            g_pQForkControl->heapMemoryMapFile = INVALID_HANDLE_VALUE;
-        }
-        if (g_pQForkControl->heapStart != NULL) {
-            UnmapViewOfFile(g_pQForkControl->heapStart);
-            g_pQForkControl->heapStart = NULL;
-        }
-        if (g_pQForkControl->altHeapStart != NULL) {
-            UnmapViewOfFile(g_pQForkControl->altHeapStart);
-            g_pQForkControl->altHeapStart = NULL;
-        }
-        if (g_pQForkControl != NULL) {
-            UnmapViewOfFile(g_pQForkControl);
-            g_pQForkControl = NULL;
-        }
         CloseEventHandle(&g_hQForkControlFileMap);
     }
     return TRUE;
@@ -660,7 +580,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 g_pQForkControl->inMemoryBuffersControl->buffer[x] = (SPBuffer*)(((char*)g_pQForkControl->inMemoryBuffersControl) + sizeof(InMemoryBuffersControl) + SPBufferSize * x);
             }
             g_pQForkControl->inMemoryBuffersControl->bufferSize = sendBufferSize;
-            g_pQForkControl->inMemoryBuffersControl->heapOffset = (char*)g_pQForkControl->altHeapStart - (char*)g_pQForkControl->heapStart;
 
             SetupInMemoryBuffersMasterParent(g_pQForkControl->inMemoryBuffersControl,g_pQForkControl->doSendBuffer, g_pQForkControl->doneSentBuffer);
         } else {
@@ -673,13 +592,14 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect), "BeginForkOperation: VirtualProtect 1 failed");
         
         redisLog(REDIS_VERBOSE, "Protecting heap");
-        IFFAILTHROW(VirtualProtect(
-                    g_pQForkControl->heapStart,
-                    g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
-                    PAGE_WRITECOPY,
-                    &oldProtect),
+        for (int x = 0; x < g_pQForkControl->availableBlocksInHeap; x++) {
+            IFFAILTHROW(VirtualProtect(
+                (byte*)g_pQForkControl->heapStart + x * g_pQForkControl->heapBlockSize,
+                g_pQForkControl->heapBlockSize,
+                PAGE_WRITECOPY,
+                &oldProtect),
                 "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
-        
+        }
         redisLog(REDIS_VERBOSE, "Protected heap");
 
         // Launch the "forked" process
@@ -719,6 +639,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         memset(&g_CleanupState, 0, sizeof(g_CleanupState));
         g_CleanupState.currentState = osINPROGRESS;
         g_CleanupState.inMemory = (type == otRDBINMEMORY);
+        g_CleanupState.heapBlocksToCleanup = g_pQForkControl->availableBlocksInHeap;
 
         (*childPID) = pi.dwProcessId;
         redisLog(REDIS_NOTICE, "Forked successfully");
@@ -741,13 +662,14 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             g_hForkedProcess = NULL;
         }
         DWORD oldProtect;
-        IFFAILTHROW(VirtualProtect(
-                        g_pQForkControl->heapStart,
-                        g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize,
-                        PAGE_READWRITE,
-                        &oldProtect),
+        for (int x = 0; x < g_pQForkControl->availableBlocksInHeap; x++) {
+            IFFAILTHROW(VirtualProtect(
+                (byte*)g_pQForkControl->heapStart + x * g_pQForkControl->heapBlockSize,
+                g_pQForkControl->heapBlockSize,
+                PAGE_READWRITE,
+                &oldProtect),
                 "BeginForkOperation: Cannot reset back to read-write");
-        
+        }
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_READWRITE, &oldProtect), "BeginForkOperation: Cannot reset control back to read-write");
         
         if (g_pQForkControl->inMemoryBuffersControl) {
@@ -840,6 +762,10 @@ void EndForkOperation(int * pExitCode)
     memset(&g_CleanupState, 0, sizeof(g_CleanupState));
 }
 
+#ifndef PAGE_REVERT_TO_FILE_MAP
+#define PAGE_REVERT_TO_FILE_MAP     0x80000000     
+#endif
+
 void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
     try {
         if (exitCode != NULL) {
@@ -917,8 +843,14 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                     size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
                 }
 
-                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapMemoryMap, FILE_MAP_ALL_ACCESS, HIDWORD(g_CleanupState.offsetCopied), LODWORD(g_CleanupState.offsetCopied), size, 0);
-                IFFAILTHROW(heapAltRegion, "MapViewOfFileEx failure");                
+                int block = g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize;
+                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap, 
+                    FILE_MAP_ALL_ACCESS, 
+                    HIDWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
+                    LODWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
+                    size, 
+                    0);
+                IFFAILTHROW(heapAltRegion, "MapViewOfFileEx failure");
 
                 HANDLE hProcess = GetCurrentProcess();
                 int pages = (int)(size / pageSize);
@@ -959,7 +891,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
                 IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "EndForkOperation: UnmapViewOfFile failed.");
                 g_CleanupState.offsetCopied += size;
-                if (g_CleanupState.offsetCopied == g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize) {
+                if (g_CleanupState.offsetCopied == g_CleanupState.heapBlocksToCleanup * g_pQForkControl->heapBlockSize) {
                     g_CleanupState.currentState = osCLEANEDUP;
                     break;
                 }
@@ -989,6 +921,7 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
 {
     try {
         redisLog(REDIS_NOTICE, "Aborting child process");
+        TransitionToFreeWindow(TRUE);
         if (blockUntilCleanedup)
             SetEvent(g_pQForkControl->operationFailed);
         OperationStatus os = GetForkOperationStatus(blockUntilCleanedup);
@@ -1050,7 +983,66 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
 }
 
 
+BOOL PhysicalMapMemory(int block)
+{
+    try {
+        wchar_t heapMemoryMapPath[MAX_PATH];
+        swprintf_s(
+            heapMemoryMapPath,
+            MAX_PATH,
+            L"%s_%d_%d.dat",
+            cMapFileBaseName,
+            GetCurrentProcessId(),
+            block);
 
+        HANDLE file =
+            CreateFileW(
+            heapMemoryMapPath,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
+            NULL);
+        IFFAILTHROW(file != INVALID_HANDLE_VALUE, "PhysicalMapMemory: CreateFileW failed.");
+
+        SIZE_T mmSize = g_pQForkControl->heapBlockSize;
+
+        HANDLE map =
+            CreateFileMappingW(
+            file,
+            NULL,
+            PAGE_READWRITE,
+            HIDWORD(mmSize),
+            LODWORD(mmSize),
+            NULL);
+        IFFAILTHROW(map, "PhysicalMapMemory: CreateFileMapping failed.");
+
+        LPVOID addr = (byte*)g_pQForkControl->heapStart + block * mmSize;
+
+        IFFAILTHROW(VirtualFree(addr, 0, MEM_RELEASE), "PhysicalMapMemory: VirtualFree failed.");
+
+        LPVOID realAddr = MapViewOfFileEx(map, FILE_MAP_ALL_ACCESS, 0, 0, 0, addr);
+        IFFAILTHROW(realAddr, "PhysicalMapMemory: MapViewOfFileEx failed.");
+
+        g_pQForkControl->heapBlockMap[block].heapMemoryMap = map;
+        g_pQForkControl->heapBlockMap[block].heapMemoryMapFile = file;
+        g_pQForkControl->heapBlockMap[block].state = bsMAPPED;
+
+        return TRUE;
+
+    }
+    catch (std::system_error syserr) {
+        redisLog(REDIS_WARNING, "PhysicalMapMemory: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
+    }
+    catch (std::runtime_error runerr) {
+        redisLog(REDIS_WARNING, "PhysicalMapMemory: runtime error caught. message=%s", runerr.what());
+    }
+    catch (...) {
+        redisLog(REDIS_WARNING, "PhysicalMapMemory: other exception caught.");
+    }
+    return FALSE;
+}
 
 int blocksMapped = 0;
 int totalAllocCalls = 0;
@@ -1069,7 +1061,6 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
     }
     int contiguousBlocksToAllocate = (int)(size / g_pQForkControl->heapBlockSize);
 
-    size_t mapped = 0;
     int startIndex = allocateHigh ? g_pQForkControl->availableBlocksInHeap - 1 : contiguousBlocksToAllocate - 1;
     int endIndex = allocateHigh ? -1 : g_pQForkControl->availableBlocksInHeap - contiguousBlocksToAllocate + 1;
     int direction = allocateHigh ? -1 : 1;
@@ -1079,7 +1070,7 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
         blockIndex != endIndex; 
         blockIndex += direction) {
         for (int n = 0; n < contiguousBlocksToAllocate; n++) {
-            if (g_pQForkControl->heapBlockMap[blockIndex + n * direction] == BlockState::bsUNMAPPED) {
+            if (g_pQForkControl->heapBlockMap[blockIndex + n * direction].state == BlockState::bsUNMAPPED) {
                 contiguousBlocksFound++;
             }
             else {
@@ -1098,14 +1089,29 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
             reinterpret_cast<byte*>(g_pQForkControl->heapStart) + 
             (g_pQForkControl->heapBlockSize * allocationStart);
         for(int n = 0; n < contiguousBlocksToAllocate; n++ ) {
-            g_pQForkControl->heapBlockMap[allocationStart+n] = BlockState::bsMAPPED;
+            g_pQForkControl->heapBlockMap[allocationStart+n].state = BlockState::bsMAPPED;
             blocksMapped++;
-            mapped += g_pQForkControl->heapBlockSize; 
         }
         retPtr = blockStart;
     }
-    else {
+    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= cMaxBlocks) {
+        LPVOID blockStart = reinterpret_cast<byte*>(g_pQForkControl->heapStart) + (g_pQForkControl->heapBlockSize * (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound));
+        for (int x = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound; x < g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate; x++) {
+            if (x >= g_pQForkControl->availableBlocksInHeap) {
+                if (!PhysicalMapMemory(x)) {
+                    errno = ENOMEM;
+                    return NULL;
+                }
+            } else {
+                g_pQForkControl->heapBlockMap[x].state = BlockState::bsMAPPED;
+                blocksMapped++;
+            }
+        }
+        g_pQForkControl->availableBlocksInHeap = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate;
+        retPtr = blockStart;
+    } else {
         errno = ENOMEM;
+        return NULL;
     }
 
     return retPtr;
@@ -1158,7 +1164,7 @@ BOOL FreeHeapBlock(LPVOID block, size_t size)
     };
     for (int n = 0; n < contiguousBlocksToFree; n++ ) {
         blocksMapped--;
-        g_pQForkControl->heapBlockMap[blockIndex + n] = BlockState::bsUNMAPPED;
+        g_pQForkControl->heapBlockMap[blockIndex + n].state = BlockState::bsUNMAPPED;
     }
     return TRUE;
 }

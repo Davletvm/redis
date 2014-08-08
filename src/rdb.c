@@ -402,7 +402,7 @@ int rdbSaveDoubleValue(rio *rdb, double val) {
         double min = -4503599627370495; /* (2^52)-1 */
         double max = 4503599627370496; /* -(2^52) */
         if (val > min && val < max && val == ((double)((long long)val)))
-            ll2string((char*)buf+1,sizeof(buf),(long long)val);
+            ll2string((char*)buf+1,sizeof(buf)-1,(long long)val);
         else
 #endif
             snprintf((char*)buf+1,sizeof(buf)-1,"%.17g",val);
@@ -414,7 +414,7 @@ int rdbSaveDoubleValue(rio *rdb, double val) {
 
 /* For information about double serialization check rdbSaveDoubleValue() */
 int rdbLoadDoubleValue(rio *rdb, double *val) {
-    char buf[128];
+    char buf[256];
     unsigned char len;
 #ifdef _WIN32
     double scannedVal = 0;
@@ -1160,7 +1160,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
             replicationSendNewlineToMaster();
         loadingProgress(r->processed_bytes);
         if (!server.repl_inMemoryReceive) 
-            aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT, -1);
+            processEventsWhileBlocked();
     }
 }
 
