@@ -431,6 +431,7 @@ void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
     asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
+
 /* Add a double as a bulk reply */
 void addReplyDouble(redisClient *c, double d) {
     char dbuf[128], sbuf[128];
