@@ -41,6 +41,7 @@
 #include <sstream>
 #include <stdint.h>
 #include <exception>
+#include <DbgHelp.h>
 using namespace std;
 
 //#define DEBUG_WITH_PROCMON
@@ -152,6 +153,55 @@ extern "C"
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
     void TransitionToFreeWindow(int final);
+}
+
+
+
+
+typedef BOOL(_stdcall* MiniDumpWriteDumpFunc)(HANDLE hProcess,
+    DWORD ProcessId,
+    HANDLE hFile,
+    MINIDUMP_TYPE DumpType,
+    PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
+    PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
+    PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
+
+
+DWORD WINAPI DumpThreadProc(void* param) {
+    redisLog(REDIS_WARNING, "Crashed.  Attempting to generate dump");
+    MINIDUMP_EXCEPTION_INFORMATION *exinfo = (MINIDUMP_EXCEPTION_INFORMATION*)param;
+    HMODULE lib = LoadLibraryA("dbghelp.dll");
+    if (lib) {
+        MiniDumpWriteDumpFunc func = (MiniDumpWriteDumpFunc)GetProcAddress(lib, "MiniDumpWriteDump");
+        if (func) {
+
+            HANDLE file = CreateFileA("dumpfile.dmp", GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+            func(GetCurrentProcess(), GetCurrentProcessId(), file, (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithDataSegs), exinfo, NULL, NULL);
+        }
+    }
+    return 0;
+}
+
+void CreateMiniDump(EXCEPTION_POINTERS * excinfo)
+{
+    MINIDUMP_EXCEPTION_INFORMATION exinfo;
+    exinfo.ExceptionPointers = excinfo;
+    exinfo.ClientPointers = FALSE;
+    exinfo.ThreadId = GetCurrentThreadId();
+
+    HANDLE h = CreateThread(NULL, 0, DumpThreadProc, excinfo ? &exinfo : NULL, 0, NULL);
+
+    WaitForSingleObject(h, INFINITE);
+}
+
+LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
+    CreateMiniDump(exinfo);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+HANDLE RegisterMiniDumpHandler() {
+    return AddVectoredExceptionHandler(0, VectoredHandler);
 }
 
 
@@ -1199,6 +1249,8 @@ extern "C"
             exit(-1);
         }
         
+        RegisterMiniDumpHandler();
+
         try {
 #ifdef DEBUG_WITH_PROCMON
             hProcMonDevice =

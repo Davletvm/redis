@@ -2580,13 +2580,13 @@ void bytesToHuman(char *s, unsigned long long n) {
     }
 }
 
-#define PR(a,d) (privilidged?(a):(d))
 
+#define PR(a,d) (privilidged?(a):(d))
 
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(char *section, int privilidged) {
+sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
@@ -3144,6 +3144,12 @@ sds genRedisInfoString(char *section, int privilidged) {
     return info;
 }
 
+sds genRedisInfoString(char *section) {
+    return genRedisInfoStringBasedOnPrivilidge(section, TRUE);
+}
+
+
+
 void infoCommand(redisClient *c) {
     sds info;
     char *section = c->argc == 2 ? c->argv[1]->ptr : "default";
@@ -3152,7 +3158,7 @@ void infoCommand(redisClient *c) {
         addReply(c,shared.syntaxerr);
         return;
     }
-    info = genRedisInfoString(section, (c->flags & REDIS_PRIVILIDGED_CLIENT) || !server.privilidgeEnabled);
+    info = genRedisInfoStringBasedOnPrivilidge(section, (c->flags & REDIS_PRIVILIDGED_CLIENT) || !server.privilidgeEnabled);
     addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
         (unsigned long)sdslen(info)));
     addReplySds(c,info);
