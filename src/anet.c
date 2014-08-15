@@ -126,13 +126,11 @@ int anetKeepAlive(char *err, int fd, int interval)
 #else
     struct tcp_keepalive settings;
     DWORD bytesReturned;
-    WSAOVERLAPPED overlapped;
     settings.onoff = 1;
     settings.keepalivetime = interval * 1000;
-    settings.keepaliveinterval = interval * 1000 / 3;
-    overlapped.hEvent = NULL;
+    settings.keepaliveinterval = interval * 1000 / 10;
     if (WSAIoctl(fd, SIO_KEEPALIVE_VALS, &settings, sizeof(settings),
-        NULL, 0, &bytesReturned, &overlapped, NULL) == SOCKET_ERROR)
+        NULL, 0, &bytesReturned, NULL, NULL) == SOCKET_ERROR)
     {
         anetSetError(err, "WSAIotcl(SIO_KEEPALIVE_VALS) failed with error code %d\n", WSAGetLastError());
         return ANET_ERR;

@@ -577,7 +577,12 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                         }
                     }
                     if (matched == 0) {
-                        redisLog(REDIS_VERBOSE, "Sec:%lld Unknown complete (closed) on %d", gettimeofdaysecs(NULL), rfd);
+                        redisLog(REDIS_VERBOSE, "Unknown complete (closed) on %d bt:%d, ov:%llu, ovi:%llu, ovih:%llu", 
+                            rfd, 
+                            entry->dwNumberOfBytesTransferred, 
+                            entry->lpOverlapped, 
+                            entry->lpOverlapped->Internal, 
+                            entry->lpOverlapped->InternalHigh);
                         sockstate = NULL;
                     }
                 }
