@@ -1620,7 +1620,8 @@ void clientCommand(redisClient *c) {
             if (type != -1 && getClientType(client) != type) continue;
             if (id != 0 && client->id != id) continue;
             if (c == client && skipme) continue;
-
+            if ((client->flags & REDIS_PRIVILIDGED_CLIENT) && !(c->flags & REDIS_PRIVILIDGED_CLIENT)) 
+                continue;
             /* Kill it. */
             if (c == client) {
                 close_this_client = 1;
