@@ -755,6 +755,9 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
             g_CleanupState.failed = (WaitForSingleObject(g_pQForkControl->operationFailed, 0) == WAIT_OBJECT_0);
             if (g_CleanupState.failed || WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0) {
                 g_CleanupState.currentState = osCOMPLETE;
+            } else if (g_hForkedProcess && (WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0)) {
+                g_CleanupState.failed = TRUE;
+                g_CleanupState.currentState = osEXITED;
             }
             if (!forceEnd) 
                 return (OperationStatus)(g_CleanupState.currentState | (g_CleanupState.failed ? osFAILED : 0) | (g_CleanupState.inMemory ? osINMEMORY : 0));
