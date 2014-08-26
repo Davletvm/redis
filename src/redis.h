@@ -671,6 +671,7 @@ typedef struct redisInMemoryReplReceive {
     unsigned long posBufferRead;
     unsigned long posBufferWritten;
     size_t posBufferStartOffset;
+    mstime_t replStart;
     int endStateFlags;
     time_t lastTick;
 } redisInMemoryReplReceive;
@@ -699,6 +700,7 @@ typedef struct redisInMemoryReplSend {
     int prevActiveBuffer;
     redisClient * slave;
     size_t totalSent;
+    mstime_t replStart;
     redisThrottling throttle;
 } redisInMemoryReplSend;
 

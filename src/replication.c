@@ -1145,6 +1145,7 @@ void initInMemoryBuffersSlave()
         server.repl_inMemoryReceive->buffer = zmalloc(size);
         server.repl_inMemoryReceive->bufferSize = size;
         server.repl_inMemoryReceive->posBufferRead = sizeof(redisInMemoryReplSendControl);
+        server.repl_inMemoryReceive->replStart = server.mstime - 1; // Need to always have non 0 duration
     }
 }
 

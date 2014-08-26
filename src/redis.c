@@ -1148,7 +1148,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     run_with_period(2000) {
         if (server.repl_inMemorySend) {
-            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld", server.repl_inMemorySend->totalSent);
+            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago.", 
+                server.repl_inMemorySend->totalSent >> 20, 
+                (server.repl_inMemorySend->totalSent * 1000 / (server.mstime - server.repl_inMemorySend->replStart)) >> 20,
+                (server.mstime - server.repl_inMemorySend->replStart) / 1000);
         }
     }
 
@@ -2581,12 +2584,10 @@ void bytesToHuman(char *s, unsigned long long n) {
 }
 
 
-#define PR(a,d) (privilidged?(a):(d))
-
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
+sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
@@ -2610,7 +2611,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
     getClientsMaxBuffers(&lol, &bib, &two, &tsb);
 
     /* Server */
-    if (allsections || defsections || !strcasecmp(section,"server")) {
+    if (allsections || defsections || !strcasecmp(section, "server")) {
 #ifndef _WIN32
         static int call_uname = 1;
         static struct utsname name;
@@ -2619,8 +2620,8 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
 
         if (server.sentinel_mode) mode = "sentinel";
         else mode = "standalone";
-    
-        if (sections++) info = sdscat(info,"\r\n");
+
+        if (sections++) info = sdscat(info, "\r\n");
 
 #ifndef _WIN32
         if (call_uname) {
@@ -2629,56 +2630,58 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
             call_uname = 0;
         }
 #endif
+        if (priviliged) {
 
-        info = sdscatprintf(info,
-            "# Server\r\n"
-            "redis_version:%s\r\n"
-            "redis_git_sha1:%s\r\n"
-            "redis_git_dirty:%d\r\n"
-            "redis_build_id:%llx\r\n"
-            "redis_mode:%s\r\n"
-            "os:%s %s %s\r\n"
-            "arch_bits:%d\r\n"
-            "multiplexing_api:%s\r\n"
-            "gcc_version:%d.%d.%d\r\n"
-            "process_id:%ld\r\n"
-            "run_id:%s\r\n"
-            "tcp_port:%d\r\n"
-#ifdef _WIN32
-            "uptime_in_seconds:%lld\r\n"
-            "uptime_in_days:%lld\r\n"
-#else
-            "uptime_in_seconds:%jd\r\n"
-            "uptime_in_days:%jd\r\n"
-#endif
-            "hz:%d\r\n"
-            "lru_clock:%ld\r\n"
-            "config_file:%s\r\n",
-            REDIS_VERSION,
-            PR(redisGitSHA1(), ""),
-            strtol(redisGitDirty(),NULL,10) > 0,
-            PR(((unsigned long long) redisBuildId()),0),
-            mode,
-#ifndef _WIN32
-            name.sysname, name.release, name.machine,
-#else
-            "Windows", "", "",
-#endif
-            server.arch_bits,
-            aeGetApiName(),
-#ifdef __GNUC__
-            __GNUC__,__GNUC_MINOR__,__GNUC_PATCHLEVEL__,
-#else
-            0,0,0,
-#endif
-            PR(((long) getpid()),0),
-            server.runid,
-            PR(server.port,0),
-            PR(((intmax_t)uptime),0),
-            PR(((intmax_t)(uptime/(3600*24))),0),
-            server.hz,
-            PR(((unsigned long) server.lruclock),0),
-            (server.configfile && privilidged) ? server.configfile : "");
+            info = sdscatprintf(info,
+                "# Server\r\n"
+                "redis_version:%s\r\n"
+                "redis_git_sha1:%s\r\n"
+                "redis_build_id:%llx\r\n"
+                "redis_mode:%s\r\n"
+                "os:%s %s %s\r\n"
+                "arch_bits:%d\r\n"
+                "multiplexing_api:%s\r\n"
+                "process_id:%ld\r\n"
+                "run_id:%s\r\n"
+                "tcp_port:%d\r\n"
+                "uptime_in_seconds:%lld\r\n"
+                "uptime_in_days:%lld\r\n"
+                "hz:%d\r\n"
+                "lru_clock:%ld\r\n"
+                "config_file:%s\r\n",
+                REDIS_VERSION,
+                redisGitSHA1(),
+                ((unsigned long long) redisBuildId()),
+                mode,
+                "Windows", "", "",
+                server.arch_bits,
+                aeGetApiName(),
+                ((long)getpid()),
+                server.runid,
+                server.port,
+                ((intmax_t)uptime),
+                ((intmax_t)(uptime / (3600 * 24))),
+                server.hz,
+                ((unsigned long)server.lruclock),
+                server.configfile);
+        } else {
+            info = sdscatprintf(info,
+                "# Server\r\n"
+                "redis_version:%s\r\n"
+                "redis_mode:%s\r\n"
+                "os:%s %s %s\r\n"
+                "arch_bits:%d\r\n"
+                "multiplexing_api:%s\r\n"
+                "run_id:%s\r\n"
+                "hz:%d\r\n",
+                REDIS_VERSION,
+                mode,
+                "Windows", "", "",
+                server.arch_bits,
+                aeGetApiName(),
+                server.runid,
+                server.hz);
+        }
     }
 
     /* Clients */
@@ -2762,7 +2765,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
 
 #ifdef _WIN32
     /* Persistence */
-    if ((allsections || defsections || !strcasecmp(section,"persistence")) && privilidged) {
+    if ((allsections || defsections || !strcasecmp(section,"persistence")) && priviliged) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Persistence\r\n"
@@ -2872,7 +2875,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
         }
 #endif
 
-        if (server.loading && privilidged) {
+        if (server.loading && priviliged) {
             double perc;
             time_t eta, elapsed;
 #ifdef _WIN32
@@ -2916,44 +2919,77 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
         bytes_received = getBytesReceivedPerSecond();
         bytesToHuman(bytes_sent_hmem, bytes_sent);
         bytesToHuman(bytes_received_hmem, bytes_received);
-        info = sdscatprintf(info,
-            "# Stats\r\n"
-            "total_connections_received:%lld\r\n"
-            "total_commands_processed:%lld\r\n"
-            "instantaneous_ops_per_sec:%lld\r\n"
-            "bytes_received_per_sec:%llu\r\n"
-            "bytes_sent_per_sec:%llu\r\n"
-            "bytes_received_per_sec_human:%s\r\n"
-            "bytes_sent_per_sec_human:%s\r\n"
-            "rejected_connections:%lld\r\n"
-            "sync_full:%lld\r\n"
-            "sync_partial_ok:%lld\r\n"
-            "sync_partial_err:%lld\r\n"
-            "expired_keys:%lld\r\n"
-            "evicted_keys:%lld\r\n"
-            "keyspace_hits:%lld\r\n"
-            "keyspace_misses:%lld\r\n"
-            "pubsub_channels:%ld\r\n"
-            "pubsub_patterns:%lu\r\n"
-            "latest_fork_usec:%lld\r\n",
-            server.stat_numconnections,
-            server.stat_numcommands,
-            getOperationsPerSecond(),
-            bytes_received,
-            bytes_sent,
-            bytes_received_hmem,
-            bytes_sent_hmem,
-            server.stat_rejected_conn,
-            PR(server.stat_sync_full,0),
-            PR(server.stat_sync_partial_ok,0),
-            PR(server.stat_sync_partial_err,0),
-            server.stat_expiredkeys,
-            server.stat_evictedkeys,
-            server.stat_keyspace_hits,
-            server.stat_keyspace_misses,
-            dictSize(server.pubsub_channels),
-            listLength(server.pubsub_patterns),
-            PR(server.stat_fork_time,0));
+        if (priviliged) {
+            info = sdscatprintf(info,
+                "# Stats\r\n"
+                "total_connections_received:%lld\r\n"
+                "total_commands_processed:%lld\r\n"
+                "instantaneous_ops_per_sec:%lld\r\n"
+                "bytes_received_per_sec:%llu\r\n"
+                "bytes_sent_per_sec:%llu\r\n"
+                "bytes_received_per_sec_human:%s\r\n"
+                "bytes_sent_per_sec_human:%s\r\n"
+                "rejected_connections:%lld\r\n"
+                "sync_full:%lld\r\n"
+                "sync_partial_ok:%lld\r\n"
+                "sync_partial_err:%lld\r\n"
+                "expired_keys:%lld\r\n"
+                "evicted_keys:%lld\r\n"
+                "keyspace_hits:%lld\r\n"
+                "keyspace_misses:%lld\r\n"
+                "pubsub_channels:%ld\r\n"
+                "pubsub_patterns:%lu\r\n"
+                "latest_fork_usec:%lld\r\n",
+                server.stat_numconnections,
+                server.stat_numcommands,
+                getOperationsPerSecond(),
+                bytes_received,
+                bytes_sent,
+                bytes_received_hmem,
+                bytes_sent_hmem,
+                server.stat_rejected_conn,
+                server.stat_sync_full,
+                server.stat_sync_partial_ok,
+                server.stat_sync_partial_err,
+                server.stat_expiredkeys,
+                server.stat_evictedkeys,
+                server.stat_keyspace_hits,
+                server.stat_keyspace_misses,
+                dictSize(server.pubsub_channels),
+                listLength(server.pubsub_patterns),
+                server.stat_fork_time);
+        } else {
+            info = sdscatprintf(info,
+                "# Stats\r\n"
+                "total_connections_received:%lld\r\n"
+                "total_commands_processed:%lld\r\n"
+                "instantaneous_ops_per_sec:%lld\r\n"
+                "bytes_received_per_sec:%llu\r\n"
+                "bytes_sent_per_sec:%llu\r\n"
+                "bytes_received_per_sec_human:%s\r\n"
+                "bytes_sent_per_sec_human:%s\r\n"
+                "rejected_connections:%lld\r\n"
+                "expired_keys:%lld\r\n"
+                "evicted_keys:%lld\r\n"
+                "keyspace_hits:%lld\r\n"
+                "keyspace_misses:%lld\r\n"
+                "pubsub_channels:%ld\r\n"
+                "pubsub_patterns:%lu\r\n",
+                server.stat_numconnections,
+                server.stat_numcommands,
+                getOperationsPerSecond(),
+                bytes_received,
+                bytes_sent,
+                bytes_received_hmem,
+                bytes_sent_hmem,
+                server.stat_rejected_conn,
+                server.stat_expiredkeys,
+                server.stat_evictedkeys,
+                server.stat_keyspace_hits,
+                server.stat_keyspace_misses,
+                dictSize(server.pubsub_channels),
+                listLength(server.pubsub_patterns));
+        }
     }
 
     /* Replication */
@@ -2963,7 +2999,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
             "# Replication\r\n"
             "role:%s\r\n",
             server.masterhost == NULL ? "master" : "slave");
-        if (server.masterhost && privilidged) {
+        if (server.masterhost && priviliged) {
             long long slave_repl_offset = 1;
 
             if (server.master)
@@ -3025,7 +3061,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
                 server.slave_priority,
                 server.repl_slave_ro);
         }
-        if (privilidged) {
+        if (priviliged) {
 
             info = sdscatprintf(info,
                 "connected_slaves:%lu\r\n",
@@ -3099,13 +3135,9 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int privilidged) {
         "# CPU\r\n"
         "used_cpu_sys:%.2f\r\n"
         "used_cpu_user:%.2f\r\n"
-        "used_cpu_sys_children:%.2f\r\n"
-        "used_cpu_user_children:%.2f\r\n"
         "used_cpu_avg_ms_per_sec:%d\r\n",
         (float)self_ru.ru_stime.tv_sec+(float)self_ru.ru_stime.tv_usec/1000000,
         (float)self_ru.ru_utime.tv_sec+(float)self_ru.ru_utime.tv_usec/1000000,
-        (float)c_ru.ru_stime.tv_sec+(float)c_ru.ru_stime.tv_usec/1000000,
-        (float)c_ru.ru_utime.tv_sec+(float)c_ru.ru_utime.tv_usec/1000000,
         server.cpu_time_ms_per_sec);
     }
 

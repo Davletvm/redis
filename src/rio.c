@@ -209,6 +209,11 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 {
     updateCachedTime();
 
+    if (server.repl_inMemoryReceive != inm) {
+        redisLog(REDIS_WARNING, "Disconnected while reading");
+        return 0;
+    }
+
     int timeout = (int)(server.repl_timeout - (server.unixtime - server.repl_transfer_lastio));
     if (timeout <= 0) {
         redisLog(REDIS_WARNING, "Error while reading: timeout");
@@ -217,15 +222,14 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 
     if (server.unixtime % 2 == 0 && inm->lastTick != server.unixtime) {
         inm->lastTick = server.unixtime;
-        redisLog(REDIS_VERBOSE, "Bytes Received In-Memory-Repl %lld", inm->totalRead);
+        redisLog(REDIS_VERBOSE, "Bytes Received In-Memory-Repl %lld mb. Speed: %lld mb/sec. Started %lld secs ago.",
+            inm->totalRead >> 20,
+            (inm->totalRead  * 1000 / (server.mstime - inm->replStart)) >> 20,
+            (server.mstime - inm->replStart)/ 1000);
     }
 
     aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
 
-    if (server.repl_inMemoryReceive != inm) {
-        redisLog(REDIS_WARNING, "Disconnected while reading");
-        return 0;
-    }
     if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROR) {
         redisLog(REDIS_WARNING, "Error while reading: %d", inm->endStateFlags);
         return 0;
