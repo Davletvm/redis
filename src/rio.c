@@ -208,6 +208,7 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
 static int PollForRead(redisInMemoryReplReceive * inm)
 {
     updateCachedTime();
+    trackOperationsPerSecond();
 
     if (server.repl_inMemoryReceive != inm) {
         redisLog(REDIS_WARNING, "Disconnected while reading");

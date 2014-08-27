@@ -1323,6 +1323,7 @@ void resetCommandTableStats(void);
 void adjustOpenFilesLimit(void);
 void closeListeningSockets(int unlink_unix_socket);
 void updateCachedTime(void);
+void trackOperationsPerSecond(void);
 void resetServerStats(void);
 
 /* Set data type */
