@@ -569,7 +569,6 @@ void updateThrottleState() {
 
     if (timeLeft <= 0) {
         inm->throttle.throttleIndex = 19;
-        redisLog(REDIS_VERBOSE, "Throttle maxed (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
     } else {
         long long transferSpeedReq = dataRemaining / timeLeft;
         if (transferSpeedReq == 0) transferSpeedReq = 1;
@@ -577,20 +576,16 @@ void updateThrottleState() {
             inm->throttle.throttleIndex -= max(1, transferSpeedNow / transferSpeedReq);
             if (inm->throttle.throttleIndex < 0) {
                 inm->throttle.throttleIndex = 0;
-                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
-            } else {
-                redisLog(REDIS_VERBOSE, "Throttle decreased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
             }
         } else {
             inm->throttle.throttleIndex += max(1, transferSpeedReq / transferSpeedNow);
             if (inm->throttle.throttleIndex > 19) {
                 inm->throttle.throttleIndex = 19;
-                redisLog(REDIS_VERBOSE, "Throttle constant(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
-            } else {
-                redisLog(REDIS_VERBOSE, "Throttle increased(%d) sn(%lld) sr(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, transferSpeedReq, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
             }
         }
     }
+    redisLog(REDIS_VERBOSE, "Throttle index (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+
     inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 20;
     inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
 
