@@ -105,6 +105,7 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     }
     aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER, doSend, IDs);
     server.repl_inMemorySend->replStart = server.mstime - 1;
+    server.repl_inMemorySend->countBuffersImmediatelyAvailable = 1;
 #endif
 }
 

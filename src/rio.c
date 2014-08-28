@@ -138,7 +138,13 @@ static int WaitForFreeBuffer(rio * r)
 {
     redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
+    DWORD rval = WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, 0);
+    if (rval < WAIT_OBJECT_0 || rval >= WAIT_OBJECT_0 + INMEMORY_SEND_MAXSENDBUFFER) {
+        inm->countWaitedForBuffers++;
+        WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
+    } else {
+        inm->countBuffersImmediatelyAvailable++;
+    }
     BOOL found = FALSE;
     for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
         DWORD rval = WaitForSingleObject(inm->sentDoneEvents[x], 0);
