@@ -246,7 +246,10 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 
 
 static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
+    // the virtual buffer is just an offset into the buffer, and a size remaining.
     while (1) {
+
+        // keep looping until we have the complete 1st control block
         if (!inm->sendControlRead.sizeOfThis) {
             if (!PollForRead(inm))
                 return 0;
@@ -256,7 +259,11 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
         off_t offsetWritten = inm->posBufferWritten + inm->posBufferStartOffset;
         off_t offsetRead = inm->posBufferRead + inm->posBufferStartOffset;
         off_t offsetNextControl = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis;
+        // these are global offsets, to simplify logic below
 
+        // if we have exhausted the contents of our buffer,
+        // then zero the positions, and try to fill it again.  This way we will always try to read the max number of
+        // bytes, subject to known length of stream outstanding
         if (offsetRead == offsetWritten) {
             inm->posBufferRead = 0;
             inm->posBufferWritten = 0;
@@ -265,17 +272,26 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
             continue;
         }
 
+        // if we have read up to the next control block (of which we have at least a part)
         if (offsetRead == offsetNextControl) {
+            // if we have the complete control block already read in
             if (offsetWritten >= (off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
+                // then copy it into ControlRead, and jump over it
                 inm->posBufferRead = (unsigned long) (offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset);
                 memcpy(&inm->sendControlRead,
                     inm->buffer + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset,
                     sizeof(redisInMemoryReplSendControl));
+                // set the global offset of the now current ControlRead
                 inm->sendControlRead.offset = offsetNextControl;
+                // go again, see if can now produce the virtual buffer
                 continue;
             } else {
                 redisLog(REDIS_VERBOSE, "In middle of control block");
+                // this is fairly rare, in that we stopped the network read in the middle of a control block
+                // we have to move it to the beginning of the physical buffer so that we can be sure that we can
+                // always read in all of it
                 memcpy(inm->buffer, offsetNextControl - inm->posBufferStartOffset + inm->buffer, offsetWritten - offsetNextControl);
+                // reset pos variables correctly, and read from network again
                 inm->posBufferRead = 0;
                 inm->posBufferWritten = (unsigned long)(offsetWritten - offsetNextControl);
                 inm->posBufferStartOffset = offsetNextControl;
@@ -285,13 +301,17 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
             }
         }
 
+        // at this point we know that offsetRead < offsetNextControl
 
+        // if the next control is available, then the virtual buffer extends up to it
         if (offsetNextControl < offsetWritten) {
             inm->virtualBuffer.size = (int)(offsetNextControl - offsetRead);
         } else {
+            // otherwise it extends up to as much as we have read from the network (ie, written into physical buffer)
             inm->virtualBuffer.size = (int)(offsetWritten- offsetRead);
         }
         inm->virtualBuffer.sourceOffset = inm->posBufferRead;
+        // finally, advance the read mark by the size of the virtual buffer we produced
         inm->posBufferRead += inm->virtualBuffer.size;
         return 1;
     }

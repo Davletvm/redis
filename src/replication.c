@@ -463,6 +463,11 @@ void sendInMemoryBuffersToSlaveDone(aeEventLoop *el, int fd, void *privdata, int
         redisInMemorySendCookie * cookie = (redisInMemorySendCookie*)(req->data);
         if (server.repl_inMemorySend && server.repl_inMemorySend->id == cookie->id && cookie->sequence >= 0) {
             redisLog(REDIS_DEBUG, "Successfully sent buffer to Slave. Cookie: %d Seq:%d Which:%d", cookie->id, cookie->sequence, cookie->which);
+
+            if (written > 0 && server.repl_inMemorySend->slave && req->timeSent >  server.repl_inMemorySend->slave->lastSuccessfulSend) {
+                server.repl_inMemorySend->slave->lastSuccessfulSend = req->timeSent;
+            }
+
             SetEvent(cookie->sentDoneEvent);
         }
         zfree(cookie);
@@ -477,7 +482,7 @@ void TransitionToFreeWindow(int final)
     listNode *ln;
     listIter li;
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
-    if (!inm || !inm->slave) return 0;
+    if (!inm || !inm->slave) return;
 
     if (inm->throttle.throttledClients) {
         listRewind(inm->throttle.throttledClients, &li);
@@ -544,7 +549,7 @@ void updateThrottleState() {
     long long transferInLastTest = inm->totalSent - inm->throttle.dataTransferredAtStart;
     long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
     long outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
-    long outputBufferMax = server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+    long outputBufferMax = (long) server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
     outputBufferMax -= outputBufferMax / 5;
     long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
     mstime_t timeDelta = server.mstime - inm->throttle.testStart;
@@ -573,12 +578,12 @@ void updateThrottleState() {
         long long transferSpeedReq = dataRemaining / timeLeft;
         if (transferSpeedReq == 0) transferSpeedReq = 1;
         if (transferSpeedReq < transferSpeedNow) {
-            inm->throttle.throttleIndex -= max(1, transferSpeedNow / transferSpeedReq);
+            inm->throttle.throttleIndex -= max(1, (int)(transferSpeedNow / transferSpeedReq));
             if (inm->throttle.throttleIndex < 0) {
                 inm->throttle.throttleIndex = 0;
             }
         } else {
-            inm->throttle.throttleIndex += max(1, transferSpeedReq / transferSpeedNow);
+            inm->throttle.throttleIndex += max(1, (int)(transferSpeedReq / transferSpeedNow));
             if (inm->throttle.throttleIndex > 19) {
                 inm->throttle.throttleIndex = 19;
             }
@@ -1212,18 +1217,27 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
         readlen = sizeof(redisInMemoryReplSendControl) - inm->posBufferWritten;
     } else {
 
+        // we must either have:
         redisAssert(inm->posBufferRead == inm->posBufferWritten ||
+            // consumed the whole portion of the buffer read into, or
             (inm->posBufferRead + inm->posBufferStartOffset == inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis &&
+            // offset of what we consumed must be equal to offset at the end of the current block (ie, we consumed the whole block), and
             inm->posBufferWritten + inm->posBufferStartOffset < inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof(redisInMemoryReplSendControl) &&
+            // offset of what we read in must be less then the offset at the end of the block, plus size of control (ie, we should not have read in the whole control block
+            // since if we had, then we would not be in the middle of the control block) and
             inm->posBufferWritten > inm->posBufferRead &&
+            // we must have written into the buffer more than we read into, and
             inm->posBufferWritten < inm->posBufferRead + sizeof(redisInMemoryReplSendControl)
+            // we have have written into the buffer less than the size of the control block
             ));
 
         readlen = inm->bufferSize - inm->posBufferWritten;
+        // the most we can read is the size of the remaining buffer space
 
         off_t maxKnownOffset = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + inm->sendControlWrite.sizeOfNext;
+        // potentially adjust to smaller of above, and known size of stream outstanding
         if (readlen > (maxKnownOffset - inm->totalRead)) {
-            readlen = maxKnownOffset - inm->totalRead;
+            readlen = (ssize_t)(maxKnownOffset - inm->totalRead);
         }
 
 #if 0
@@ -1234,6 +1248,7 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             }
         }
 #endif 
+        // if we consumed and reset the write point, set its offset correctly
         if (inm->posBufferWritten == 0) {
             inm->posBufferStartOffset = inm->totalRead;
         }
@@ -1255,19 +1270,24 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     inm->totalRead += nread;
     inm->posBufferWritten += nread;
 
-
+    // check if we have just readin the complete control block at the beginning of the stream
     if (!inm->sendControlWrite.sizeOfThis && inm->posBufferWritten >= sizeof(redisInMemoryReplSendControl)) {
         memcpy(&inm->sendControlWrite, inm->buffer, sizeof(redisInMemoryReplSendControl));
         inm->sendControlWrite.offset = 0;
         memcpy(&inm->sendControlRead, &inm->sendControlWrite, sizeof(redisInMemoryReplSendControl));
         inm->posBufferRead = sizeof(redisInMemoryReplSendControl);
     }
+    // if we have the control block (at least one of them)
     if (inm->sendControlWrite.sizeOfThis) {
+        // if we readin at least past the next control block, and there is a next control block then...
         while (inm->totalRead >= (off_t)(inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis + sizeof (redisInMemoryReplSendControl)) && inm->sendControlWrite.sizeOfNext) {
+            // move the write control block forward to that next one
             off_t offsetOfNewControl = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis;
             memcpy(&inm->sendControlWrite, inm->buffer + offsetOfNewControl - inm->posBufferStartOffset, sizeof(redisInMemoryReplSendControl));
             inm->sendControlWrite.offset = offsetOfNewControl;
         }
+        // if we don't have another control block in the stream, and we have read through the whole of this one, mark that we have found the end.
+        // we should be satisfying the readers from what we have read - if we ever run out, then we will error at the beginning of this function
         if (!inm->sendControlWrite.sizeOfNext && inm->totalRead == inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis) {
             inm->endStateFlags |= INMEMORY_ENDSTATE_ENDFOUND;
         }
@@ -1975,6 +1995,7 @@ void slaveofCommand(redisClient *c) {
  * (master or slave) and additional information related to replication
  * in an easy to process format. */
 void roleCommand(redisClient *c) {
+    int extended = c->argc > 1;
     if (server.masterhost == NULL) {
         listIter li;
         listNode *ln;
@@ -1991,11 +2012,13 @@ void roleCommand(redisClient *c) {
             char ip[REDIS_IP_STR_LEN];
 
             if (anetPeerToString(slave->fd,ip,sizeof(ip),NULL) == -1) continue;
-            if (slave->replstate != REDIS_REPL_ONLINE) continue;
-            addReplyMultiBulkLen(c,3);
+            if (slave->replstate != REDIS_REPL_ONLINE && (!extended || slave->replstate != REDIS_REPL_TRANSFER)) continue;
+            addReplyMultiBulkLen(c, extended ? 4 : 3);
             addReplyBulkCString(c,ip);
             addReplyBulkLongLong(c,slave->slave_listening_port);
             addReplyBulkLongLong(c,slave->repl_ack_off);
+            if (extended) 
+                addReplyBulkLongLong(c,slave->lastSuccessfulSend);
             slaves++;
         }
         setDeferredMultiBulkLength(c,mbcount,slaves);

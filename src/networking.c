@@ -92,7 +92,7 @@ redisClient *createClient(int fd) {
     c->bulklen = -1;
     c->sentlen = 0;
     c->flags = 0;
-    c->ctime = c->lastinteraction = server.unixtime;
+    c->ctime = c->lastinteraction = c->lastSuccessfulSend = server.unixtime;
     c->authenticated = 0;
     c->replstate = REDIS_REPL_NONE;
     c->reploff = 0;
@@ -838,6 +838,10 @@ void sendReplyBufferDone(aeEventLoop *el, int fd, void *privdata, int written) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
+    if (written > 0 && req->timeSent > c->lastSuccessfulSend) {
+        c->lastSuccessfulSend = req->timeSent;
+    }
+
     c->outstanding_writes--;
     if (c->bufpos == offset) {
         c->bufpos = 0;
@@ -867,6 +871,10 @@ void sendReplyListDone(aeEventLoop *el, int fd, void *privdata, int written) {
         server.orphaned_outstanding_writes--;
         server.orphaned_sent_bytes -= (unsigned long) objmem;
         return;
+    }
+
+    if (written > 0 && req->timeSent > c->lastSuccessfulSend) {
+        c->lastSuccessfulSend = req->timeSent;
     }
 
     c->sent_bytes -= (unsigned long) objmem;

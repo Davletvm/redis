@@ -508,6 +508,7 @@ typedef struct redisClient {
                                buffer or object being sent. */
     time_t ctime;           /* Client creation time */
     time_t lastinteraction; /* time of the last interaction, used for timeout */
+    time_t lastSuccessfulSend; 
     time_t obuf_soft_limit_reached_time;
     int flags;              /* REDIS_SLAVE | REDIS_MONITOR | REDIS_MULTI ... */
     int authenticated;      /* when requirepass is non-NULL */

@@ -293,7 +293,7 @@ typedef struct aeWinSendReq {
     void *client;
     void *data;
     char *buf;
-    int len;
+    time_t timeSent;
 } aeWinSendReq;
 
 
