@@ -584,8 +584,20 @@ void updateThrottleState() {
             }
         }
     }
-    redisLog(REDIS_VERBOSE, "Throttle index (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb)", inm->throttle.throttleIndex, transferSpeedNow, timeLeft, outputBufferGrowth >> 20, outputBufferNow >> 20);
+    inm->throttle.countAllowedTotal += inm->throttle.countAllowedPartial;
+    inm->throttle.countThrottledTotal += inm->throttle.countThrottledPartial;
+    redisLog(REDIS_VERBOSE, "Throttle index (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb) alt(%d) tht(%d) alp(%d) thp(%d)", 
+        inm->throttle.throttleIndex, 
+        transferSpeedNow, 
+        timeLeft, 
+        outputBufferGrowth >> 20, 
+        outputBufferNow >> 20,
+        inm->throttle.countAllowedTotal,
+        inm->throttle.countThrottledTotal,
+        inm->throttle.countAllowedPartial,
+        inm->throttle.countThrottledPartial);
 
+    inm->throttle.countAllowedPartial = inm->throttle.countThrottledPartial = 0;
     inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 20;
     inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
 
@@ -665,6 +677,8 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
         }
     }
     if (!howManyReady) return; 
+    inm->countBuffersImmediatelyAvailable = inm->countBuffersImmediatelyAvailableChild[0];
+    inm->countWaitedForBuffers = inm->countWaitedForBuffersChild[0];
     aeSetReadyForCallback(el);
     while (howManyReady) {
         int minId = INT_MAX;
