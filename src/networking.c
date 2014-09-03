@@ -578,6 +578,12 @@ static void acceptCommonHandler(int fd, int flags) {
         // The client we want to free is the oldest non-authenticated client, if any
         if (listLength(server.unauthenticated_clients)) {
             redisClient *tof = listFirst(server.unauthenticated_clients)->value;
+            char *err = "-ERR max number of clients reached\r\n";
+
+            /* That's a best effort error message, don't check write errors */
+            if (write(tof->fd, err, strlen(err)) == -1) {
+                /* Nothing to do, Just to avoid the warning... */
+            }
             freeClient(tof);
         } else {
             char *err = "-ERR max number of clients reached\r\n";

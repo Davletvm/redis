@@ -1147,7 +1147,7 @@ void stopLoading(void) {
 /* Track loading progress in order to serve client's from time to time
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (server.rdb_checksum)
+    if (server.rdb_checksum && !server.repl_inMemoryReceive)
         rioGenericUpdateChecksum(r, buf, len);
     if (server.loading_process_events_interval_bytes &&
         (r->processed_bytes + len)/server.loading_process_events_interval_bytes > r->processed_bytes/server.loading_process_events_interval_bytes)
@@ -1292,7 +1292,7 @@ readagain:
         if (cksum == 0) {
             if (fp) 
                 redisLog(REDIS_NOTICE,"RDB file was saved with checksum disabled: no check performed.");
-        } else if (cksum != expected) {
+        } else if (cksum != expected && fp) {
             redisLog(REDIS_WARNING,"Wrong RDB checksum. Aborting now.");
             exit(1);
         }

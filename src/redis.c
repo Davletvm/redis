@@ -2734,12 +2734,12 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
             "mem_allocator:%s\r\n",
             (long long)zmalloc_used,
             hmem,
-            (long long)server.resident_set_size,
+            (long long)zmalloc_get_rss(),
             rss_hmem,
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
-            zmalloc_get_fragmentation_ratio(server.resident_set_size),
+            zmalloc_get_fragmentation_ratio(zmalloc_get_rss()),
             ZMALLOC_LIB
             );
 #else
