@@ -29,6 +29,7 @@
 #include "win32_wsiocp.h"
 #include "Win32_FDAPI.h"
 #include <errno.h>
+#include <time.h>
 
 
 static void *iocpState;
@@ -258,7 +259,7 @@ int aeWinSocketSend(int fd, char *buf, int len,
     areq->eventLoop = (aeEventLoop *)eventLoop;
     areq->req.client = client;
     areq->req.data = data;
-    areq->req.len = len;
+    areq->req.timeSent = time(NULL);
     areq->req.buf = buf;
     areq->proc = (aeFileProc *)proc;
 
