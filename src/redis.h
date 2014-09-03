@@ -641,6 +641,10 @@ typedef struct redisThrottling {
     int throttleIndex;
     long outputBufferAtStart;
     size_t dataTransferredAtStart;
+    int countAllowedTotal;
+    int countThrottledTotal;
+    int countAllowedPartial;
+    int countThrottledPartial;
 } redisThrottling;
 
 #define INMEMORY_ENDSTATE_NONE 0
