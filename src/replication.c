@@ -629,7 +629,7 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
             inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
             inm->throttle.state = THROTTLE_TESTING;
         } else {
-            if (inm->throttle.state != THROTTLE_NONE && server.mstime > inm->throttle.testStart + THROTTLE_TEST_WINDOW) {
+            if (inm->throttle.state != THROTTLE_NONE && server.mstime > inm->throttle.testStart + server.repl_inMemoryThrottleCheck) {
                 updateThrottleState();
             }
             CheckThrottleWindowUpdate(NULL);
