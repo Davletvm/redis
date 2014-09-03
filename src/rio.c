@@ -140,10 +140,10 @@ static int WaitForFreeBuffer(rio * r)
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
     DWORD rval = WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, 0);
     if (rval < WAIT_OBJECT_0 || rval >= WAIT_OBJECT_0 + INMEMORY_SEND_MAXSENDBUFFER) {
-        inm->countWaitedForBuffers++;
+        inm->countWaitedForBuffersChild[0]++;
         WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
     } else {
-        inm->countBuffersImmediatelyAvailable++;
+        inm->countBuffersImmediatelyAvailableChild[0]++;
     }
     BOOL found = FALSE;
     for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {

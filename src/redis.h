@@ -694,6 +694,8 @@ typedef struct redisInMemoryReplSend {
     int curSequence;
     int countWaitedForBuffers;
     int countBuffersImmediatelyAvailable;
+    int * countWaitedForBuffersChild;
+    int * countBuffersImmediatelyAvailableChild;
     HANDLE * doSendEvents;
     HANDLE * sentDoneEvents;
     int * sizeFilled[INMEMORY_SEND_MAXSENDBUFFER];

@@ -1149,11 +1149,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     run_with_period(2000) {
         if (server.repl_inMemorySend) {
             redisInMemoryReplSend * inm = server.repl_inMemorySend;
-            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago. buffers waited on:%d perc.", 
+            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago. buffers waited on:%d / %d", 
                 inm->totalSent >> 20, 
                 (inm->totalSent * 1000 / (server.mstime - inm->replStart)) >> 20,
                 (server.mstime - inm->replStart) / 1000,
-                inm->countWaitedForBuffers * 100 / (inm->countWaitedForBuffers + inm->countBuffersImmediatelyAvailable)
+                inm->countWaitedForBuffers,
+                inm->countWaitedForBuffers + inm->countBuffersImmediatelyAvailable
                 );
         }
     }
