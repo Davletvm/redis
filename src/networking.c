@@ -570,7 +570,7 @@ static void acceptCommonHandler(int fd, int flags) {
 #endif
         return;
     }
-    int privClient = flags & REDIS_PRIVILIDGED_CLIENT;
+    int privClient = flags & REDIS_PRIVPORT_CLIENT;
     /* If maxclient directive is set and this is one client more... close the
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
@@ -586,7 +586,7 @@ static void acceptCommonHandler(int fd, int flags) {
                 /* Nothing to do, Just to avoid the warning... */
             }
             freeClient(tof);
-        } else if (!privClient) {
+        } else if (!privClient || server.currentPrivPortClients > REDIS_PRIVPORT_FDS) {
             char *err = "-ERR max number of clients reached\r\n";
 
             /* That's a best effort error message, don't check write errors */
@@ -601,6 +601,8 @@ static void acceptCommonHandler(int fd, int flags) {
     if (!privClient) {
         listAddNodeTail(server.unauthenticated_clients, c);
         c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
+    } else {
+        server.currentPrivPortClients++;
     }
     server.stat_numconnections++;
     c->flags |= flags;
@@ -622,7 +624,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd, (privdata && server.privilidgeEnabled) ? REDIS_PRIVILIDGED_CLIENT : 0);
+        acceptCommonHandler(cfd, (privdata && server.privilidgeEnabled) ? (REDIS_PRIVILIDGED_CLIENT | REDIS_PRIVPORT_CLIENT) : 0);
     }
 }
 
@@ -792,6 +794,10 @@ void freeClient(redisClient *c) {
      * from the queue. */
     if (c->flags & REDIS_CLOSE_ASAP) {
         listDelNode(server.clients_to_close,c->client_to_close_node);
+    }
+
+    if (c->flags & REDIS_PRIVPORT_CLIENT) {
+        server.currentPrivPortClients--;
     }
 
     if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
