@@ -1330,13 +1330,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    if (server.repl_inMemorySend) {
-        if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) {
-            server.repl_inMemorySend->throttle.countThrottledPartial++;
-            return;
-        } else {
-            server.repl_inMemorySend->throttle.countAllowedPartial++;
-        }
+    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) {
+        return;
     }
 
     server.current_client = c;

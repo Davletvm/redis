@@ -529,9 +529,13 @@ int CheckThrottleWindowUpdate(redisClient * c)
         if (c) {
             listAddNodeHead(inm->throttle.throttledClients, c);
             c->throttled_list_node = listFirst(inm->throttle.throttledClients);
+            inm->throttle.countThrottledPartial++;
         }
         return TRUE;
     } else {
+        if (c) {
+            inm->throttle.countAllowedPartial++;
+        }
         return FALSE;
     }
 }
