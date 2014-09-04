@@ -260,7 +260,7 @@
 #define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 
-#define REDIS_PRIVILIDGED_CLIENT (1<<17) 
+#define REDIS_PRIVILIDGED_CLIENT (1<<31) 
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -745,7 +745,8 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     /* Networking */
     int port;                   /* TCP listening port */
-	int tcp_backlog;            /* TCP listen() backlog */
+    int privport;
+    int tcp_backlog;            /* TCP listen() backlog */
     char *bindaddr[REDIS_BINDADDR_MAX]; /* Addresses we should bind to */
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
     char *unixsocket;           /* UNIX socket path */

@@ -570,6 +570,7 @@ static void acceptCommonHandler(int fd, int flags) {
 #endif
         return;
     }
+    int privClient = flags & REDIS_PRIVILIDGED_CLIENT;
     /* If maxclient directive is set and this is one client more... close the
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
@@ -585,7 +586,7 @@ static void acceptCommonHandler(int fd, int flags) {
                 /* Nothing to do, Just to avoid the warning... */
             }
             freeClient(tof);
-        } else {
+        } else if (!privClient) {
             char *err = "-ERR max number of clients reached\r\n";
 
             /* That's a best effort error message, don't check write errors */
@@ -597,8 +598,10 @@ static void acceptCommonHandler(int fd, int flags) {
             return;
         }
     }
-    listAddNodeTail(server.unauthenticated_clients, c);
-    c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
+    if (!privClient) {
+        listAddNodeTail(server.unauthenticated_clients, c);
+        c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
+    }
     server.stat_numconnections++;
     c->flags |= flags;
 }
@@ -619,7 +622,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0);
+        acceptCommonHandler(cfd, (privdata && server.privilidgeEnabled) ? REDIS_PRIVILIDGED_CLIENT : 0);
     }
 }
 
