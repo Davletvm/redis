@@ -1117,7 +1117,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer);
     config_get_numerical_field("repl-throttle-window", server.repl_inMemoryThrottleWindow);
     config_get_numerical_field("repl-throttle-check", server.repl_inMemoryThrottleCheck);
-    config_get_numerical_field("repl-throttle-target", server.repl_inMemoryThrottleMaxTime);
+    config_get_numerical_field("repl-throttle-target", server.repl_inMemoryThrottleMaxTime/1000);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1927,7 +1927,7 @@ int rewriteConfig(char *path) {
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
     rewriteConfigNumericalOption(state, "repl-throttle-window", server.repl_inMemoryThrottleWindow, REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW);
     rewriteConfigNumericalOption(state, "repl-throttle-check", server.repl_inMemoryThrottleCheck, REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK);
-    rewriteConfigNumericalOption(state, "repl-throttle-target", server.repl_inMemoryThrottleMaxTime, REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME);
+    rewriteConfigNumericalOption(state, "repl-throttle-target", server.repl_inMemoryThrottleMaxTime / 1000, REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines
