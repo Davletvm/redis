@@ -505,114 +505,142 @@ void TransitionToFreeWindow(int final)
     }
 }
 
-
+// return TRUE if needs to throttle this client
 int CheckThrottleWindowUpdate(redisClient * c) 
 {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     if (!inm || !inm->slave) return FALSE;
 
     if (inm->throttle.state == THROTTLE_NONE || inm->throttle.state == THROTTLE_ABORTED) return FALSE;
-    if (server.mstime > inm->throttle.nextWindow) {
 
-        if ((inm->throttle.state == THROTTLE_TESTING || inm->throttle.state == THROTTLE_IN_FREE_WINDOW) && inm->throttle.throttleWindowDuration) {
-            inm->throttle.state = THROTTLE_IN_THROTTLE_WINDOW;
-            inm->throttle.nextWindow = server.mstime + inm->throttle.throttleWindowDuration;
-        } else {
-            if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
-                TransitionToFreeWindow(FALSE);
-            }
-            inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
-            inm->throttle.nextWindow = server.mstime + inm->throttle.freeWindowDuration;
-        }
-    }
     if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+        if (server.mstime > inm->throttle.nextWindow) {
+            updateCachedTime();
+            TransitionToFreeWindow(FALSE);
+            inm->throttle.dataTransferredAtStart = server.stat_bytes_received + server.stat_bytes_sent;
+            inm->throttle.replTransferredAtStart = inm->totalSent;
+            inm->throttle.windowStart = server.mstime;
+            inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
+            inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
+            inm->throttle.nextWindow = 0;
+            return FALSE;
+        }
         if (c) {
             listAddNodeHead(inm->throttle.throttledClients, c);
             c->throttled_list_node = listFirst(inm->throttle.throttledClients);
-            inm->throttle.countThrottledPartial++;
         }
         return TRUE;
-    } else {
-        if (c) {
-            inm->throttle.countAllowedPartial++;
-        }
-        return FALSE;
     }
+    if (inm->throttle.state == THROTTLE_IN_FREE_WINDOW) {
+        if (inm->throttle.consecutiveThrottled > 5) {
+            updateThrottleState();
+        }
+    }
+    return FALSE;
 }
 
 
 void updateThrottleState() {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     if (!inm || !inm->slave) return;
+    if (inm->throttle.state != THROTTLE_IN_FREE_WINDOW) return;
 
     long long dataRemaining = inm->throttle.dataSetSize - inm->totalSent;
     if (dataRemaining < server.repl_inMemorySendBuffer) {
         dataRemaining = server.repl_inMemorySendBuffer;
     }
 
-    long long transferInLastTest = inm->totalSent - inm->throttle.dataTransferredAtStart;
-    long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
-    long outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
-    long outputBufferMax = (long) server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
-    outputBufferMax -= outputBufferMax / 5;
-    long outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
-    mstime_t timeDelta = server.mstime - inm->throttle.testStart;
-    if (timeDelta == 0)
-    {
+    long long replTransferInLastTest = inm->totalSent - inm->throttle.replTransferredAtStart;
+    long long dataTransferInLastTest = server.stat_bytes_received + server.stat_bytes_sent - inm->throttle.dataTransferredAtStart - replTransferInLastTest;
+    mstime_t timeDelta = server.mstime - inm->throttle.windowStart;
+    if (timeDelta == 0) {
         timeDelta = 1;
     }
 
-    long long transferSpeedNow = transferInLastTest / timeDelta;
-    if (transferSpeedNow == 0)
-    {
-        transferSpeedNow = 1;
-    }
+    BOOL enterThrottle = FALSE;
 
     mstime_t timeLeft = server.repl_inMemoryThrottleMaxTime - (server.mstime - inm->throttle.replStart);
-    if (outputBufferGrowth > 0 && outputBufferMax) {
-        mstime_t timeToFillOB = (outputBufferSpaceLeft / outputBufferGrowth) * timeDelta;
-        if (timeToFillOB < timeLeft) {
-            timeLeft = timeToFillOB;
-        }
-    }
 
-    if (timeLeft <= 0) {
-        inm->throttle.throttleIndex = 19;
-    } else {
-        long long transferSpeedReq = dataRemaining / timeLeft;
-        if (transferSpeedReq == 0) transferSpeedReq = 1;
-        if (transferSpeedReq < transferSpeedNow) {
-            inm->throttle.throttleIndex -= max(1, (int)(transferSpeedNow / transferSpeedReq));
-            if (inm->throttle.throttleIndex < 0) {
-                inm->throttle.throttleIndex = 0;
-            }
-        } else {
-            inm->throttle.throttleIndex += max(1, (int)(transferSpeedReq / transferSpeedNow));
-            if (inm->throttle.throttleIndex > 19) {
-                inm->throttle.throttleIndex = 19;
+    long long replTransferSpeedNow = replTransferInLastTest / timeDelta;
+    if (!replTransferSpeedNow) replTransferSpeedNow = 1;
+    long long dataTransferSpeedNow = dataTransferInLastTest / timeDelta;
+    if (!dataTransferSpeedNow) dataTransferSpeedNow = 1;
+
+    long long transferSpeedReq = 0;
+
+    if (dataTransferSpeedNow > server.repl_inMemoryThrottleMinDataBW) {
+        if (replTransferSpeedNow < server.repl_inMemoryThrottleMaxReplBW) {
+            if (timeLeft <= 0) {
+                enterThrottle = TRUE;
+            } else {
+                transferSpeedReq = dataRemaining / timeLeft;
+                if (replTransferSpeedNow < transferSpeedReq) {
+                    enterThrottle = TRUE;
+                }
             }
         }
     }
-    inm->throttle.countAllowedTotal += inm->throttle.countAllowedPartial;
-    inm->throttle.countThrottledTotal += inm->throttle.countThrottledPartial;
-    redisLog(REDIS_VERBOSE, "Throttle index (%d) sn(%lld) tl(%lld) oobg(%d mb) oobn(%d mb) alt(%d) tht(%d) alp(%d) thp(%d)", 
-        inm->throttle.throttleIndex, 
-        transferSpeedNow, 
-        timeLeft, 
-        outputBufferGrowth >> 20, 
-        outputBufferNow >> 20,
-        inm->throttle.countAllowedTotal,
-        inm->throttle.countThrottledTotal,
-        inm->throttle.countAllowedPartial,
-        inm->throttle.countThrottledPartial);
 
-    inm->throttle.countAllowedPartial = inm->throttle.countThrottledPartial = 0;
-    inm->throttle.throttleWindowDuration = inm->throttle.throttleIndex * server.repl_inMemoryThrottleWindow / 20;
-    inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow - inm->throttle.throttleWindowDuration;
+    long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
 
-    inm->throttle.testStart = server.mstime;
-    inm->throttle.dataTransferredAtStart = inm->totalSent;
-    inm->throttle.outputBufferAtStart = outputBufferNow;
+    long outputBufferGrowth = 0;
+    mstime_t estimatedTimeToCompletion = 0;
+    long outputBufferMax = 0;
+    long outputBufferSpaceLeft = 0;
+    long long outputBufferGrowthRatePS = 0;
+    long long outputBufferGrowthMaxRatePS = 0;
+
+    if (!enterThrottle) {
+        outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
+        if (outputBufferGrowth > 0) {
+            estimatedTimeToCompletion = dataRemaining / replTransferSpeedNow;
+            outputBufferMax = (long)server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+            outputBufferMax -= outputBufferMax / 5;
+            outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
+            outputBufferGrowthRatePS = outputBufferGrowth * 1000 / timeDelta;
+            outputBufferGrowthMaxRatePS = outputBufferSpaceLeft * 1000 / estimatedTimeToCompletion;
+            if (outputBufferGrowthRatePS > outputBufferGrowthMaxRatePS) enterThrottle = TRUE;
+        }
+    }
+
+    if (enterThrottle) {
+        inm->throttle.state = THROTTLE_IN_THROTTLE_WINDOW;
+        inm->throttle.windowStart = server.mstime;
+        inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
+    }
+
+    if ((inm->throttle.state == THROTTLE_IN_FREE_WINDOW) == !!inm->throttle.consecutiveThrottled || server.mstime + 2000 > inm->throttle.logTime) {
+        inm->throttle.logTime = server.mstime;
+        redisLog(REDIS_VERBOSE, "dr (%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+            dataRemaining,
+            replTransferInLastTest,
+            dataTransferInLastTest,
+            replTransferSpeedNow,
+            dataTransferSpeedNow,
+            timeDelta,
+            inm->throttle.consecutiveThrottled);
+        redisLog(REDIS_VERBOSE, "Throttle (%s) sn(%lld) rsn(%lld) dsn(%lld) tl(%lld) etl(%lld) crbw(%d) cdbw(%d) dr(%lld) oobn(%d) oobg(%d) oobm(%d) oobsl(%d) oobgr(%lld) oobmgr(%lld)",
+            enterThrottle ? "yes" : "no",
+            replTransferSpeedNow,
+            transferSpeedReq,
+            dataTransferSpeedNow,
+            timeLeft,
+            estimatedTimeToCompletion,
+            server.repl_inMemoryThrottleMaxReplBW,
+            server.repl_inMemoryThrottleMinDataBW,
+            dataRemaining >> 20,
+            outputBufferNow,
+            outputBufferGrowth,
+            outputBufferMax,
+            outputBufferSpaceLeft,
+            outputBufferGrowthRatePS,
+            outputBufferGrowthMaxRatePS
+            );
+    }
+    if (enterThrottle) 
+        inm->throttle.consecutiveThrottled++;
+    else 
+        inm->throttle.consecutiveThrottled = 0;
 }
 
 
@@ -621,22 +649,16 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
 
-    if (server.repl_inMemoryThrottle) {
-        updateCachedTime();
+    if (server.repl_inMemoryThrottle && server.repl_inMemoryThrottleMaxReplBW && server.repl_inMemoryThrottleMinDataBW) {
         if (inm->throttle.state == THROTTLE_NONE) {
+            updateCachedTime();
             inm->throttle.throttledClients = listCreate();
             inm->throttle.dataSetSize = zmalloc_used_memory() - server.repl_backlog_size;
             inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
-            inm->throttle.dataTransferredAtStart = 0;
-            inm->throttle.replStart = inm->throttle.testStart = server.mstime;
-            inm->throttle.freeWindowDuration = server.repl_inMemoryThrottleWindow;
-            inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
-            inm->throttle.state = THROTTLE_TESTING;
-        } else {
-            if (inm->throttle.state != THROTTLE_NONE && server.mstime > inm->throttle.testStart + server.repl_inMemoryThrottleCheck) {
-                updateThrottleState();
-            }
-            CheckThrottleWindowUpdate(NULL);
+            inm->throttle.dataTransferredAtStart = server.stat_bytes_received + server.stat_bytes_sent;
+            inm->throttle.replTransferredAtStart = 0;
+            inm->throttle.replStart = inm->throttle.windowStart = server.mstime;
+            inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
         }
     }
 

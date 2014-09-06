@@ -1110,7 +1110,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Update the time cache. */
     updateCachedTime();
-    CheckThrottleWindowUpdate(NULL);
+    updateThrottleState();
 
     run_with_period(100) trackOperationsPerSecond();
 
@@ -1591,7 +1591,8 @@ void initServerConfig() {
     server.repl_inMemoryThrottle = REDIS_DEFAULT_INMEMORYTHROTTLE;
     server.repl_inMemoryThrottleMaxTime = REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME;
     server.repl_inMemoryThrottleWindow = REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW;
-    server.repl_inMemoryThrottleCheck = REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK;
+    server.repl_inMemoryThrottleMaxReplBW = 0;
+    server.repl_inMemoryThrottleMinDataBW = 0;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
     server.cpu_time_lastreported = mstime();
