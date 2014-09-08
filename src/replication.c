@@ -515,12 +515,7 @@ int CheckThrottleWindowUpdate(redisClient * c)
 
     if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
         if (server.mstime > inm->throttle.nextWindow) {
-            updateCachedTime();
             TransitionToFreeWindow(FALSE);
-            inm->throttle.dataTransferredAtStart = server.stat_bytes_received + server.stat_bytes_sent;
-            inm->throttle.replTransferredAtStart = inm->totalSent;
-            inm->throttle.windowStart = server.mstime;
-            inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
             inm->throttle.state = THROTTLE_IN_FREE_WINDOW;
             inm->throttle.nextWindow = 0;
             return FALSE;
@@ -533,6 +528,7 @@ int CheckThrottleWindowUpdate(redisClient * c)
     }
     if (inm->throttle.state == THROTTLE_IN_FREE_WINDOW) {
         if (inm->throttle.consecutiveThrottled > 5) {
+            updateCachedTime();
             updateThrottleState();
         }
     }
@@ -637,9 +633,14 @@ void updateThrottleState() {
             outputBufferGrowthMaxRatePS
             );
     }
-    if (enterThrottle) 
+    if (enterThrottle) {
         inm->throttle.consecutiveThrottled++;
-    else 
+        inm->throttle.dataTransferredAtStart = server.stat_bytes_received + server.stat_bytes_sent;
+        inm->throttle.replTransferredAtStart = inm->totalSent;
+        inm->throttle.outputBufferAtStart = getClientOutputBufferMemoryUsage(inm->slave);
+        inm->throttle.windowStart = server.mstime;
+    }
+    else
         inm->throttle.consecutiveThrottled = 0;
 }
 
