@@ -610,16 +610,24 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
+    BOOL success = FALSE;
 
     while(max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
-            if (errno != EWOULDBLOCK)
+            if (errno != EWOULDBLOCK || !success) {
                 redisLog(REDIS_WARNING,
                     "Accepting client connection: %s", server.neterr);
+                if (!success) {
+                    redisLog(REDIS_WARNING,
+                        "Accepting failure on first iteration");
+                }
+            }
             return;
+
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+        success = TRUE;
         acceptCommonHandler(cfd,0);
     }
 }
