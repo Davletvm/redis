@@ -30,6 +30,7 @@
 #include "Win32_FDAPI.h"
 #include <errno.h>
 #include <time.h>
+#include "..\redisLog.h"
 
 
 static void *iocpState;
@@ -54,17 +55,20 @@ int aeWinQueueAccept(int listenfd) {
 
     if ((sockstate = aeGetSockState(iocpState, listenfd)) == NULL) {
         errno = WSAEINVAL;
+        redisLog(REDIS_WARNING, "aeWinQueueAccept - Cannot GetSockState for Listening socket");
         return -1;
     }
 
     acceptfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (acceptfd == -1) {
+        redisLog(REDIS_WARNING, "aeWinQueueAccept - Cannot create accept socket %d", GetLastError());
         errno = WSAEINVAL;
         return -1;
     }
 
     accsockstate = aeGetSockState(iocpState, acceptfd);
     if (accsockstate == NULL) {
+        redisLog(REDIS_WARNING, "aeWinQueueAccept - Cannot get sockstate for accept socket");
         errno = WSAEINVAL;
         return -1;
     }
@@ -85,6 +89,7 @@ int aeWinQueueAccept(int listenfd) {
     if (SUCCEEDED_WITH_IOCP(result)){
         sockstate->masks |= ACCEPT_PENDING;
     } else {
+        redisLog(REDIS_WARNING, "aeWinQueueAccept - Cannot queue AcceptEx %d", GetLastError());
         errno = WSAGetLastError();
         sockstate->masks &= ~ACCEPT_PENDING;
         close(acceptfd);
@@ -133,6 +138,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     aacceptreq * areq;
 
     if ((sockstate = aeGetSockState(iocpState, fd)) == NULL) {
+        redisLog(REDIS_WARNING, "aeWinAccept - Cannot get sockstate for listen socket");
         errno = WSAEINVAL;
         return SOCKET_ERROR;
     }
@@ -150,6 +156,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
 
     result = FDAPI_UpdateAcceptContext(acceptsock);
     if (result == SOCKET_ERROR) {
+        redisLog(REDIS_WARNING, "aeWinAccept - Cannot update accept context %d", GetLastError());
         errno = WSAGetLastError();
         return SOCKET_ERROR;
     }
@@ -175,6 +182,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
 
     /* queue another accept */
     if (aeWinQueueAccept(fd) == -1) {
+        redisLog(REDIS_WARNING, "aeWinAccept - queueAccept failed");
         return SOCKET_ERROR;
     }
 
