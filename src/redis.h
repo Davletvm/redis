@@ -640,6 +640,8 @@ typedef struct redisThrottling {
     long outputBufferAtStart;
     size_t dataTransferredAtStart;
     size_t replTransferredAtStart;    
+    int accepted;
+    int rejected;
 } redisThrottling;
 
 #define INMEMORY_ENDSTATE_NONE 0
@@ -892,6 +894,7 @@ struct redisServer {
     int repl_inMemoryThrottleWindow; /* Max free\throttled window */
     int repl_inMemoryThrottleMaxReplBW;
     int repl_inMemoryThrottleMinDataBW;
+    int repl_inMemoryThrottleReceiveCheck;
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
     int privilidgeEnabled;

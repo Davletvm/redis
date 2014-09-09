@@ -526,10 +526,15 @@ int CheckThrottleWindowUpdate(redisClient * c)
         }
         return TRUE;
     }
-    if (inm->throttle.state == THROTTLE_IN_FREE_WINDOW) {
-        if (inm->throttle.consecutiveThrottled > 5) {
+    if (inm->throttle.state == THROTTLE_IN_FREE_WINDOW && c) {
+        if (inm->throttle.consecutiveThrottled > server.repl_inMemoryThrottleReceiveCheck) {
             updateCachedTime();
             updateThrottleState();
+            if (inm->throttle.state == THROTTLE_IN_THROTTLE_WINDOW) {
+                listAddNodeHead(inm->throttle.throttledClients, c);
+                c->throttled_list_node = listFirst(inm->throttle.throttledClients);
+                return TRUE;
+            }
         }
     }
     return FALSE;
@@ -539,7 +544,9 @@ int CheckThrottleWindowUpdate(redisClient * c)
 void updateThrottleState() {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     if (!inm || !inm->slave) return;
-    if (inm->throttle.state != THROTTLE_IN_FREE_WINDOW) return;
+    if (inm->throttle.state != THROTTLE_IN_FREE_WINDOW) {
+        return;
+    }
 
     long long dataRemaining = inm->throttle.dataSetSize - inm->totalSent;
     if (dataRemaining < server.repl_inMemorySendBuffer) {
@@ -605,9 +612,12 @@ void updateThrottleState() {
         inm->throttle.nextWindow = server.mstime + server.repl_inMemoryThrottleWindow;
     }
 
-    if ((inm->throttle.state == THROTTLE_IN_FREE_WINDOW) == !!inm->throttle.consecutiveThrottled || server.mstime + 2000 > inm->throttle.logTime) {
+//    if ((!!(inm->throttle.state == THROTTLE_IN_FREE_WINDOW) == !!inm->throttle.consecutiveThrottled) || (server.mstime - inm->throttle.logTime > 2000)) {
+    if (server.mstime - inm->throttle.logTime > 2000) {
         inm->throttle.logTime = server.mstime;
-        redisLog(REDIS_VERBOSE, "dr (%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+        redisLog(REDIS_VERBOSE, "dr (%d) (%d) (%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+            inm->throttle.accepted,
+            inm->throttle.rejected,
             dataRemaining,
             replTransferInLastTest,
             dataTransferInLastTest,
@@ -615,6 +625,7 @@ void updateThrottleState() {
             dataTransferSpeedNow,
             timeDelta,
             inm->throttle.consecutiveThrottled);
+        inm->throttle.accepted = inm->throttle.rejected = 0;
         redisLog(REDIS_VERBOSE, "Throttle (%s) sn(%lld) rsn(%lld) dsn(%lld) tl(%lld) etl(%lld) crbw(%d) cdbw(%d) dr(%lld) oobn(%d) oobg(%d) oobm(%d) oobsl(%d) oobgr(%lld) oobmgr(%lld)",
             enterThrottle ? "yes" : "no",
             replTransferSpeedNow,
@@ -649,6 +660,11 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
+
+    if (inm->totalSent == 0) {
+        aeWinCloseClient(inm->slave->fd);
+        aeWinStartReplToSlave(inm->slave->fd);
+    }
 
     if (server.repl_inMemoryThrottle && server.repl_inMemoryThrottleMaxReplBW && server.repl_inMemoryThrottleMinDataBW) {
         if (inm->throttle.state == THROTTLE_NONE) {
@@ -689,7 +705,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     redisInMemoryReplSend * inm = server.repl_inMemorySend;
     int sendReady[INMEMORY_SEND_MAXSENDBUFFER];
     memset(sendReady, 0, sizeof(int)* INMEMORY_SEND_MAXSENDBUFFER);
-    if (!inm || id != inm->id) {
+    if (!inm || id != inm->id || !inm->slave) {
         redisLog(REDIS_VERBOSE, "Signaled stale inmemory buffer send %d %d", id, inm->id);
         return;
     }
@@ -859,6 +875,7 @@ void syncCommand(redisClient *c) {
         anetDisableTcpNoDelay(NULL, c->fd); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= REDIS_SLAVE;
+    aeWinNewSlave(c->fd);
     server.slaveseldb = -1; /* Force to re-emit the SELECT command. */
     listAddNodeTail(server.slaves,c);
     if (listLength(server.slaves) == 1 && server.repl_backlog == NULL)

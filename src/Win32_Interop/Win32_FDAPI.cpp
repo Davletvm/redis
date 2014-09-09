@@ -29,6 +29,7 @@
 #include "Win32_variadicFunctor.h"
 #include "Win32_ANSI.h"
 #include <string>
+#include <qos2.h>
 #include "..\redisLog.h"
 using namespace std;
 
@@ -85,6 +86,9 @@ redis_getaddrinfo getaddrinfo = NULL;
 redis_inet_ntop inet_ntop = NULL;
 }
 
+
+static HANDLE QOSHandle;
+
 auto f_WSAStartup = dllfunctor_stdcall<int, WORD, LPWSADATA>("ws2_32.dll", "WSAStartup");
 int InitWinsock() {
    WSADATA t_wsa;
@@ -97,14 +101,112 @@ int InitWinsock() {
     if(iError != NO_ERROR || LOBYTE(t_wsa.wVersion) != 2 || HIBYTE(t_wsa.wVersion) != 2 ) {
         exit(1);
     } else {
-      return 0;
+        QOS_VERSION ver;
+        ver.MajorVersion = 1;
+        ver.MinorVersion = 0;
+        BOOL rval = QOSCreateHandle(&ver, &QOSHandle);
+        if (!rval) {
+            DWORD le = GetLastError();
+            printf("init %d\r\n", le);
+        }
+        return 0;
     }
 }
 
 auto f_WSACleanup = dllfunctor_stdcall<int>("ws2_32.dll", "WSACleanup");
 int  CleanupWinsock() {
+    if (QOSHandle != NULL) {
+        BOOL rval = QOSCloseHandle(QOSHandle);
+        if (!rval) {
+            DWORD le = GetLastError();
+        }
+    }
     return f_WSACleanup();
 }
+
+
+BOOL FDAPI_QOSAddSocketToFlowFast(int FD, PDWORD pid) {
+    try {
+        SOCKET s = RFDMap::getInstance().lookupSocket(FD);
+        if (s != INVALID_SOCKET) {
+            BOOL rval = QOSAddSocketToFlow(QOSHandle, s, NULL, QOS_TRAFFIC_TYPE::QOSTrafficTypeVoice, QOS_NON_ADAPTIVE_FLOW, pid);
+            if (!rval) {
+                DWORD le = GetLastError();
+                printf("add %d\r\n", le);
+            } else {
+                printf("add succeeded\r\n");
+            }
+            QOS_FLOWRATE_OUTGOING flow;
+            flow.ShapingBehavior = QOS_SHAPING::QOSShapeAndMark;
+            flow.Reason = QOS_FLOWRATE_REASON::QOSFlowRateUserCaused;
+            flow.Bandwidth = (((unsigned long long)1024) * 1024 * 1024 * 2);
+            rval = QOSSetFlow(QOSHandle, *pid, QOS_SET_FLOW::QOSSetOutgoingRate, sizeof(flow), &flow, 0, NULL);
+            if (!rval) {
+                DWORD le = GetLastError();
+                printf("add %d\r\n", le);
+            } else {
+                printf("setflow succeeded\r\n");
+            }
+            return rval;
+        }
+    } CATCH_AND_REPORT()
+
+    return FALSE;
+}
+
+static DWORD slowFlow;
+
+BOOL FDAPI_QOSAddSocketToFlowSlow(int FD, PDWORD pid) {
+    try {
+        SOCKET s = RFDMap::getInstance().lookupSocket(FD);
+        if (s != INVALID_SOCKET) {
+            BOOL rval = QOSAddSocketToFlow(QOSHandle, s, NULL, QOS_TRAFFIC_TYPE::QOSTrafficTypeBestEffort, QOS_NON_ADAPTIVE_FLOW, &slowFlow);
+            if (!rval) {
+                DWORD le = GetLastError();
+                printf("add slow %d\r\n", le);
+            } else {
+                printf("add slow succeeded\r\n");
+            }
+            *pid = slowFlow;
+            QOS_FLOWRATE_OUTGOING flow;
+            flow.ShapingBehavior = QOS_SHAPING::QOSShapeAndMark;
+            flow.Reason = QOS_FLOWRATE_REASON::QOSFlowRateUserCaused;
+            flow.Bandwidth = (((unsigned long long)1024) * 1024 * 250);
+            rval = QOSSetFlow(QOSHandle, *pid, QOS_SET_FLOW::QOSSetOutgoingRate, sizeof(flow), &flow, 0, NULL);
+            if (!rval) {
+                DWORD le = GetLastError();
+                printf("setflow slow %d\r\n", le);
+            } else {
+                printf("setflow slow succeeded\r\n");
+            }
+            return rval;
+        }
+    } CATCH_AND_REPORT()
+
+        return FALSE;
+}
+
+
+BOOL FDAPI_QOSRemoveSocketFromFlow(int FD, DWORD id) {
+    try {
+        SOCKET s = RFDMap::getInstance().lookupSocket(FD);
+        if (s != INVALID_SOCKET) {
+            BOOL rval = QOSRemoveSocketFromFlow(QOSHandle, s, id, 0);
+            if (!rval) {
+                DWORD le = GetLastError();
+                printf("remove %d\r\n", le);
+            } else {
+                printf("remove succeeded\r\n");
+            }
+            return rval;
+        }
+    } CATCH_AND_REPORT()
+
+        return FALSE;
+
+}
+
+
 
 BOOL SetFDInformation(int FD, DWORD mask, DWORD flags){
     try

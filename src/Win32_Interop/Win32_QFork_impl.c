@@ -66,6 +66,10 @@ void ClearInMemoryBuffersMasterParent()
 #ifndef NO_QFORKIMPL
     aeClearCallbacks(server.el);
     if (server.repl_inMemorySend) {
+        if (server.repl_inMemorySend->totalSent > 0 && server.repl_inMemorySend->slave) {
+            aeWinStopReplToSlave(server.repl_inMemorySend->slave->fd);
+            aeWinNewClient(server.repl_inMemorySend->slave->fd);
+        }
         zfree(server.repl_inMemorySend);
         server.repl_inMemorySend = NULL;
     }

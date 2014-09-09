@@ -75,6 +75,7 @@ redisClient *createClient(int fd) {
             zfree(c);
             return NULL;
         }
+        aeWinNewClient(fd);
     }
 
     selectDb(c,0);
@@ -705,6 +706,7 @@ void freeClient(redisClient *c) {
             redisLog(REDIS_WARNING,"Connection with slave %s:%d lost.",
                 ip, c->slave_listening_port);
         }
+        aeWinSlaveDisconnected(c->fd);
     }
 
     /* Free the query buffer */
@@ -738,6 +740,11 @@ void freeClient(redisClient *c) {
     server.orphaned_sent_bytes += c->sent_bytes;
     freeClientArgv(c);
 #ifdef WIN32_IOCP
+    if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
+        aeWinStopReplToSlave(c->fd);
+    } else {
+        aeWinCloseClient(c->fd);
+    }
     aeWinCloseSocket(c->fd);
 #else
 
@@ -768,6 +775,7 @@ void freeClient(redisClient *c) {
         }
         if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
             AbortForkOperation(FALSE);
+            server.repl_inMemorySend->slave = NULL;
         }
         l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
@@ -1330,8 +1338,15 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) {
-        return;
+    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd) {
+        if (server.repl_inMemorySend) {
+            if (CheckThrottleWindowUpdate(c)) {
+                server.repl_inMemorySend->throttle.rejected++;
+                return;
+            } else {
+                server.repl_inMemorySend->throttle.accepted++;
+            }
+        }
     }
 
     server.current_client = c;

@@ -422,3 +422,57 @@ void aeWinInit(void *state, HANDLE iocp, fnGetSockState *getSockState,
 void aeWinCleanup() {
     iocpState = NULL;
 }
+
+int aeWinNewSlave(int fd) {
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    if (getpeername(fd, (struct sockaddr*)&sa, &salen) == -1) {
+        return -1;
+    }
+
+    return FDAPI_QOSStartTrackingClient((struct sockaddr*)&sa);
+
+}
+int aeWinSlaveDisconnected(int fd){
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    if (getpeername(fd, (struct sockaddr*)&sa, &salen) == -1) {
+        return -1;
+    }
+
+    return FDAPI_QOSStopTrackingClient((struct sockaddr*)&sa);
+
+
+}
+
+int aeWinNewClient(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    FDAPI_QOSAddSocketToFlowSlow(fd, &(state->qosID));
+    return 0;
+}
+
+int aeWinCloseClient(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
+    state->qosID = 0;
+    return 0;
+}
+
+
+int aeWinStartReplToSlave(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    FDAPI_QOSAddSocketToFlowFast(fd, &(state->qosID));
+    return 0;
+}
+
+int aeWinStopReplToSlave(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
+    state->qosID = 0;
+    return 0;
+}
+
+
+
