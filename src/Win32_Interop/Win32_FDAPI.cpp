@@ -104,7 +104,7 @@ int InitWinsock() {
         QOS_VERSION ver;
         ver.MajorVersion = 1;
         ver.MinorVersion = 0;
-        BOOL rval = TRUE; // QOSCreateHandle(&ver, &QOSHandle);
+        BOOL rval = QOSCreateHandle(&ver, &QOSHandle);
         if (!rval) {
             DWORD le = GetLastError();
             redisLog(REDIS_WARNING, "FlowInit failed %d", GetLastError());            
@@ -145,6 +145,7 @@ BOOL SetFlowSpeed(DWORD flowid, long long speed)
     flow.ShapingBehavior = QOS_SHAPING::QOSShapeOnly;
     flow.Reason = QOS_FLOWRATE_REASON::QOSFlowRateUserCaused;
     flow.Bandwidth = speed ? speed * 8 : (((unsigned long long)1024) * 1024 * 1024 * 2);
+  //  redisLog(REDIS_VERBOSE, "SetFlowSpeed %d to %lld", flowid, speed);
     BOOL rval = QOSSetFlow(QOSHandle, flowid, QOS_SET_FLOW::QOSSetOutgoingRate, sizeof(flow), &flow, 0, NULL);
     if (!rval) {
         DWORD le = GetLastError();
@@ -175,6 +176,8 @@ BOOL FDAPI_SetSlowFlowSpeed(long long bandwidth)
     if (slowFlow) {
         if (!SetFlowSpeed(slowFlow, slowBW)) {
             slowFlow = 0;
+        } else {
+     //       redisLog(REDIS_VERBOSE, "slowflow is id %d", slowFlow);
         }
     } else {
         redisLog(REDIS_DEBUG, "not setting slowflow is id %d %lld", slowFlow, bandwidth);
