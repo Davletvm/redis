@@ -105,6 +105,7 @@ aeSockState *aeGetSockState(void *apistate, int fd) {
         sockState->masks = 0;
         sockState->wreqs = 0;
         sockState->reqs = NULL;
+        sockState->qosID = 0;
         memset(&sockState->wreqlist, 0, sizeof(sockState->wreqlist));
 
         if (listAddNodeHead(socklist, sockState) != NULL) {

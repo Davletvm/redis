@@ -29,6 +29,7 @@
 #include "Win32_variadicFunctor.h"
 #include "Win32_ANSI.h"
 #include <string>
+#include <qos2.h>
 #include "..\redisLog.h"
 using namespace std;
 
@@ -85,6 +86,9 @@ redis_getaddrinfo getaddrinfo = NULL;
 redis_inet_ntop inet_ntop = NULL;
 }
 
+
+static HANDLE QOSHandle;
+
 auto f_WSAStartup = dllfunctor_stdcall<int, WORD, LPWSADATA>("ws2_32.dll", "WSAStartup");
 int InitWinsock() {
    WSADATA t_wsa;
@@ -97,14 +101,165 @@ int InitWinsock() {
     if(iError != NO_ERROR || LOBYTE(t_wsa.wVersion) != 2 || HIBYTE(t_wsa.wVersion) != 2 ) {
         exit(1);
     } else {
-      return 0;
+        QOS_VERSION ver;
+        ver.MajorVersion = 1;
+        ver.MinorVersion = 0;
+        BOOL rval = QOSCreateHandle(&ver, &QOSHandle);
+        if (!rval) {
+            DWORD le = GetLastError();
+            redisLog(REDIS_WARNING, "FlowInit failed %d", GetLastError());            
+        }
+        return 0;
     }
 }
 
 auto f_WSACleanup = dllfunctor_stdcall<int>("ws2_32.dll", "WSACleanup");
 int  CleanupWinsock() {
+    if (QOSHandle != NULL) {
+        BOOL rval = QOSCloseHandle(QOSHandle);
+        if (!rval) {
+            DWORD le = GetLastError();
+        }
+    }
     return f_WSACleanup();
 }
+
+
+static DWORD slowFlow;
+static DWORD fastFlow;
+static long long slowBW;
+static long long fastBW;
+
+DWORD FDAPI_GetFastFlowID() {
+    return fastFlow;
+}
+
+DWORD FDAPI_GetSlowFlowID() {
+    return slowFlow;
+}
+
+
+BOOL SetFlowSpeed(DWORD flowid, long long speed)
+{
+    QOS_FLOWRATE_OUTGOING flow;
+    flow.ShapingBehavior = QOS_SHAPING::QOSShapeOnly;
+    flow.Reason = QOS_FLOWRATE_REASON::QOSFlowRateUserCaused;
+    flow.Bandwidth = speed ? speed * 8 : (((unsigned long long)1024) * 1024 * 1024 * 2);
+  //  redisLog(REDIS_VERBOSE, "SetFlowSpeed %d to %lld", flowid, speed);
+    BOOL rval = QOSSetFlow(QOSHandle, flowid, QOS_SET_FLOW::QOSSetOutgoingRate, sizeof(flow), &flow, 0, NULL);
+    if (!rval) {
+        DWORD le = GetLastError();
+        redisLog(REDIS_WARNING, "Set flow speed failed %d", GetLastError());
+    }
+    return rval;
+}
+
+BOOL FDAPI_SetFastFlowSpeed(long long bandwidth)
+{
+    redisLog(REDIS_DEBUG, "SET FAST(%d) %lld",fastFlow, bandwidth);
+    fastBW = bandwidth;
+    if (fastFlow) {
+        if (!SetFlowSpeed(fastFlow, fastBW)) {
+            fastFlow = 0;
+        } else {
+            redisLog(REDIS_DEBUG, "Fastflow is id %d", fastFlow);
+        }
+    }
+    return TRUE;
+
+}
+
+BOOL FDAPI_SetSlowFlowSpeed(long long bandwidth)
+{
+    redisLog(REDIS_DEBUG, "SET SLOW(%d) %lld", slowFlow, bandwidth);
+    slowBW = bandwidth;
+    if (slowFlow) {
+        if (!SetFlowSpeed(slowFlow, slowBW)) {
+            slowFlow = 0;
+        } else {
+     //       redisLog(REDIS_VERBOSE, "slowflow is id %d", slowFlow);
+        }
+    } else {
+        redisLog(REDIS_DEBUG, "not setting slowflow is id %d %lld", slowFlow, bandwidth);
+    }
+    return TRUE;
+}
+
+
+BOOL AddSocketToFlow(int fd, PDWORD pid, QOS_TRAFFIC_TYPE type, long long bw) {
+    try {
+        SOCKET s = RFDMap::getInstance().lookupSocket(fd);
+        if (s == INVALID_SOCKET) {
+            return false;
+        }
+        DWORD id = *pid;
+        BOOL rval = QOSAddSocketToFlow(QOSHandle, s, NULL, type, QOS_NON_ADAPTIVE_FLOW, &id);
+        if (!rval && *pid) {
+            id = 0;
+            rval = QOSAddSocketToFlow(QOSHandle, s, NULL, type, QOS_NON_ADAPTIVE_FLOW, &id);
+            if (rval) {
+                *pid = id;
+                rval = SetFlowSpeed(id, bw);
+            }
+        } else if (rval) {
+            *pid = id;
+        }
+        if (!rval) {
+            redisLog(REDIS_WARNING, "Adding to flow failed %d", GetLastError());
+            return FALSE;
+        } else {
+            redisLog(REDIS_DEBUG, "Adding FD (%d) to flow (%d) id (%d) bw(%lld)", fd, type, id, bw);
+        }
+        return TRUE;
+    } CATCH_AND_REPORT()
+    return FALSE;
+}
+
+BOOL FDAPI_QOSAddSocketToFlowFast(int FD, PDWORD pid) {
+    redisLog(REDIS_DEBUG, "AS to FAST %d %d", FD, *pid);
+    DWORD id = fastFlow;
+    BOOL rval = AddSocketToFlow(FD, &id, QOS_TRAFFIC_TYPE::QOSTrafficTypeVoice, fastBW);
+    if (rval) {
+        fastFlow = id;
+        *pid = id;
+    }
+    return rval;
+}
+
+BOOL FDAPI_QOSAddSocketToFlowSlow(int FD, PDWORD pid) {
+    redisLog(REDIS_DEBUG, "AS to SLOW %d %d", FD, *pid);
+    DWORD id = slowFlow;
+    BOOL rval = AddSocketToFlow(FD, &id, QOS_TRAFFIC_TYPE::QOSTrafficTypeBestEffort, slowBW);
+    if (rval) {
+        slowFlow = id;
+        *pid = id;
+    }
+    return rval;
+}
+
+
+
+BOOL FDAPI_QOSRemoveSocketFromFlow(int FD, DWORD id) {
+    redisLog(REDIS_DEBUG, "Remove from %d %d", FD, id);
+    try {
+        SOCKET s = RFDMap::getInstance().lookupSocket(FD);
+        if (s != INVALID_SOCKET) {
+            BOOL rval = QOSRemoveSocketFromFlow(QOSHandle, s, id, 0);
+            if (!rval) {
+                DWORD le = GetLastError();
+                redisLog(REDIS_WARNING, "Failed to remove socket from flow %d", GetLastError());
+            } else {
+                redisLog(REDIS_DEBUG, "Removing FD (%d) from flow (%d)", FD, id);
+            }
+            return rval;
+        }
+    } CATCH_AND_REPORT()
+
+    return FALSE;
+
+}
+
+
 
 BOOL SetFDInformation(int FD, DWORD mask, DWORD flags){
     try

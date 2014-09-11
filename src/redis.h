@@ -141,7 +141,6 @@
 #define REDIS_DEFAULT_INMEMORYTHROTTLE 0
 #define REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME (5 * 60 * 1000)
 #define REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW 100
-#define REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK 5000
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 
@@ -632,19 +631,17 @@ typedef struct redisOpArray {
 typedef struct redisThrottling {
     long long dataSetSize;
     mstime_t replStart;
-    mstime_t testStart;
+    mstime_t windowStart;
     mstime_t nextWindow;
-    mstime_t throttleWindowDuration;
-    mstime_t freeWindowDuration;
+    mstime_t logTime;
     list * throttledClients;
     int state;
-    int throttleIndex;
+    int consecutiveThrottled;
     long outputBufferAtStart;
     size_t dataTransferredAtStart;
-    int countAllowedTotal;
-    int countThrottledTotal;
-    int countAllowedPartial;
-    int countThrottledPartial;
+    size_t replTransferredAtStart;    
+    int accepted;
+    int rejected;
 } redisThrottling;
 
 #define INMEMORY_ENDSTATE_NONE 0
@@ -895,7 +892,9 @@ struct redisServer {
     int repl_inMemoryThrottle; /* Potentially throttle reads when needed */
     int repl_inMemoryThrottleMaxTime; /* Target this completion time when throttling */
     int repl_inMemoryThrottleWindow; /* Max free\throttled window */
-    int repl_inMemoryThrottleCheck; /* Time between throttling adjustments */
+    int repl_inMemoryThrottleMaxReplBW;
+    int repl_inMemoryThrottleMinDataBW;
+    int repl_inMemoryThrottleReceiveCheck;
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
     int privilidgeEnabled;
@@ -1252,6 +1251,7 @@ void replicationSendNewlineToMaster(void);
 void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
 void TransitionToFreeWindow(int final);
 int CheckThrottleWindowUpdate(redisClient * c);
+void updateThrottleState();
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
