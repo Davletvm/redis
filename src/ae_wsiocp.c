@@ -63,8 +63,8 @@ typedef struct aeApiState {
     HANDLE iocp;
     int setsize;
     OVERLAPPED_ENTRY entries[MAX_COMPLETE_PER_POLL];
-    aeSockState * lookup[MAX_SOCKET_LOOKUP];
-//    list closing;
+    list lookup[MAX_SOCKET_LOOKUP];
+    list closing;
     HANDLE watcherThread;
     HANDLE watcherSignalEvent;
     HANDLE watcherContinueEvent;
@@ -83,36 +83,60 @@ int aeSocketIndex(int fd) {
 /* get data for socket / fd being monitored. Create if not found*/
 aeSockState *aeGetSockState(void *apistate, int fd) {
     int sindex;
+    listNode *node;
+    list *socklist;
     aeSockState *sockState;
     if (apistate == NULL) return NULL;
 
     sindex = aeSocketIndex(fd);
-    sockState = ((aeApiState *)apistate)->lookup[sindex];
-    if (!sockState) {
+    socklist = &(((aeApiState *)apistate)->lookup[sindex]);
+    node = listFirst(socklist);
+    while (node != NULL) {
+        sockState = (aeSockState *)listNodeValue(node);
+        if (sockState->fd == fd) {
+            return sockState;
+        }
+        node = listNextNode(node);
+    }
         // not found. Do lazy create of sockState.
         sockState = (aeSockState *)zmalloc(sizeof(aeSockState));
+    if (sockState != NULL) {
         sockState->fd = fd;
         sockState->masks = 0;
         sockState->wreqs = 0;
         sockState->reqs = NULL;
+        sockState->qosID = 0;
         memset(&sockState->wreqlist, 0, sizeof(sockState->wreqlist));
 
-        ((aeApiState *)apistate)->lookup[sindex] = sockState;
+        if (listAddNodeHead(socklist, sockState) != NULL) {
+            return sockState;
+        } else {
+            zfree(sockState);
+        }
     }
-    if (sockState->masks & APPEAR_CLOSED) return NULL;
-    return sockState;
+    return NULL;
 }
 
 /* get data for socket / fd being monitored */
 aeSockState *aeGetExistingSockState(void *apistate, int fd) {
     int sindex;
+    listNode *node;
+    list *socklist;
     aeSockState *sockState;
     if (apistate == NULL) return NULL;
 
     sindex = aeSocketIndex(fd);
-    sockState = ((aeApiState *)apistate)->lookup[sindex];
-    if (sockState->masks & APPEAR_CLOSED) return NULL;
+    socklist = &(((aeApiState *)apistate)->lookup[sindex]);
+    node = listFirst(socklist);
+    while (node != NULL) {
+        sockState = (aeSockState *)listNodeValue(node);
+        if (sockState->fd == fd) {
     return sockState;
+}
+        node = listNextNode(node);
+    }
+
+    return NULL;
 }
 
 // find matching value in list and remove. If found return 1
@@ -130,30 +154,39 @@ int removeMatchFromList(list *socklist, void *value) {
     return 0;
 }
 
-
-
 /* delete data for socket / fd being monitored
    or move to the closing queue if operations are pending.
    Return 1 if deleted or not found, 0 if pending*/
 void aeDelSockState(void *apistate, aeSockState *sockState) {
     int sindex;
+    list *socklist;
 
     if (apistate == NULL) return;
 
-    sindex = aeSocketIndex(sockState->fd);
-
     if (sockState->wreqs == 0 &&
-            ((sockState->masks & (READ_QUEUED | CONNECT_PENDING | SOCKET_ATTACHED | CLOSE_PENDING)) == 0)) {
+            (sockState->masks & (READ_QUEUED | CONNECT_PENDING | SOCKET_ATTACHED | CLOSE_PENDING)) == 0) {
         // see if in active list
-        if (sockState == ((aeApiState *)apistate)->lookup[sindex]) {
-            ((aeApiState *)apistate)->lookup[sindex] = NULL;
+        sindex = aeSocketIndex(sockState->fd);
+        socklist = &(((aeApiState *)apistate)->lookup[sindex]);
+        if (removeMatchFromList(socklist, sockState) == 1) {
+            zfree(sockState);
+            return;
+        }
+        // try closing list
+        socklist = &(((aeApiState *)apistate)->closing);
+        if (removeMatchFromList(socklist, sockState) == 1) {
             zfree(sockState);
             return;
         }
     } else {
         // not safe to delete. Move to closing
-        sockState = ((aeApiState *)apistate)->lookup[sindex];
-        sockState->masks |= APPEAR_CLOSED;
+        sindex = aeSocketIndex(sockState->fd);
+        socklist = &(((aeApiState *)apistate)->lookup[sindex]);
+        if (removeMatchFromList(socklist, sockState) == 1) {
+            // removed from active list. add to closing list
+            socklist = &(((aeApiState *)apistate)->closing);
+            listAddNodeHead(socklist, sockState);
+        }
     }
 }
 
@@ -556,9 +589,13 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                 }
             } else {
                 // no match for active connection.
-                // Try to see if set to appear closed
-                sockstate = state->lookup[rfd];
-                if (sockstate && sockstate->masks & APPEAR_CLOSED) {
+                // Try the closing list.
+                list *socklist = &(state->closing);
+                listNode *node;
+                node = listFirst(socklist);
+                while (node != NULL) {
+                    sockstate = (aeSockState *)listNodeValue(node);
+                    if (sockstate->fd == rfd) {
                     if (sockstate->masks & CONNECT_PENDING) {
                         /* check if connect complete */
                         if (entry->lpOverlapped == &sockstate->ov_read) {
@@ -586,6 +623,9 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                         // safe to delete sockstate
                         aeDelSockState(state, sockstate);
                     }
+                        break;
+                    }
+                    node = listNextNode(node);
                 }
             }
         }

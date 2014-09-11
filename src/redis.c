@@ -1111,6 +1111,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Update the time cache. */
     updateCachedTime();
     CheckThrottleWindowUpdate(NULL);
+    updateThrottleState();
 
     run_with_period(100) trackOperationsPerSecond();
 
@@ -1593,7 +1594,9 @@ void initServerConfig() {
     server.repl_inMemoryThrottle = REDIS_DEFAULT_INMEMORYTHROTTLE;
     server.repl_inMemoryThrottleMaxTime = REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME;
     server.repl_inMemoryThrottleWindow = REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW;
-    server.repl_inMemoryThrottleCheck = REDIS_DEFAULT_INMEMORYTHROTTLE_CHECK;
+    server.repl_inMemoryThrottleMaxReplBW = 0;
+    server.repl_inMemoryThrottleMinDataBW = 0;
+    server.repl_inMemoryThrottleReceiveCheck = 0;
     server.repl_inMemorySendBuffer = REDIS_DEFAULT_INMEMORY_SENDBUFFER;
     server.repl_inMemoryReceiveBuffer = REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER;
     server.cpu_time_lastreported = mstime();
@@ -2740,7 +2743,6 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
             "used_memory_peak:%llu\r\n"
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
-            "mem_fragmentation_ratio:%.2f\r\n"
             "mem_allocator:%s\r\n",
             (long long)zmalloc_used,
             hmem,
@@ -2749,9 +2751,14 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
-            zmalloc_get_fragmentation_ratio(zmalloc_get_rss()),
             ZMALLOC_LIB
             );
+        if (priviliged) {
+            info = sdscatprintf(info,
+                "mem_fragmentation_ratio:%.2f\r\n",
+                zmalloc_get_fragmentation_ratio(zmalloc_get_rss())
+                );
+        }
 #else
         info = sdscatprintf(info,
             "# Memory\r\n"

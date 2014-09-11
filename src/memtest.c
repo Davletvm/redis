@@ -73,28 +73,28 @@ size_t progress_full; /* How many chars to write to fill the progress bar. */
 void memtest_progress_start(char *title, int pass) {
     int j;
 
-    printf("\x1b[H\x1b[2J");    /* Cursor home, clear screen. */
+ //   printf("\x1b[H\x1b[2J");    /* Cursor home, clear screen. */
     /* Fill with dots. */
-    for (j = 0; j < ws.ws_col*(ws.ws_row-2); j++) printf(".");
-    printf("Please keep the test running several minutes per GB of memory.\n");
-    printf("Also check http://www.memtest86.com/ and http://pyropus.ca/software/memtester/");
-    printf("\x1b[H\x1b[2K");          /* Cursor home, clear current line.  */
-    printf("%s [%d]\n", title, pass); /* Print title. */
+  //  for (j = 0; j < ws.ws_col*(ws.ws_row-2); j++) printf(".");
+//    printf("Please keep the test running several minutes per GB of memory.\n");
+//    printf("Also check http://www.memtest86.com/ and http://pyropus.ca/software/memtester/");
+  //  printf("\x1b[H\x1b[2K");          /* Cursor home, clear current line.  */
+//    printf("%s [%d]\n", title, pass); /* Print title. */
     progress_printed = 0;
     progress_full = ws.ws_col*(ws.ws_row-3);
     fflush(stdout);
 }
 
 void memtest_progress_end(void) {
-    printf("\x1b[H\x1b[2J");    /* Cursor home, clear screen. */
+ //   printf("\x1b[H\x1b[2J");    /* Cursor home, clear screen. */
 }
 
 void memtest_progress_step(size_t curr, size_t size, char c) {
-    size_t chars = ((unsigned long long)curr*progress_full)/size, j;
+  //  size_t chars = ((unsigned long long)curr*progress_full)/size, j;
 
-    for (j = 0; j < chars-progress_printed; j++) printf("%c",c);
-    progress_printed = chars;
-    fflush(stdout);
+  //  for (j = 0; j < chars-progress_printed; j++) printf("%c",c);
+  //  progress_printed = chars;
+  //  fflush(stdout);
 }
 
 /* Test that addressing is fine. Every location is populated with its own
@@ -219,41 +219,45 @@ void memtest_compare_times(unsigned long *m, size_t bytes, int pass, int times) 
 }
 
 void memtest_test(size_t megabytes, int passes) {
-    size_t bytes = megabytes*1024*1024;
-    unsigned long *m = malloc(bytes);
-    int pass = 0;
+    size_t bytes = 1024*1024;
+    while (megabytes) {
+        fprintf(stdout, "%lld\r\n", megabytes);
+        megabytes--;
+        unsigned long *m = malloc(1024 * 1024);
+        int pass = 0;
 
-    if (m == NULL) {
+        if (m == NULL) {
 #ifdef _WIN32
-        fprintf(stderr,"Unable to allocate %llu megabytes: %s",
-            (long long)megabytes, strerror(errno));
+            fprintf(stderr, "Unable to allocate %llu megabytes: %s",
+                (long long)megabytes, strerror(errno));
 #else
-        fprintf(stderr,"Unable to allocate %zu megabytes: %s",
-            megabytes, strerror(errno));
+            fprintf(stderr,"Unable to allocate %zu megabytes: %s",
+                megabytes, strerror(errno));
 #endif
-        exit(1);
-    }
-    while (pass != passes) {
-        pass++;
+            exit(1);
+        }
+        while (pass != passes) {
+            pass++;
 
-        memtest_progress_start("Addressing test",pass);
-        memtest_addressing(m,bytes);
-        memtest_progress_end();
+            memtest_progress_start("Addressing test", pass);
+            memtest_addressing(m, bytes);
+            memtest_progress_end();
 
-        memtest_progress_start("Random fill",pass);
-        memtest_fill_random(m,bytes);
-        memtest_progress_end();
-        memtest_compare_times(m,bytes,pass,4);
+            memtest_progress_start("Random fill", pass);
+            memtest_fill_random(m, bytes);
+            memtest_progress_end();
+            memtest_compare_times(m, bytes, pass, 4);
 
-        memtest_progress_start("Solid fill",pass);
-        memtest_fill_value(m,bytes,0,(unsigned long)-1,'S');
-        memtest_progress_end();
-        memtest_compare_times(m,bytes,pass,4);
+            memtest_progress_start("Solid fill", pass);
+            memtest_fill_value(m, bytes, 0, (unsigned long)-1, 'S');
+            memtest_progress_end();
+            memtest_compare_times(m, bytes, pass, 4);
 
-        memtest_progress_start("Checkerboard fill",pass);
-        memtest_fill_value(m,bytes,ULONG_ONEZERO,ULONG_ZEROONE,'C');
-        memtest_progress_end();
-        memtest_compare_times(m,bytes,pass,4);
+            memtest_progress_start("Checkerboard fill", pass);
+            memtest_fill_value(m, bytes, ULONG_ONEZERO, ULONG_ZEROONE, 'C');
+            memtest_progress_end();
+            memtest_compare_times(m, bytes, pass, 4);
+        }
     }
 }
 
