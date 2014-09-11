@@ -75,7 +75,6 @@ redisClient *createClient(int fd) {
             zfree(c);
             return NULL;
         }
-        aeWinNewClient(fd);
     }
 
     selectDb(c,0);
@@ -714,7 +713,6 @@ void freeClient(redisClient *c) {
             redisLog(REDIS_WARNING,"Connection with slave %s:%d lost.",
                 ip, c->slave_listening_port);
         }
-        aeWinSlaveDisconnected(c->fd);
     }
 
     /* Free the query buffer */
@@ -739,6 +737,7 @@ void freeClient(redisClient *c) {
     /* Close socket, unregister events, and remove list of replies and
      * accumulated arguments. */
     if (c->fd != -1) {
+        aeWinOnCloseFlowClient(c->fd);
         aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
         close(c->fd);
@@ -748,11 +747,6 @@ void freeClient(redisClient *c) {
     server.orphaned_sent_bytes += c->sent_bytes;
     freeClientArgv(c);
 #ifdef WIN32_IOCP
-    if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
-        aeWinStopReplToSlave(c->fd);
-    } else {
-        aeWinCloseClient(c->fd);
-    }
     aeWinCloseSocket(c->fd);
 #else
 
@@ -923,6 +917,10 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     listNode *ln;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
+
+    if (server.repl_inMemorySend && server.repl_inMemorySend->slave != c && server.repl_inMemorySend->throttle.state != THROTTLE_NONE) {
+        aeWinSlowFlowClient(c->fd);
+    }
 
     /* move list pointer to last one sent or first in list */
     listRewind(c->reply, &li);
@@ -1347,7 +1345,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(mask);
 
     if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd) {
-        if (server.repl_inMemorySend) {
+        if (server.repl_inMemorySend && server.repl_inMemorySend->slave != c && server.repl_inMemorySend->throttle.state != THROTTLE_NONE) {
+            aeWinSlowFlowClient(c->fd);
             if (CheckThrottleWindowUpdate(c)) {
                 server.repl_inMemorySend->throttle.rejected++;
                 return;

@@ -249,8 +249,10 @@ int FDAPI_UpdateAcceptContext( int fd );
 BOOL FDAPI_QOSAddSocketToFlowFast(int FD, PDWORD pid);
 BOOL FDAPI_QOSAddSocketToFlowSlow(int FD, PDWORD pid);
 BOOL FDAPI_QOSRemoveSocketFromFlow(int FD, DWORD id);
-
-
+BOOL FDAPI_SetFastFlowSpeed(long long bandwidth);
+BOOL FDAPI_SetSlowFlowSpeed(long long bandwidth);
+DWORD FDAPI_GetFastFlowID();
+DWORD FDAPI_GetSlowFlowID();
 
 // macroize CRT definitions to point to our own
 #ifndef FDAPI_NOCRTREDEFS

@@ -431,54 +431,38 @@ void aeWinCleanup() {
     iocpState = NULL;
 }
 
-int aeWinNewSlave(int fd) {
-    struct sockaddr_storage sa;
-    socklen_t salen = sizeof(sa);
-
-    if (getpeername(fd, (struct sockaddr*)&sa, &salen) == -1) {
-        return -1;
+int aeWinFastFlowClient(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    if (state && (!state->qosID || state->qosID != FDAPI_GetFastFlowID())) {
+        if (state->qosID) {
+            FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
+            state->qosID = 0;
+        }
+        BOOL b = FDAPI_QOSAddSocketToFlowFast(fd, &(state->qosID));
+        return b ? 0 : -1;
     }
-
-    return FDAPI_QOSStartTrackingClient((struct sockaddr*)&sa);
-
+    return 0;
 }
-int aeWinSlaveDisconnected(int fd){
-    struct sockaddr_storage sa;
-    socklen_t salen = sizeof(sa);
 
-    if (getpeername(fd, (struct sockaddr*)&sa, &salen) == -1) {
-        return -1;
+int aeWinSlowFlowClient(int fd) {
+    aeSockState * state = aeGetSockState(iocpState, fd);
+    if (state && (!state->qosID || state->qosID != FDAPI_GetSlowFlowID())) {
+        if (state->qosID) {
+            FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
+            state->qosID = 0;
+        }
+        BOOL b = FDAPI_QOSAddSocketToFlowSlow(fd, &(state->qosID));
+        return b ? 0 : -1;
     }
-
-    return FDAPI_QOSStopTrackingClient((struct sockaddr*)&sa);
-
-
-}
-
-int aeWinNewClient(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    FDAPI_QOSAddSocketToFlowSlow(fd, &(state->qosID));
     return 0;
 }
 
-int aeWinCloseClient(int fd) {
+int aeWinOnCloseFlowClient(int fd) {
     aeSockState * state = aeGetSockState(iocpState, fd);
-    FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
-    state->qosID = 0;
-    return 0;
-}
-
-
-int aeWinStartReplToSlave(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    FDAPI_QOSAddSocketToFlowFast(fd, &(state->qosID));
-    return 0;
-}
-
-int aeWinStopReplToSlave(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
-    state->qosID = 0;
+    if (state && state->qosID) {
+        FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
+        state->qosID = 0;
+    }
     return 0;
 }
 

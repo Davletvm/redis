@@ -570,40 +570,43 @@ void updateThrottleState() {
     if (!dataTransferSpeedNow) dataTransferSpeedNow = 1;
 
     long long transferSpeedReq = 0;
+    long long desiredDataBWps = 0;
 
     if (dataTransferSpeedNow > server.repl_inMemoryThrottleMinDataBW) {
         if (replTransferSpeedNow < server.repl_inMemoryThrottleMaxReplBW) {
             if (timeLeft <= 0) {
-                enterThrottle = TRUE;
+                desiredDataBWps = server.repl_inMemoryThrottleMinDataBW * 1000;
             } else {
                 transferSpeedReq = dataRemaining / timeLeft;
                 if (replTransferSpeedNow < transferSpeedReq) {
-                    enterThrottle = TRUE;
+                    desiredDataBWps = (server.repl_inMemoryThrottleMinDataBW + server.repl_inMemoryThrottleMaxReplBW - transferSpeedReq) * 1000;
                 }
             }
         }
     }
+    if (desiredDataBWps && desiredDataBWps < server.repl_inMemoryThrottleMinDataBW * 1000) {
+        desiredDataBWps = server.repl_inMemoryThrottleMinDataBW * 1000;
+    }
+    FDAPI_SetSlowFlowSpeed(desiredDataBWps);
 
-    long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
+    long long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
 
-    long outputBufferGrowth = 0;
+    long long outputBufferGrowth = 0;
     mstime_t estimatedTimeToCompletion = 0;
-    long outputBufferMax = 0;
-    long outputBufferSpaceLeft = 0;
+    long long outputBufferMax = 0;
+    long long outputBufferSpaceLeft = 0;
     long long outputBufferGrowthRatePS = 0;
     long long outputBufferGrowthMaxRatePS = 0;
 
-    if (!enterThrottle) {
-        outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
-        if (outputBufferGrowth > 0) {
-            estimatedTimeToCompletion = dataRemaining / replTransferSpeedNow;
-            outputBufferMax = (long)server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
-            outputBufferMax -= outputBufferMax / 5;
-            outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
-            outputBufferGrowthRatePS = outputBufferGrowth * 1000 / timeDelta;
-            outputBufferGrowthMaxRatePS = outputBufferSpaceLeft * 1000 / estimatedTimeToCompletion;
-            if (outputBufferGrowthRatePS > outputBufferGrowthMaxRatePS) enterThrottle = TRUE;
-        }
+    outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
+    if (outputBufferGrowth > 0) {
+        estimatedTimeToCompletion = dataRemaining / replTransferSpeedNow;
+        outputBufferMax = (long)server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+        outputBufferMax -= outputBufferMax / 5;
+        outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
+        outputBufferGrowthRatePS = outputBufferGrowth * 1000 / timeDelta;
+        outputBufferGrowthMaxRatePS = outputBufferSpaceLeft * 1000 / estimatedTimeToCompletion;
+        if (outputBufferGrowthRatePS > outputBufferGrowthMaxRatePS) enterThrottle = TRUE;
     }
 
     if (enterThrottle) {
@@ -615,7 +618,8 @@ void updateThrottleState() {
 //    if ((!!(inm->throttle.state == THROTTLE_IN_FREE_WINDOW) == !!inm->throttle.consecutiveThrottled) || (server.mstime - inm->throttle.logTime > 2000)) {
     if (server.mstime - inm->throttle.logTime > 2000) {
         inm->throttle.logTime = server.mstime;
-        redisLog(REDIS_VERBOSE, "dr (%d) (%d) (%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+        redisLog(REDIS_VERBOSE, "ddbw(%lld) ta(%d) tr(%d) dr(%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+            desiredDataBWps / 1000,
             inm->throttle.accepted,
             inm->throttle.rejected,
             dataRemaining,
@@ -626,7 +630,7 @@ void updateThrottleState() {
             timeDelta,
             inm->throttle.consecutiveThrottled);
         inm->throttle.accepted = inm->throttle.rejected = 0;
-        redisLog(REDIS_VERBOSE, "Throttle (%s) sn(%lld) rsn(%lld) dsn(%lld) tl(%lld) etl(%lld) crbw(%d) cdbw(%d) dr(%lld) oobn(%d) oobg(%d) oobm(%d) oobsl(%d) oobgr(%lld) oobmgr(%lld)",
+        redisLog(REDIS_VERBOSE, "Throttle (%s) sn(%lld) rsn(%lld) dsn(%lld) tl(%lld) etl(%lld) crbw(%d) cdbw(%d) dr(%lld) oobn(%lld) oobg(%lld) oobm(%lld) oobsl(%lld) oobgr(%lld) oobmgr(%lld)",
             enterThrottle ? "yes" : "no",
             replTransferSpeedNow,
             transferSpeedReq,
@@ -661,13 +665,12 @@ void sendInMemoryBuffersToSlaveSpecific(aeEventLoop * el, int which) {
     redisInMemorySendCookie * cookie;
     if (!inm || !inm->slave) return;
 
-    if (inm->totalSent == 0) {
-        aeWinCloseClient(inm->slave->fd);
-        aeWinStartReplToSlave(inm->slave->fd);
-    }
 
     if (server.repl_inMemoryThrottle && server.repl_inMemoryThrottleMaxReplBW && server.repl_inMemoryThrottleMinDataBW) {
         if (inm->throttle.state == THROTTLE_NONE) {
+            aeWinFastFlowClient(inm->slave->fd);
+            FDAPI_SetFastFlowSpeed(0);
+
             updateCachedTime();
             inm->throttle.throttledClients = listCreate();
             inm->throttle.dataSetSize = zmalloc_used_memory() - server.repl_backlog_size;
@@ -875,7 +878,6 @@ void syncCommand(redisClient *c) {
         anetDisableTcpNoDelay(NULL, c->fd); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= REDIS_SLAVE;
-    aeWinNewSlave(c->fd);
     server.slaveseldb = -1; /* Force to re-emit the SELECT command. */
     listAddNodeTail(server.slaves,c);
     if (listLength(server.slaves) == 1 && server.repl_backlog == NULL)

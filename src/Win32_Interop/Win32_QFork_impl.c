@@ -67,9 +67,10 @@ void ClearInMemoryBuffersMasterParent()
     aeClearCallbacks(server.el);
     if (server.repl_inMemorySend) {
         if (server.repl_inMemorySend->totalSent > 0 && server.repl_inMemorySend->slave) {
-            aeWinStopReplToSlave(server.repl_inMemorySend->slave->fd);
-            aeWinNewClient(server.repl_inMemorySend->slave->fd);
+            aeWinOnCloseFlowClient(server.repl_inMemorySend->slave->fd);
         }
+        FDAPI_SetFastFlowSpeed(0);
+        FDAPI_SetSlowFlowSpeed(0);
         zfree(server.repl_inMemorySend);
         server.repl_inMemorySend = NULL;
     }
