@@ -615,33 +615,28 @@ void updateThrottleState() {
 //    if ((!!(inm->throttle.state == THROTTLE_IN_FREE_WINDOW) == !!inm->throttle.consecutiveThrottled) || (server.mstime - inm->throttle.logTime > 2000)) {
     if (server.mstime - inm->throttle.logTime > 2000) {
         inm->throttle.logTime = server.mstime;
-        redisLog(REDIS_VERBOSE, "ta(%d) tr(%d) dr(%lld) rtr(%lld) dtr(%lld) rts(%lld) dts(%lld) te(%lld) ct(%d)",
+        redisLog(REDIS_VERBOSE, "ta(%d) tr(%d) dr(%lld)m rtr(%lld)m dtr(%lld)m rts(%lld)k/s dts(%lld)k/s te(%lld)ms ct(%d)",
             inm->throttle.accepted,
             inm->throttle.rejected,
-            dataRemaining,
-            replTransferInLastTest,
-            dataTransferInLastTest,
-            replTransferSpeedNow,
-            dataTransferSpeedNow,
+            dataRemaining >> 20,
+            replTransferInLastTest >> 20,
+            dataTransferInLastTest >> 20,
+            replTransferSpeedNow >> 10,
+            dataTransferSpeedNow >> 10,
             timeDelta,
             inm->throttle.consecutiveThrottled);
         inm->throttle.accepted = inm->throttle.rejected = 0;
-        redisLog(REDIS_VERBOSE, "Throttle (%s) sn(%lld) rsn(%lld) dsn(%lld) tl(%lld) etl(%lld) crbw(%d) cdbw(%d) dr(%lld) oobn(%lld) oobg(%lld) oobm(%lld) oobsl(%lld) oobgr(%lld) oobmgr(%lld)",
+        redisLog(REDIS_VERBOSE, "Throttle (%s) rsn(%lld)k/s tl(%lld)ms etl(%lld)ms oobn(%lld)m oobg(%lld)k oobm(%lld)m oobsl(%lld)m oobgr(%lld)k/s oobmgr(%lld)k/s",
             enterThrottle ? "yes" : "no",
-            replTransferSpeedNow,
-            transferSpeedReq,
-            dataTransferSpeedNow,
+            transferSpeedReq >> 10,
             timeLeft,
             estimatedTimeToCompletion,
-            server.repl_inMemoryThrottleMaxReplBW,
-            server.repl_inMemoryThrottleMinDataBW,
-            dataRemaining >> 20,
-            outputBufferNow,
-            outputBufferGrowth,
-            outputBufferMax,
-            outputBufferSpaceLeft,
-            outputBufferGrowthRatePS,
-            outputBufferGrowthMaxRatePS
+            outputBufferNow >> 20,
+            outputBufferGrowth >> 10,
+            outputBufferMax >> 20,
+            outputBufferSpaceLeft >> 20,
+            outputBufferGrowthRatePS >> 10,
+            outputBufferGrowthMaxRatePS >> 10
             );
     }
     if (enterThrottle) {
