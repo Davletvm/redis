@@ -306,10 +306,6 @@ int aeWinListen(int rfd, int backlog);
 int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len);
 int aeWinSocketConnect(int fd, const struct sockaddr *sa, int len);
 
-int aeWinFastFlowClient(int fd);
-int aeWinSlowFlowClient(int fd);
-int aeWinOnCloseFlowClient(int fd);
-
 int strerror_r(int err, char* buf, size_t buflen);
 char *wsa_strerror(int err);
 

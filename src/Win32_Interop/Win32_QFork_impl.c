@@ -66,11 +66,6 @@ void ClearInMemoryBuffersMasterParent()
 #ifndef NO_QFORKIMPL
     aeClearCallbacks(server.el);
     if (server.repl_inMemorySend) {
-        if (server.repl_inMemorySend->totalSent > 0 && server.repl_inMemorySend->slave) {
-            aeWinOnCloseFlowClient(server.repl_inMemorySend->slave->fd);
-        }
-        FDAPI_SetFastFlowSpeed(0);
-        FDAPI_SetSlowFlowSpeed(0);
         zfree(server.repl_inMemorySend);
         server.repl_inMemorySend = NULL;
     }

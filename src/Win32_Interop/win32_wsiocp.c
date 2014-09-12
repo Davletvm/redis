@@ -431,40 +431,6 @@ void aeWinCleanup() {
     iocpState = NULL;
 }
 
-int aeWinFastFlowClient(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    if (state && (!state->qosID || state->qosID != FDAPI_GetFastFlowID())) {
-        if (state->qosID) {
-            FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
-            state->qosID = 0;
-        }
-        BOOL b = FDAPI_QOSAddSocketToFlowFast(fd, &(state->qosID));
-        return b ? 0 : -1;
-    }
-    return 0;
-}
-
-int aeWinSlowFlowClient(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    if (state && (!state->qosID || state->qosID != FDAPI_GetSlowFlowID())) {
-        if (state->qosID) {
-            FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
-            state->qosID = 0;
-        }
-        BOOL b = FDAPI_QOSAddSocketToFlowSlow(fd, &(state->qosID));
-        return b ? 0 : -1;
-    }
-    return 0;
-}
-
-int aeWinOnCloseFlowClient(int fd) {
-    aeSockState * state = aeGetSockState(iocpState, fd);
-    if (state && state->qosID) {
-        FDAPI_QOSRemoveSocketFromFlow(fd, state->qosID);
-        state->qosID = 0;
-    }
-    return 0;
-}
 
 
 

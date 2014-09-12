@@ -246,13 +246,6 @@ BOOL FDAPI_AcceptEx(int listenFD,int acceptFD,PVOID lpOutputBuffer,DWORD dwRecei
 BOOL FDAPI_ConnectEx(int fd,const struct sockaddr *name,int namelen,PVOID lpSendBuffer,DWORD dwSendDataLength,LPDWORD lpdwBytesSent,LPOVERLAPPED lpOverlapped);
 void FDAPI_GetAcceptExSockaddrs(int fd, PVOID lpOutputBuffer,DWORD dwReceiveDataLength,DWORD dwLocalAddressLength,DWORD dwRemoteAddressLength,LPSOCKADDR *LocalSockaddr,LPINT LocalSockaddrLength,LPSOCKADDR *RemoteSockaddr,LPINT RemoteSockaddrLength);
 int FDAPI_UpdateAcceptContext( int fd );
-BOOL FDAPI_QOSAddSocketToFlowFast(int FD, PDWORD pid);
-BOOL FDAPI_QOSAddSocketToFlowSlow(int FD, PDWORD pid);
-BOOL FDAPI_QOSRemoveSocketFromFlow(int FD, DWORD id);
-BOOL FDAPI_SetFastFlowSpeed(long long bandwidth);
-BOOL FDAPI_SetSlowFlowSpeed(long long bandwidth);
-DWORD FDAPI_GetFastFlowID();
-DWORD FDAPI_GetSlowFlowID();
 
 // macroize CRT definitions to point to our own
 #ifndef FDAPI_NOCRTREDEFS
