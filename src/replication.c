@@ -597,7 +597,7 @@ void updateThrottleState() {
         outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
         if (outputBufferGrowth > 0) {
             estimatedTimeToCompletion = dataRemaining / replTransferSpeedNow;
-            outputBufferMax = (long)server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
+            outputBufferMax = (long long) server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
             outputBufferMax -= outputBufferMax / 5;
             outputBufferSpaceLeft = outputBufferMax - outputBufferNow;
             outputBufferGrowthRatePS = outputBufferGrowth * 1000 / timeDelta;
