@@ -136,6 +136,7 @@
 #define REDIS_PEER_ID_LEN (REDIS_IP_STR_LEN+32) /* Must be enough for ip:port */
 #define REDIS_BINDADDR_MAX 16
 #define REDIS_MIN_RESERVED_FDS 32
+#define REDIS_PRIVPORT_FDS 20 /* Maximum number of clients from private port */
 
 #define REDIS_DEFAULT_INMEMORYREPL 0
 #define REDIS_DEFAULT_INMEMORYTHROTTLE 0
@@ -161,7 +162,7 @@
 /* When configuring the Redis eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS + FDSET_INCR
  * that is our safety margin. */
-#define REDIS_EVENTLOOP_FDSET_INCR (REDIS_MIN_RESERVED_FDS+96)
+#define REDIS_EVENTLOOP_FDSET_INCR (REDIS_MIN_RESERVED_FDS+96+REDIS_PRIVPORT_FDS)
 
 /* Hash table parameters */
 #define REDIS_HT_MINFILL        10      /* Minimal hash table fill 10% */
@@ -259,7 +260,8 @@
 #define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 
-#define REDIS_PRIVILIDGED_CLIENT (1<<17) 
+#define REDIS_PRIVPORT_CLIENT (1<<30)
+#define REDIS_PRIVILIDGED_CLIENT (1<<31) 
 
 /* Client request types */
 #define REDIS_REQ_INLINE 1
@@ -742,7 +744,8 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
     /* Networking */
     int port;                   /* TCP listening port */
-	int tcp_backlog;            /* TCP listen() backlog */
+    int privport;
+    int tcp_backlog;            /* TCP listen() backlog */
     char *bindaddr[REDIS_BINDADDR_MAX]; /* Addresses we should bind to */
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
     char *unixsocket;           /* UNIX socket path */
@@ -921,6 +924,7 @@ struct redisServer {
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
     int protects_used;              /* Whether any objects are protected */
+    int currentPrivPortClients;     /* how many clients came through the priv port */
     /* Blocked clients */
     unsigned int bpop_blocked_clients; /* Number of clients blocked by lists */
     list *unblocked_clients; /* list of clients to unblock before next loop */

@@ -272,7 +272,7 @@ struct redisCommand redisCommandTable[] = {
     {"client",clientCommand,-2,"arl",0,NULL,0,0,0,0,0},
     {"eval",evalCommand,-3,"s",0,zunionInterGetKeys,0,0,0,0,0},
     {"evalsha",evalShaCommand,-3,"s",0,zunionInterGetKeys,0,0,0,0,0},
-    {"slowlog",slowlogCommand,-2,"r",0,NULL,0,0,0,0,0},
+    {"slowlog",slowlogCommand,-2,"rl",0,NULL,0,0,0,0,0},
     {"script",scriptCommand,-2,"ras",0,NULL,0,0,0,0,0},
     {"time",timeCommand,1,"rR",0,NULL,0,0,0,0,0},
     {"bitop",bitopCommand,-4,"wm",0,NULL,2,-1,1,0,0},
@@ -1041,7 +1041,7 @@ void updateCpuTime() {
     mstime_t time_delta = server.mstime - server.cpu_time_lastreported;
     unsigned long long cpu_delta = ms_usage_now - server.cpu_time_lastusage_ms;
 
-    server.cpu_time_ms_per_sec = cpu_delta * 1000 / time_delta;
+    server.cpu_time_ms_per_sec = (int)(cpu_delta * 1000 / time_delta);
     server.cpu_time_lastusage_ms = ms_usage_now;
     server.cpu_time_lastreported = server.mstime;
 }
@@ -1472,6 +1472,7 @@ void initServerConfig() {
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
 #endif
     server.port = REDIS_SERVERPORT;
+    server.privport = 0;
     server.tcp_backlog = REDIS_TCP_BACKLOG;
     server.bindaddr_count = 0;
     server.unixsocket = NULL;
@@ -1533,6 +1534,7 @@ void initServerConfig() {
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
     server.protects_used = 0;
+    server.currentPrivPortClients = 0;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
     server.activerehashing = REDIS_DEFAULT_ACTIVE_REHASHING;
     server.notify_keyspace_events = 0;
@@ -1827,6 +1829,7 @@ void initServer() {
 #ifdef _WIN32
     HMODULE lib;
 #endif
+    int privFDbegin, privFDend;
 
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -1872,6 +1875,12 @@ void initServer() {
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
         exit(1);
+
+    privFDbegin = server.ipfd_count;
+    if (server.privport != 0 &&
+        listenToPort(server.privport, server.ipfd, &server.ipfd_count) == REDIS_ERR)
+        exit(1);
+    privFDend = server.ipfd_count;
 
     /* Open the listening Unix domain socket. */
     if (server.unixsocket != NULL) {
@@ -1943,8 +1952,9 @@ void initServer() {
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
     for (j = 0; j < server.ipfd_count; j++) {
+        int * data = (j >= privFDbegin && j < privFDend) ? (int*) - 1 : NULL;
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
-            acceptTcpHandler,NULL) == AE_ERR)
+            acceptTcpHandler,data) == AE_ERR)
             {
                 redisPanic(
                     "Unrecoverable error creating server.ipfd file event.");

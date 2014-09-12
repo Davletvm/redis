@@ -130,6 +130,11 @@ void loadServerConfigFromString(char *config) {
             if (server.port < 0 || server.port > 65535) {
                 err = "Invalid port"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "privport") && argc == 2) {
+            server.privport = atoi(argv[1]);
+            if (server.privport < 0 || server.privport > 65535) {
+                err = "Invalid privport"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "tcp-backlog") && argc == 2) {
             server.tcp_backlog = atoi(argv[1]);
             if (server.tcp_backlog < 0) {
@@ -1113,6 +1118,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("slowlog-max-len",
             server.slowlog_max_len);
     config_get_numerical_field("port",server.port);
+    config_get_numerical_field("privport", server.privport);
     config_get_numerical_field("tcp-backlog", server.tcp_backlog);
     config_get_numerical_field("databases",server.dbnum);
     config_get_numerical_field("repl-ping-slave-period",server.repl_ping_slave_period);
@@ -1856,6 +1862,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"daemonize",server.daemonize,0);
     rewriteConfigStringOption(state,"pidfile",server.pidfile,REDIS_DEFAULT_PID_FILE);
     rewriteConfigNumericalOption(state,"port",server.port,REDIS_SERVERPORT);
+    rewriteConfigNumericalOption(state, "privport", server.privport, 0);
     rewriteConfigNumericalOption(state, "tcp-backlog", server.tcp_backlog, REDIS_TCP_BACKLOG);
     rewriteConfigBindOption(state);
     rewriteConfigStringOption(state,"unixsocket",server.unixsocket,NULL);
