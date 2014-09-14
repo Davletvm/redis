@@ -146,8 +146,18 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
 
     areq = sockstate->reqs;
     if (areq == NULL) {
-        errno = EWOULDBLOCK;
-        return SOCKET_ERROR;
+        acceptsock = accept(fd, sa, len);
+        if (acceptsock == INVALID_SOCKET) {
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK) {
+                errno = EWOULDBLOCK;
+            } else {
+                errno = err;
+            }
+            return SOCKET_ERROR;
+        }
+        aeWinSocketAttach(acceptsock);
+        return acceptsock;
     }
 
     sockstate->reqs = areq->next;
@@ -181,7 +191,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     zfree(areq);
 
     /* queue another accept */
-    if (aeWinQueueAccept(fd) == -1) {
+    if (0 && aeWinQueueAccept(fd) == -1) {
         redisLog(REDIS_WARNING, "aeWinAccept - queueAccept failed");
         return SOCKET_ERROR;
     }

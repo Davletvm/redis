@@ -1075,6 +1075,7 @@ private:
         freeaddrinfo = redis_freeaddrinfo_impl;
         getaddrinfo = redis_getaddrinfo_impl;
         inet_ntop = redis_inet_ntop_impl;
+        accept = redis_accept_impl;
     }
 
     ~Win32_FDSockMap() {
