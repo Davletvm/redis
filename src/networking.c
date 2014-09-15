@@ -630,7 +630,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
 
         }
-        redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+        redisLog(REDIS_VERBOSE,"[AGG] Accepted %s", cip);
         success = TRUE;
         acceptCommonHandler(cfd, (privdata && server.privilidgeEnabled) ? (REDIS_PRIVILIDGED_CLIENT | REDIS_PRIVPORT_CLIENT) : 0);
     }
@@ -1397,13 +1397,13 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 #ifdef _WIN32
             redisLog(REDIS_VERBOSE, "Reading from client: %s",wsa_strerror(errno));
 #else
-            redisLog(REDIS_VERBOSE, "Reading from client: %s",strerror(errno));
+            redisLog(REDIS_VERBOSE, "[AGG] Reading from client: %s",strerror(errno));
 #endif
             freeClient(c);
             return;
         }
     } else if (nread == 0) {
-        redisLog(REDIS_VERBOSE, "Client closed connection");
+        redisLog(REDIS_VERBOSE, "[AGG] Client closed connection");
         freeClient(c);
         return;
     }
