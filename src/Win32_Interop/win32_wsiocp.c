@@ -191,7 +191,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     zfree(areq);
 
     /* queue another accept */
-    if (0 && aeWinQueueAccept(fd) == -1) {
+    if (aeWinQueueAccept(fd) == -1) {
         redisLog(REDIS_WARNING, "aeWinAccept - queueAccept failed");
         return SOCKET_ERROR;
     }
