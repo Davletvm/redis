@@ -1395,9 +1395,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             nread = 0;
         } else {
 #ifdef _WIN32
-            redisLog(REDIS_VERBOSE, "Reading from client: %s",wsa_strerror(errno));
+            redisLog(REDIS_VERBOSE, "[AGG] Reading from client: %s",wsa_strerror(errno));
 #else
-            redisLog(REDIS_VERBOSE, "[AGG] Reading from client: %s",strerror(errno));
+            redisLog(REDIS_VERBOSE, "Reading from client: %s",strerror(errno));
 #endif
             freeClient(c);
             return;
