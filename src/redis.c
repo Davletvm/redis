@@ -262,6 +262,7 @@ struct redisCommand redisCommandTable[] = {
     {"privilidge", privilidgeClientCommand, -1, "arltM", 0, NULL, 0, 0, 0, 0, 0 },
     {"protect", protectkeyCommand, -2, "w",0,noPreloadGetKeys, 1, -1, 1, 0, 0 },
     {"unprotect", unprotectkeyCommand, -2, "w", 0, noPreloadGetKeys, 1, -1, 1, 0, 0 },
+    {"setclientaddr", setclientaddrCommand, 2, "raltM", 0, NULL, 0, 0, 0, 0, 0 },
     {"isprotect", isprotectkeyCommand, 2, "r", 0, NULL, 1, 1, 1, 0, 0 },
     {"watch",watchCommand,-2,"rs",0,noPreloadGetKeys,1,-1,1,0,0},
     {"unwatch",unwatchCommand,1,"rs",0,NULL,0,0,0,0,0},
@@ -2252,6 +2253,11 @@ int processCommand(redisClient *c) {
         return REDIS_ERR;
     }
 
+    if (c->lastcmd) {
+        c->flags &= ~REDIS_FIRST_COMMAND;
+    } else {
+        c->flags |= REDIS_FIRST_COMMAND;
+    }
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
@@ -2267,7 +2273,11 @@ int processCommand(redisClient *c) {
     }
 
     /* Check if the user is authenticated */
-    if ((server.requirepass || server.requirepass2) && !c->authenticated && c->cmd->proc != authCommand && c->cmd->proc != privilidgeClientCommand)
+    if ((server.requirepass || server.requirepass2) 
+        && !c->authenticated 
+        && c->cmd->proc != authCommand 
+        && c->cmd->proc != privilidgeClientCommand 
+        && c->cmd->proc != setclientaddrCommand)
     {
         flagTransaction(c);
         addReply(c,shared.noautherr);
@@ -2365,6 +2375,7 @@ int processCommand(redisClient *c) {
     /* Lua script too slow? Only allow a limited number of commands. */
     if (server.lua_timedout &&
           c->cmd->proc != authCommand &&
+          c->cmd->proc != setclientaddrCommand &&
           c->cmd->proc != replconfCommand &&
         !(c->cmd->proc == shutdownCommand &&
           c->argc == 2 &&

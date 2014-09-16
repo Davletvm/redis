@@ -1589,6 +1589,17 @@ sds getAllClientsInfoString(redisClient * cc) {
     return o;
 }
 
+
+// this commands returns nothing
+void setclientaddrCommand(redisClient *c) {
+    if (!(c->flags & REDIS_FIRST_COMMAND)) return;
+    if (c->peerid)
+        c->peerid = sdscpy(c->peerid, c->argv[1]->ptr);
+    else
+        c->peerid = sdsnew(c->argv[1]->ptr);
+}
+
+
 void clientCommand(redisClient *c) {
     listNode *ln;
     listIter li;

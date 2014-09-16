@@ -260,6 +260,7 @@
 #define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 
+#define REDIS_FIRST_COMMAND (1 << 29)
 #define REDIS_PRIVPORT_CLIENT (1<<30)
 #define REDIS_PRIVILIDGED_CLIENT (1<<31) 
 
@@ -1589,6 +1590,7 @@ void punsubscribeCommand(redisClient *c);
 void publishCommand(redisClient *c);
 void pubsubCommand(redisClient *c);
 void setkeyspacescriptCommand(redisClient *c);
+void setclientaddrCommand(redisClient *c);
 void protectkeyCommand(redisClient *c);
 void unprotectkeyCommand(redisClient *c);
 void isprotectkeyCommand(redisClient *c);
