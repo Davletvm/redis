@@ -1436,11 +1436,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *biggest_input_buffer,
                           unsigned long *writes_outstanding,
-                          unsigned long *total_sent_bytes) {
+                          unsigned long long *total_sent_bytes) {
     redisClient *c;
     listNode *ln;
     listIter li;
-    unsigned long lol = 0, bib = 0, wo = 0, tsb = 0;
+    unsigned long lol = 0, bib = 0, wo = 0;
+    unsigned long long tsb = 0;
 
     listRewind(server.clients,&li);
     while ((ln = listNext(&li)) != NULL) {
@@ -1806,7 +1807,7 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
  * Note: this function is very fast so can be called as many time as
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. */
-unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
+unsigned long long getClientOutputBufferMemoryUsage(redisClient *c) {
     unsigned long list_item_size = sizeof(listNode)+sizeof(robj);
 
     return c->reply_bytes + c->sent_bytes + (list_item_size*listLength(c->reply));
@@ -1852,7 +1853,7 @@ char *getClientTypeName(int class) {
  *               Otherwise zero is returned. */
 int checkClientOutputBufferLimits(redisClient *c) {
     int soft = 0, hard = 0, class;
-    unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+    unsigned long long used_mem = getClientOutputBufferMemoryUsage(c);
 
     class = getClientType(c);
     if (server.client_obuf_limits[class].hard_limit_bytes &&
@@ -1893,7 +1894,7 @@ int checkClientOutputBufferLimits(redisClient *c) {
  * called from contexts where the client can't be freed safely, i.e. from the
  * lower level functions pushing data inside the client output buffers. */
 void asyncCloseClientOnOutputBufferLimitReached(redisClient *c) {
-    redisAssert(c->reply_bytes < ULONG_MAX-(1024*64));
+
     if (c->reply_bytes == 0 || c->flags & REDIS_CLOSE_ASAP) return;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);

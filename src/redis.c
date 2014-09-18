@@ -1069,14 +1069,17 @@ int forkCleanupCron(struct aeEventLoop *eventLoop, long long id, void *clientDat
 }
 
 
-
 /* We take a cached value of the unix time in the global state because with
  * virtual memory and aging there is to store the current time in objects at
  * every object access, and accuracy is not needed. To access a global var is
  * a lot faster than calling time(NULL) */
 void updateCachedTime(void) {
     server.unixtime = time(NULL);
+    long long prevtime = server.mstime;
     server.mstime = mstime();
+    if (server.mstime - prevtime > 1000 && prevtime && !server.loading) {
+        redisLog(REDIS_WARNING, "[AGG] Slowdown in event loop.  More than a second between iterations.");
+    }
 }
 
 
@@ -3267,7 +3270,7 @@ int freeMemoryIfNeeded(void) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
             redisClient *slave = listNodeValue(ln);
-            unsigned long obuf_bytes = getClientOutputBufferMemoryUsage(slave);
+            unsigned long long obuf_bytes = getClientOutputBufferMemoryUsage(slave);
             if (obuf_bytes > mem_used)
                 mem_used = 0;
             else

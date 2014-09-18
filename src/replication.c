@@ -584,11 +584,11 @@ void updateThrottleState() {
         }
     }
 
-    long long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
+    unsigned long long outputBufferNow = getClientOutputBufferMemoryUsage(inm->slave);
 
     long long outputBufferGrowth = 0;
     mstime_t estimatedTimeToCompletion = 0;
-    long long outputBufferMax = 0;
+    unsigned long long outputBufferMax = 0;
     long long outputBufferSpaceLeft = 0;
     long long outputBufferGrowthRatePS = 0;
     long long outputBufferGrowthMaxRatePS = 0;
@@ -597,6 +597,7 @@ void updateThrottleState() {
         outputBufferGrowth = outputBufferNow - inm->throttle.outputBufferAtStart;
         if (outputBufferGrowth > 0) {
             estimatedTimeToCompletion = dataRemaining / replTransferSpeedNow;
+            if (estimatedTimeToCompletion == 0) estimatedTimeToCompletion = 1;
             outputBufferMax = (long long) server.client_obuf_limits[REDIS_CLIENT_TYPE_SLAVE].hard_limit_bytes;
             outputBufferMax -= outputBufferMax / 5;
             outputBufferSpaceLeft = outputBufferMax - outputBufferNow;

@@ -503,8 +503,8 @@ typedef struct redisClient {
     int multibulklen;       /* number of multi bulk arguments left to read */
     long bulklen;           /* length of bulk argument in multi bulk request */
     list *reply;
-    unsigned long reply_bytes; /* Tot bytes of objects in reply list */
-    unsigned long sent_bytes; /* Tot bytes of objects which are buffers given to socket */
+    unsigned long long reply_bytes; /* Tot bytes of objects in reply list */
+    unsigned long long sent_bytes; /* Tot bytes of objects which are buffers given to socket */
     unsigned long outstanding_writes; /* Number of socket callbacks expected */
     int sentlen;            /* Amount of bytes already sent in the current
                                buffer or object being sent. */
@@ -640,7 +640,7 @@ typedef struct redisThrottling {
     list * throttledClients;
     int state;
     int consecutiveThrottled;
-    long outputBufferAtStart;
+    unsigned long long outputBufferAtStart;
     size_t dataTransferredAtStart;
     size_t replTransferredAtStart;    
     int accepted;
@@ -770,7 +770,7 @@ struct redisServer {
     struct redisCommand *delCommand, *multiCommand, *lpushCommand, *lpopCommand,
         *rpopCommand, *setkeyspacescriptCommand, *evalShaCommand, *evalCommand, *execCommand;
     /* Fields used only for stats */
-    unsigned long orphaned_sent_bytes; /* Tot bytes of objects which are buffers given to socket */
+    unsigned long long orphaned_sent_bytes; /* Tot bytes of objects which are buffers given to socket */
     unsigned long orphaned_outstanding_writes; /* Number of socket callbacks expected */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -1138,14 +1138,14 @@ void *dupClientReplyValue(void *o);
 void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *biggest_input_buffer,
                           unsigned long *writes_outstanding,
-                          unsigned long *total_sent_bytes);
+                          unsigned long long *total_sent_bytes);
 void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port);
 char *getClientPeerId(redisClient *client);
 sds catClientInfoString(sds s, redisClient *client);
-sds getAllClientsInfoString(void);
+sds getAllClientsInfoString(redisClient *c);
 void rewriteClientCommandVector(redisClient *c, int argc, ...);
 void rewriteClientCommandArgument(redisClient *c, int i, robj *newval);
-unsigned long getClientOutputBufferMemoryUsage(redisClient *c);
+unsigned long long getClientOutputBufferMemoryUsage(redisClient *c);
 void freeClientsInAsyncFreeQueue(void);
 void asyncCloseClientOnOutputBufferLimitReached(redisClient *c);
 int getClientType(redisClient *c);
