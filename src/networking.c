@@ -936,7 +936,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             result = aeWinSocketSend(fd,c->buf+c->sentlen, nwritten,
                                         el, c, c->buf, sendReplyBufferDone);
             if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-                redisLog(REDIS_VERBOSE, "Error writing to client: %s", wsa_strerror(errno));
+                redisLog(REDIS_VERBOSE, "[AGG] Error writing to client: %s", wsa_strerror(errno));
                 freeClient(c);
                 return;
             }
@@ -961,7 +961,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                                         el, c, o, sendReplyListDone);
             if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
                 redisLog(REDIS_VERBOSE,
-                    "Error writing to client: %s", wsa_strerror(errno));
+                    "[AGG] Error writing to client: %s", wsa_strerror(errno));
                 decrRefCount(o);
                 freeClient(c);
                 return;
