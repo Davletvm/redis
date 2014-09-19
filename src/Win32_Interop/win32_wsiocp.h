@@ -72,5 +72,8 @@ typedef void fnDelSockState(void *apistate, aeSockState *sockState);
 void aeWinInit(void *state, HANDLE iocp, fnGetSockState *getSockState, fnDelSockState *delSockState);
 void aeWinCleanup();
 
+void * AllocMemoryNoCOW(size_t size);
+void FreeMemoryNoCOW(void * ptr);
+
 #endif
 #endif

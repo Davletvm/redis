@@ -2621,7 +2621,8 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
     struct rusage self_ru, c_ru;
-    unsigned long lol, bib, two, tsb;
+    unsigned long lol, bib, two;
+    unsigned long long tsb;
     int allsections = 0, defsections = 0;
     int sections = 0;
 

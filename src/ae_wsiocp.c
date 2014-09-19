@@ -98,8 +98,8 @@ aeSockState *aeGetSockState(void *apistate, int fd) {
         }
         node = listNextNode(node);
     }
-        // not found. Do lazy create of sockState.
-        sockState = (aeSockState *)zmalloc(sizeof(aeSockState));
+    // not found. Do lazy create of sockState.
+    sockState = (aeSockState *)AllocMemoryNoCOW(sizeof(aeSockState));
     if (sockState != NULL) {
         sockState->fd = fd;
         sockState->masks = 0;
@@ -111,7 +111,7 @@ aeSockState *aeGetSockState(void *apistate, int fd) {
         if (listAddNodeHead(socklist, sockState) != NULL) {
             return sockState;
         } else {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
         }
     }
     return NULL;
@@ -169,13 +169,13 @@ void aeDelSockState(void *apistate, aeSockState *sockState) {
         sindex = aeSocketIndex(sockState->fd);
         socklist = &(((aeApiState *)apistate)->lookup[sindex]);
         if (removeMatchFromList(socklist, sockState) == 1) {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
             return;
         }
         // try closing list
         socklist = &(((aeApiState *)apistate)->closing);
         if (removeMatchFromList(socklist, sockState) == 1) {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
             return;
         }
     } else {
@@ -289,7 +289,7 @@ static void aeApiFree(aeEventLoop *eventLoop) {
             state->iocp = NULL;
         }
         DeleteCriticalSection(&(state->threadCS));
-        zfree(state);
+        FreeMemoryNoCOW(state);
     }
     eventLoop->apidata = NULL;
     aeWinCleanup();
@@ -300,7 +300,7 @@ static void aeApiFree(aeEventLoop *eventLoop) {
 /* Called by ae to initialize state */
 static int aeApiCreate(aeEventLoop *eventLoop) {
     HMODULE kernel32_module;
-    aeApiState *state = (aeApiState *)zcalloc(sizeof(aeApiState));
+    aeApiState *state = (aeApiState *)AllocMemoryNoCOW(sizeof(aeApiState));
 
     if (!state) return -1;
 
@@ -377,14 +377,14 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
         if ((sockstate->masks & CONNECT_PENDING) == 0) {
             // if no write active, then need to queue write ready
             if (sockstate->wreqs == 0) {
-                asendreq *areq = (asendreq *)zmalloc(sizeof(asendreq));
+                asendreq *areq = (asendreq *)AllocMemoryNoCOW(sizeof(asendreq));
                 memset(areq, 0, sizeof(asendreq));
                 if (PostQueuedCompletionStatus(state->iocp,
                                             0,
                                             fd,
                                             &areq->ov) == 0) {
                     errno = GetLastError();
-                    zfree(areq);
+                    FreeMemoryNoCOW(areq);
                     return -1;
                 }
                 sockstate->wreqs++;
@@ -567,7 +567,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                                 areq->proc(areq->eventLoop, rfd, &areq->req, (int)written);
                             }
                             sockstate->wreqs--;
-                            zfree(areq);
+                            FreeMemoryNoCOW(areq);
                             /* if no active write requests, set ready to write */
                             if (sockstate->wreqs == 0 && sockstate->masks & AE_WRITABLE) {
                                 eventLoop->fired[numevents].fd = rfd;
@@ -611,7 +611,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                             if (areq->proc != NULL)
                                 areq->proc(areq->eventLoop, rfd, &areq->req, -1);
                             sockstate->wreqs--;
-                            zfree(areq);
+                            FreeMemoryNoCOW(areq);
                         }
                     }
                     if (sockstate->wreqs == 0 &&
