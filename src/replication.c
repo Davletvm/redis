@@ -721,21 +721,22 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     inm->countBuffersImmediatelyAvailable = inm->countBuffersImmediatelyAvailableChild[0];
     inm->countWaitedForBuffers = inm->countWaitedForBuffersChild[0];
     aeSetReadyForCallback(el);
-    while (howManyReady) {
-        int minId = INT_MAX;
+    while (TRUE) {
+        BOOL sent = FALSE;
         for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
-            if (sendReady[x] && inm->sequence[x] < minId) {
-                minId = inm->sequence[x];
-            }
-        }
-        for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
-            if (sendReady[x] && inm->sequence[x] == minId) {
+            if (sendReady[x] && inm->sequence[x] == inm->curSequence) {
+                inm->curSequence++;
                 sendInMemoryBuffersToSlaveSpecific(el, x);
                 sendReady[x] = 0;
                 howManyReady--;
+                sent = TRUE;
                 break;
             }
         }
+        if (!howManyReady || !sent) break;
+    }
+    if (howManyReady) {
+        redisLog(REDIS_NOTICE, "Unable to send out of sequence.  Waiting for next call.");
     }
 }
 
@@ -1323,6 +1324,13 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
     // check if we have just readin the complete control block at the beginning of the stream
     if (!inm->sendControlWrite.sizeOfThis && inm->posBufferWritten >= sizeof(redisInMemoryReplSendControl)) {
         memcpy(&inm->sendControlWrite, inm->buffer, sizeof(redisInMemoryReplSendControl));
+        if (inm->sendControlWrite.offset != 0) {
+            redisLog(REDIS_WARNING, "Bad sequence (%lld) for first block in repl-inmemory.  Aborting", inm->sendControlWrite.offset);
+            inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
+            replicationAbortSyncTransfer();
+            return;
+        }
+        inm->expectedSequence = 1;
         inm->sendControlWrite.offset = 0;
         memcpy(&inm->sendControlRead, &inm->sendControlWrite, sizeof(redisInMemoryReplSendControl));
         inm->posBufferRead = sizeof(redisInMemoryReplSendControl);
@@ -1334,6 +1342,13 @@ void readSyncBulkPayloadInMemoryCallback(aeEventLoop *el, int fd, void *privdata
             // move the write control block forward to that next one
             off_t offsetOfNewControl = inm->sendControlWrite.offset + inm->sendControlWrite.sizeOfThis;
             memcpy(&inm->sendControlWrite, inm->buffer + offsetOfNewControl - inm->posBufferStartOffset, sizeof(redisInMemoryReplSendControl));
+            if (inm->sendControlWrite.offset && inm->sendControlWrite.offset != inm->expectedSequence) {
+                redisLog(REDIS_WARNING, "Bad sequence (%lld) for (%d)th block in repl-inmemory.  Aborting", inm->sendControlWrite.offset, inm->expectedSequence);
+                inm->endStateFlags |= INMEMORY_ENDSTATE_ERROR;
+                replicationAbortSyncTransfer();
+                return;
+            }
+            inm->expectedSequence++;
             inm->sendControlWrite.offset = offsetOfNewControl;
         }
         // if we don't have another control block in the stream, and we have read through the whole of this one, mark that we have found the end.

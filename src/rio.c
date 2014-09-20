@@ -120,8 +120,7 @@ void SendActiveBufferIM(redisInMemoryReplSend * inm)
         else
             inm->controlAlias[inm->prevActiveBuffer]->sizeOfNext = 0;
         inm->sendState[inm->prevActiveBuffer] = INMEMORY_STATE_READYTOSEND;
-        inm->controlAlias[inm->prevActiveBuffer]->offset = 0;
-        inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
+        inm->controlAlias[inm->prevActiveBuffer]->offset = inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
         redisLog(REDIS_DEBUG, "Ready to send buffer %d, sequence:%d", inm->prevActiveBuffer, inm->sequence[inm->prevActiveBuffer]);
         ResetEvent(inm->sentDoneEvents[inm->prevActiveBuffer]);
         SetEvent(inm->doSendEvents[inm->prevActiveBuffer]);
