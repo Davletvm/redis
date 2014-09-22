@@ -679,6 +679,7 @@ typedef struct redisInMemoryReplReceive {
     mstime_t replStart;
     int endStateFlags;
     time_t lastTick;
+    int expectedSequence;
 } redisInMemoryReplReceive;
 
 #define INMEMORY_STATE_INVALID -1
