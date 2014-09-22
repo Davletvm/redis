@@ -709,7 +709,6 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
         sendReady[x] = rval == WAIT_OBJECT_0;
         if (sendReady[x]) {
             howManyReady++;
-            ResetEvent(inm->doSendEvents[x]);
         }
         if (!sendReady[x] && rval != WAIT_TIMEOUT) {
             redisLog(REDIS_NOTICE, "Cannot send in memmory data to slave on Handle %d", x);
@@ -720,12 +719,12 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     if (!howManyReady) return; 
     inm->countBuffersImmediatelyAvailable = inm->countBuffersImmediatelyAvailableChild[0];
     inm->countWaitedForBuffers = inm->countWaitedForBuffersChild[0];
-    aeSetReadyForCallback(el);
     while (TRUE) {
         BOOL sent = FALSE;
         for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
             if (sendReady[x] && inm->sequence[x] == inm->curSequence) {
                 inm->curSequence++;
+                ResetEvent(inm->doSendEvents[x]);
                 sendInMemoryBuffersToSlaveSpecific(el, x);
                 sendReady[x] = 0;
                 howManyReady--;
@@ -738,6 +737,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id) {
     if (howManyReady) {
         redisLog(REDIS_NOTICE, "Unable to send out of sequence.  Waiting for next call.");
     }
+    aeSetReadyForCallback(el);
 }
 
 
