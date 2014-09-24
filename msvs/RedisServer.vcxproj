@@ -222,6 +222,7 @@
     <ClCompile Include="..\src\aof.c" />
     <ClCompile Include="..\src\bio.c" />
     <ClCompile Include="..\src\bitops.c" />
+    <ClCompile Include="..\src\checkdb.c" />
     <ClCompile Include="..\src\config.c" />
     <ClCompile Include="..\src\crc64.c" />
     <ClCompile Include="..\src\db.c" />

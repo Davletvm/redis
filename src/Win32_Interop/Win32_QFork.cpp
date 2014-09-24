@@ -1237,6 +1237,12 @@ void SetupLogging() {
     }
 }
 
+
+void GetHeapExtent(HeapExtent * pextent) {
+    pextent->heapStart = g_pQForkControl->heapStart;
+    pextent->heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize);
+}
+
 extern "C"
 {
     // The external main() is redefined as redis_main() by Win32_QFork.h.
@@ -1296,3 +1302,6 @@ extern "C"
         }
     }
 }
+
+
+
