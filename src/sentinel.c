@@ -2958,7 +2958,7 @@ void sentinelRoleCommand(redisClient *c) {
 
     addReplyMultiBulkLen(c,2);
     addReplyBulkCBuffer(c,"sentinel",8);
-    addReplyMultiBulkLen(c,dictSize(sentinel.masters));
+    addReplyMultiBulkLen(c,(long)dictSize(sentinel.masters));
 
     di = dictGetIterator(sentinel.masters);
     while((de = dictNext(di)) != NULL) {

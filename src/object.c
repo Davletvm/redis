@@ -405,7 +405,7 @@ int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
 
         minlen = (alen < blen) ? alen : blen;
         cmp = memcmp(astr,bstr,minlen);
-        if (cmp == 0) return alen-blen;
+        if (cmp == 0) return (int)(alen-blen);
         return cmp;
     }
 }
@@ -622,7 +622,7 @@ robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
 }
 
 /* Object command allows to inspect the internals of an Redis Object.
- * Usage: OBJECT <verb> ... arguments ... */
+ * Usage: OBJECT <refcount|encoding|idletime> <key> */
 void objectCommand(redisClient *c) {
     robj *o;
 

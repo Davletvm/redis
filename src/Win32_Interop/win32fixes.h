@@ -274,9 +274,10 @@ int w32initWinSock(void);
 void *mmap(void *start, size_t length, int prot, int flags, int fd, off offset);
 int munmap(void *start, size_t length);
 
-int fork(void);
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 time_t gettimeofdaysecs(unsigned int *usec);
+
+char *ctime_r(const time_t *clock, char *buf);
 
 /* strtod does not handle Inf and Nan
 We need to do the check before calling strtod */
@@ -304,7 +305,8 @@ int aeWinSocketSend(int fd, char *buf, int len,
                     void *eventLoop, void *client, void *data, void *proc);
 int aeWinListen(int rfd, int backlog);
 int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len);
-int aeWinSocketConnect(int fd, const struct sockaddr *sa, int len);
+int aeWinSocketConnect(int fd, const SOCKADDR_STORAGE *ss);
+int aeWinSocketConnectBind(int fd, const SOCKADDR_STORAGE *ss, const char* source_addr);
 
 int strerror_r(int err, char* buf, size_t buflen);
 char *wsa_strerror(int err);

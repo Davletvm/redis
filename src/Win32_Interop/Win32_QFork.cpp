@@ -205,6 +205,58 @@ HANDLE RegisterMiniDumpHandler() {
 }
 
 
+bool ReportSpecialSystemErrors(int error) {
+    switch (error)
+    {
+        case ERROR_COMMITMENT_LIMIT:
+        {
+            ::redisLog(
+                REDIS_WARNING,
+                "\n"
+                "The Windows version of Redis allocates a memory mapped heap for sharing with\n"
+                "the forked process used for persistence operations. In order to share this\n"
+                "memory, Windows allocates from the system paging file a portion equal to the\n"
+                "size of the Redis heap. At this time there is insufficient contiguous free\n"
+                "space available in the system paging file for this operation (Windows error \n"
+                "0x5AF). To work around this you may either increase the size of the system\n"
+                "paging file, or decrease the size of the Redis heap with the --maxheap flag.\n"
+                "Sometimes a reboot will defragment the system paging file sufficiently for \n"
+                "this operation to complete successfully.\n"
+                "\n"
+                "Please see the documentation included with the binary distributions for more \n"
+                "details on the --maxheap flag.\n"
+                "\n"
+                "Redis can not continue. Exiting."
+                );
+            return true;
+        }
+
+        case ERROR_DISK_FULL:
+        {
+            ::redisLog(
+                REDIS_WARNING,
+                "\n"
+                "The Windows version of Redis allocates a large memory mapped file for sharing\n" 
+                "the heap with the forked process used in persistence operations. This file\n" 
+                "will be created in the current working directory. Windows is reporting that\n"
+                "there is insufficient disk space available for this file (Windows error 0x70).\n" 
+                "You may fix this problem by either reducing the size of the Redis heap with\n"
+                "the --maxheap flag, or by starting redis from a working directory with\n"
+                "sufficient space available for the Redis heap. \n"
+                "\n"
+                "Please see the documentation included with the binary distributions for more \n"
+                "details on the --maxheap flag.\n"
+                "\n"
+                "Redis can not continue. Exiting."
+                );
+            return true;
+        }
+    
+        default:
+            return false;
+    }
+}
+
 BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
     SmartHandle shParent;
     SmartHandle shMMFile;
@@ -328,15 +380,17 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         g_pQForkControl = NULL;
         return TRUE;
     }
-    catch (std::system_error syserr) {
-        redisLog(REDIS_WARNING, "QForkSlaveInit: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
-        if (g_pQForkControl != NULL) {
-            if(g_pQForkControl->operationFailed != NULL) {
-                SetEvent(g_pQForkControl->operationFailed);
-            }
+    catch(std::system_error syserr) {
+        if (ReportSpecialSystemErrors(syserr.code().value()) == false) {
+            ::redisLog(REDIS_WARNING, "QForkSlaveInit: system error caught. error code=0x%08x, message=%s\n", syserr.code().value(), syserr.what());
             g_pQForkControl = NULL;
+            if (g_pQForkControl != NULL) {
+                if (g_pQForkControl->operationFailed != NULL) {
+                    SetEvent(g_pQForkControl->operationFailed);
+                }
+            }
+            return FALSE;
         }
-        return FALSE;
     }
     catch(std::runtime_error runerr) {
         redisLog(REDIS_WARNING, "QForkSlaveInit: runtime error caught. message=%s", runerr.what());
@@ -473,7 +527,9 @@ BOOL QForkMasterInit() {
         return TRUE;
     }
     catch(std::system_error syserr) {
-        redisLog(REDIS_WARNING, "QForkMasterInit: system error caught. error code=0x%08x, message=%s", syserr.code().value(), syserr.what());
+        if (ReportSpecialSystemErrors(syserr.code().value()) == false) {
+            ::redisLog(REDIS_WARNING, "QForkMasterInit: system error caught. error code=0x%08x, message=%s\n", syserr.code().value(), syserr.what());
+        }
     }
     catch(std::runtime_error runerr) {
         redisLog(REDIS_WARNING, "QForkMasterInit: runtime error caught. message=%s", runerr.what());
@@ -662,16 +718,16 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         char arguments[_MAX_PATH];
         memset(arguments,0,_MAX_PATH);
         PROCESS_INFORMATION pi;
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-        sprintf_s(arguments, _MAX_PATH, "%s --%s %llu %lu", fileName, cQFork.c_str(), (uint64_t) g_hQForkControlFileMap, GetCurrentProcessId());
-        redisLog(REDIS_VERBOSE, "Launching child");
-        IFFAILTHROW(CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi), "Problem creating slave process" );
-        
-        g_hForkedProcess = pi.hProcess; // must CloseHandle on this
-        CloseHandle(pi.hThread);
+        sprintf_s(arguments, _MAX_PATH, "\"%s\" --%s %llu %lu", fileName, cQFork.c_str(), (uint64_t)g_hQForkControlFileMap, GetCurrentProcessId());
+        if (FALSE == CreateProcessA(fileName, arguments, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            throw system_error( 
+                GetLastError(),
+                system_category(),
+                "Problem creating slave process" );
+        }
+        (*childPID) = pi.dwProcessId;
+		g_hForkedProcess = pi.hProcess;
+		CloseHandle(pi.hThread);
 
         redisLog(REDIS_VERBOSE, "Waiting on forked process");
 

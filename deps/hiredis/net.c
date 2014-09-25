@@ -59,7 +59,7 @@
 #include "sds.h"
 #ifdef _WIN32
   #include "../../src/win32_Interop/win32fixes.h"
-  #include <mstcpip.h>
+  #include "mstcpip.h"
 #endif
 
 /* Defined in hiredis.c */
@@ -113,7 +113,7 @@ static int redisSetBlocking(redisContext *c, int blocking) {
     /* Set the socket nonblocking.
      * Note that fcntl(2) for F_GETFL and F_SETFL can't be
      * interrupted by a signal. */
-    if ((flags = fcntl(c->fd, F_GETFL, 0)) == -1) {
+    if ((flags = fcntl(c->fd, F_GETFL,0)) == -1) {
         __redisSetErrorFromErrno(c,REDIS_ERR_IO,"fcntl(F_GETFL)");
         redisContextCloseFd(c);
         return REDIS_ERR;
@@ -287,38 +287,26 @@ int redisContextSetTimeout(redisContext *c, const struct timeval tv) {
 }
 
 #ifdef _WIN32
-int redisContextPreConnectTcp(redisContext *c, const char *addr, int port,
-                            struct timeval *timeout, struct sockaddr_in *sa) {
+int redisContextPreConnectTcp(
+    redisContext *c, 
+    const char *addr, 
+    int port,
+    struct timeval *timeout, 
+    SOCKADDR_STORAGE* ss) {
     int blocking = (c->flags & REDIS_BLOCK);
-    unsigned long inAddress;
 
-    if (REDIS_OK != redisCreateSocket(c, AF_INET)) {
-        return REDIS_ERR;
+    if (ParseStorageAddress(addr, port, ss) == FALSE) {
+        DebugBreak();
     }
 
-    sa->sin_family = AF_INET;
-    sa->sin_port = htons(port);
-
-    inAddress = inet_addr(addr);
-    if (inAddress == INADDR_NONE || inAddress == INADDR_ANY) {
-        struct hostent *he;
-
-        he = gethostbyname(addr);
-        if (he == NULL) {
-            __redisSetError(c,REDIS_ERR_OTHER,
-                sdscatprintf(sdsempty(),"can't resolve: %s\n", addr));
-            close(c->fd);
-            return REDIS_ERR;
-        }
-        memcpy(&sa->sin_addr, he->h_addr, sizeof(struct in_addr));
-    } else {
-        sa->sin_addr.s_addr = inAddress;
+    if (REDIS_OK != redisCreateSocket(c, ss->ss_family)) {
+        return REDIS_ERR;
     }
 
     if (redisSetTcpNoDelay(c) != REDIS_OK)
         return REDIS_ERR;
 
-    if (blocking ==  0) {
+    if (blocking == 0) {
         if (redisSetBlocking(c, 0) != REDIS_OK)
             return REDIS_ERR;
     }
@@ -327,7 +315,7 @@ int redisContextPreConnectTcp(redisContext *c, const char *addr, int port,
 }
 #endif
 
-static int _redisContextConnectTcp(redisContext *c, const char *addr, int port, 
+static int _redisContextConnectTcp(redisContext *c, const char *addr, int port,
                                    const struct timeval *timeout,
                                    const char *source_addr) {
     int s, rv;
@@ -369,7 +357,7 @@ static int _redisContextConnectTcp(redisContext *c, const char *addr, int port,
                 goto error;
             }
             for (b = bservinfo; b != NULL; b = b->ai_next) {
-                if (bind(s,b->ai_addr,b->ai_addrlen) != -1) {
+                if (bind(s,b->ai_addr,(socklen_t)b->ai_addrlen) != -1) {
                     bound = 1;
                     break;
                 }
@@ -436,7 +424,6 @@ int redisContextConnectUnix(redisContext *c, const char *path, const struct time
 }
 #else
 int redisContextConnectUnix(redisContext *c, const char *path, const struct timeval *timeout) {
-    int s;
     int blocking = (c->flags & REDIS_BLOCK);
     struct sockaddr_un sa;
 

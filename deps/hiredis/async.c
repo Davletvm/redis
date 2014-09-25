@@ -77,7 +77,8 @@ void __redisAppendCommand(redisContext *c, char *cmd, size_t len);
 
 /* Functions managing dictionary of callbacks for pub/sub. */
 static unsigned int callbackHash(const void *key) {
-    return dictGenHashFunction((unsigned char*)key,(int)sdslen((char*)key));
+    return dictGenHashFunction((const unsigned char *)key,
+                               (int)sdslen((const sds)key));
 }
 
 static void *callbackValDup(void *privdata, const void *src) {
@@ -166,12 +167,24 @@ static void __redisAsyncCopyError(redisAsyncContext *ac) {
 
 #ifdef WIN32_IOCP
 redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
-    struct sockaddr_in sa;
-    redisContext *c = redisPreConnectNonBlock(ip, port, &sa);
+    SOCKADDR_STORAGE ss;
+    redisContext *c = redisPreConnectNonBlock(ip, port, &ss);
     redisAsyncContext *ac = redisAsyncInitialize(c);
-    if (aeWinSocketConnect(ac->c.fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (aeWinSocketConnect(ac->c.fd, &ss) != 0) {
+         ac->c.err = errno;
+        strerror_r(errno, ac->c.errstr, sizeof(ac->c.errstr));
+    }
+    __redisAsyncCopyError(ac);
+    return ac;
+}
+
+redisAsyncContext *redisAsyncConnectBind(const char *ip, int port, const char *source_addr) {
+    SOCKADDR_STORAGE ss;
+    redisContext *c = redisPreConnectNonBlock(ip, port, &ss);
+    redisAsyncContext *ac = redisAsyncInitialize(c);
+    if (aeWinSocketConnectBind(ac->c.fd, &ss, source_addr) != 0) {
         ac->c.err = errno;
-        strerror_r(errno,ac->c.errstr,sizeof(ac->c.errstr));
+        strerror_r(errno, ac->c.errstr, sizeof(ac->c.errstr));
     }
     __redisAsyncCopyError(ac);
     return ac;
@@ -194,15 +207,15 @@ redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
     __redisAsyncCopyError(ac);
     return ac;
 }
-#endif
 
 redisAsyncContext *redisAsyncConnectBind(const char *ip, int port,
     const char *source_addr) {
-    redisContext *c = redisConnectBindNonBlock(ip, port, source_addr);
+    redisContext *c = redisConnectBindNonBlock(ip,port,source_addr);
     redisAsyncContext *ac = redisAsyncInitialize(c);
     __redisAsyncCopyError(ac);
     return ac;
 }
+#endif
 
 redisAsyncContext *redisAsyncConnectUnix(const char *path) {
     redisContext *c;
@@ -548,10 +561,10 @@ void redisAsyncHandleRead(redisAsyncContext *ac) {
     } else {
         /* Always re-schedule reads */
 #ifdef _WIN32
-		// There appears to be a bug in the Linux version of _EL_ADD_READ which will not reschedule
-		// the read if already reading. This is a problem if there is a large number of async GET 
-		// operations. If the receive buffer is exhausted with the data returned, the read would
-		// not be rescheduled, and the async operations would cease. This forces the read to recur.
+        // There appears to be a bug in the Linux version of _EL_ADD_READ which will not reschedule
+        // the read if already reading. This is a problem if there is a large number of async GET 
+        // operations. If the receive buffer is exhausted with the data returned, the read would
+        // not be rescheduled, and the async operations would cease. This forces the read to recur.
         _EL_FORCE_ADD_READ(ac);
 #else
         _EL_ADD_READ(ac);

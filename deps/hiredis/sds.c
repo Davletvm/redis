@@ -324,7 +324,7 @@ int sdsll2str(char *s, long long value) {
         s++;
         p--;
     }
-    return l;
+    return (int)l;
 }
 
 /* Identical sdsll2str(), but for unsigned long long type. */
@@ -353,7 +353,7 @@ int sdsull2str(char *s, unsigned long long v) {
         s++;
         p--;
     }
-    return l;
+    return (int)l;
 }
 
 /* Create an sds string from a long long value. It is much faster than:
@@ -454,7 +454,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
 
     va_start(ap,fmt);
     f = fmt;    /* Next format specifier byte to process. */
-    i = initlen; /* Position of the next byte to write to dest str. */
+    i = (int)initlen; /* Position of the next byte to write to dest str. */
     while(*f) {
         char next, *str;
         int l;
@@ -475,7 +475,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
             case 's':
             case 'S':
                 str = va_arg(ap,char*);
-                l = (next == 's') ? strlen(str) : sdslen(str);
+                l = (int)((next == 's') ? strlen(str) : sdslen(str));
                 if (sh->free < l) {
                     s = sdsMakeRoomFor(s,l);
                     sh = (void*) (s-(sizeof(struct sdshdr)));

@@ -185,7 +185,7 @@ static char types[256][16];
 
 /* Return true if 't' is a valid object type. */
 int checkType(unsigned char t) {
-    /* In case a new object type is added, update the following 
+    /* In case a new object type is added, update the following
      * condition as necessary. */
     return
         (t >= REDIS_HASH_ZIPMAP && t <= REDIS_HASH_ZIPLIST) ||
@@ -558,7 +558,7 @@ entry loadEntry() {
         return e;
     } else {
         /* optionally consume expire */
-        if (e.type == REDIS_EXPIRETIME || 
+        if (e.type == REDIS_EXPIRETIME ||
             e.type == REDIS_EXPIRETIME_MS) {
             if (!processTime(e.type)) return e;
             if (!loadType(&e)) return e;
@@ -787,7 +787,7 @@ int main(int argc, char **argv) {
     if (fstat(fd, &stat) == -1) {
         ERROR("Cannot stat: %s\n", argv[1]);
     } else {
-        size = stat.st_size;
+        size = (off_t)stat.st_size;
     }
 
     if (sizeof(size_t) == sizeof(int32_t) && size >= INT_MAX) {
