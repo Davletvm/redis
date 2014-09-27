@@ -42,7 +42,7 @@ start_server {tags {"aofrw"}} {
         # Make sure that we remain the only connected client.
         # This step is needed to make sure there are no pending writes
         # that will be processed between the two "debug digest" calls.
-        wait_for_condition 50 100 {
+        wait_for_condition 50 150 {
             [llength [split [string trim [r client list]] "\n"]] == 1
         } else {
             puts [r client list]
@@ -61,7 +61,10 @@ start_server {tags {"aofrw"}} {
     }
 }
 
+foreach imr {yes no} {
+test "Testing with repl-inmemory $imr" {}
 start_server {tags {"aofrw"}} {
+    r config set repl-inmemory $imr
     test {Turning off AOF kills the background writing child if any} {
         r config set appendonly yes
         waitForBgrewriteaof r
@@ -70,7 +73,7 @@ start_server {tags {"aofrw"}} {
         r config set appendonly no
         r exec
         wait_for_condition 50 100 {
-            [string match {*Killing*AOF*child*} [exec tail -n5 < [srv 0 stdout]]]
+            [string match {*Killing*AOF*child*} [exec tail -n10 < [srv 0 stdout]]]
         } else {
             fail "Can't find 'Killing AOF child' into recent logs"
         }
@@ -207,4 +210,5 @@ start_server {tags {"aofrw"}} {
             after 100
         }
     }
+}
 }
