@@ -713,13 +713,16 @@ int rdbSave(char *filename) {
         /* Write the SELECT DB opcode */
         if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto werr;
         if (rdbSaveLen(&rdb,j) == -1) goto werr;
-
+        int z = 0;
         /* Iterate this DB writing every entry */
         while((de = dictNext(di)) != NULL) {
             sds keystr = dictGetKey(de);
             robj key, *o = dictGetVal(de);
             long long expire;
-            
+            z++;
+            //if (z % 1000000 == 0) 
+            //    printf("dbcheck %d\r\n", dbCheck());
+
             initStaticStringObject(key,keystr);
             expire = getExpire(db,&key);
             if (rdbSaveKeyValuePair(&rdb,&key,o,expire,now) == -1) goto werr;

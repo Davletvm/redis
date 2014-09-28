@@ -199,6 +199,7 @@ int dbCheck() {
         while ((de = dictNext(di)) != NULL) {
             sds keystr = dictGetKey(de);
             robj key, *o;
+            if (!checkPtr(&extent, keystr)) goto werr;
             if (!checkSDS(&extent, keystr)) goto werr;
             o = dictGetVal(de);
 

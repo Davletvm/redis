@@ -81,6 +81,8 @@ BOOL WriteToProcmon (wstring message)
     #define HIDWORD(_qw)    ((DWORD)(((_qw) >> (sizeof(DWORD)*8)) & DWORD(~0)))
 #endif
 
+
+
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
 const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K sections = 1TB.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
@@ -153,6 +155,7 @@ extern "C"
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
     void TransitionToFreeWindow(int final);
+    int dbCheck();
 }
 
 
@@ -243,8 +246,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         dupTerminateProcess.Assign(shParent, sfvMasterQForkControl->terminateForkedProcess);
         g_pQForkControl->terminateForkedProcess = dupTerminateProcess;
 
-        // signal parent that we are ready.  We can do the rest later.
-        SetEvent(g_pQForkControl->forkedProcessReady);
+
 
         // create section handle on MM file
         SIZE_T mmSize = cAllocationGranularity;
@@ -277,6 +279,12 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
                 string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
         }
 
+        // copy redis globals into fork process
+        SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
+        printf("dbcheck %d\r\n", dbCheck());
+        // signal parent that we are ready.  We can do the rest later.
+        SetEvent(g_pQForkControl->forkedProcessReady);
+
         if (g_pQForkControl->inMemoryBuffersControlHandle) {
             sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
             g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
@@ -300,9 +308,6 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
-
-        // copy redis globals into fork process
-        SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
         
         // execute requiested operation
         int exitCode;
@@ -651,6 +656,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         }
         redisLog(REDIS_VERBOSE, "Protected heap");
+        printf("parent dbcheck 1 %d\r\n", dbCheck());
 
         // Launch the "forked" process
         char fileName[MAX_PATH];
@@ -682,7 +688,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
 
         // wait for "forked" process to map memory
         IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 100000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
-        
+        printf("parent dbcheck 2 %d\r\n", dbCheck());
+
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
 
