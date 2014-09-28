@@ -132,6 +132,7 @@ struct CleanupState {
     size_t offsetCopied;
     size_t copyBatchSize;
     int copiedPages;
+    int invalidPages;
     int exitCode;
     int heapBlocksToCleanup;
     time_t forkExitTimeout;
@@ -199,12 +200,14 @@ void CreateMiniDump(EXCEPTION_POINTERS * excinfo)
 }
 
 LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
+    if (exinfo->ExceptionRecord->ExceptionCode == 0x80000003) return EXCEPTION_CONTINUE_SEARCH;
     CreateMiniDump(exinfo);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
 HANDLE RegisterMiniDumpHandler() {
-    return AddVectoredExceptionHandler(0, VectoredHandler);
+    HANDLE h = AddVectoredExceptionHandler(0, VectoredHandler);
+    return h;
 }
 
 
@@ -246,7 +249,8 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         dupTerminateProcess.Assign(shParent, sfvMasterQForkControl->terminateForkedProcess);
         g_pQForkControl->terminateForkedProcess = dupTerminateProcess;
 
-
+        // signal parent that we are ready.  We can do the rest later.
+        SetEvent(g_pQForkControl->forkedProcessReady);
 
         // create section handle on MM file
         SIZE_T mmSize = cAllocationGranularity;
@@ -281,9 +285,6 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
 
         // copy redis globals into fork process
         SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
-        printf("dbcheck %d\r\n", dbCheck());
-        // signal parent that we are ready.  We can do the rest later.
-        SetEvent(g_pQForkControl->forkedProcessReady);
 
         if (g_pQForkControl->inMemoryBuffersControlHandle) {
             sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
@@ -656,7 +657,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
                 "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         }
         redisLog(REDIS_VERBOSE, "Protected heap");
-        printf("parent dbcheck 1 %d\r\n", dbCheck());
 
         // Launch the "forked" process
         char fileName[MAX_PATH];
@@ -688,7 +688,6 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
 
         // wait for "forked" process to map memory
         IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 100000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
-        printf("parent dbcheck 2 %d\r\n", dbCheck());
 
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
@@ -895,57 +894,60 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
         if (g_CleanupState.currentState == osCLEANING) {
 
+            HANDLE hProcess = GetCurrentProcess();
+
             PSAPI_WORKING_SET_EX_INFORMATION *pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[g_CleanupState.copyBatchSize];
+
             IFFAILTHROW(pwsi, "pwsi == NULL");
             size_t size = g_CleanupState.copyBatchSize * pageSize;
             do {
+
                 if (g_CleanupState.offsetCopied + size > g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize) {
                     size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
                 }
 
                 int block = g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize;
-                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap, 
-                    FILE_MAP_ALL_ACCESS, 
+                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap,
+                    FILE_MAP_ALL_ACCESS,
                     HIDWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
                     LODWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
-                    size, 
+                    size,
                     0);
                 IFFAILTHROW(heapAltRegion, "MapViewOfFileEx failure");
 
-                HANDLE hProcess = GetCurrentProcess();
                 int pages = (int)(size / pageSize);
-                
+
                 DWORD oldProtect;
                 IFFAILTHROW(VirtualProtect(
-                                (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied, 
-                                size, 
-                                PAGE_READWRITE,
-                                &oldProtect),
-                        "EndForkOperation: VirtualProtect 4 failed.");
-                
+                    (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied,
+                    size,
+                    PAGE_READWRITE,
+                    &oldProtect),
+                    "EndForkOperation: VirtualProtect 4 failed.");
 
-                memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
+
+                memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION)* pages);
                 for (int page = 0; page < pages; page++) {
                     pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + g_CleanupState.offsetCopied;
                 }
                 IFFAILTHROW(QueryWorkingSetEx(
-                                hProcess,
-                                pwsi,
-                                sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages),
-                        "QueryWorkingSet failure");
+                    hProcess,
+                    pwsi,
+                    sizeof(PSAPI_WORKING_SET_EX_INFORMATION)* pages),
+                    "QueryWorkingSet failure");
 
                 for (int page = 0; page < pages; page++) {
-                    if (pwsi[page].VirtualAttributes.Valid == 1) {
-                        // A 0 share count indicates a COW page
-                        if (pwsi[page].VirtualAttributes.ShareCount == 0) {
+                    if ((pwsi[page].VirtualAttributes.Valid == 1 && pwsi[page].VirtualAttributes.ShareCount == 0) || pwsi[page].VirtualAttributes.Valid == 0) {
+                        if (pwsi[page].VirtualAttributes.Valid != 1)
+                            g_CleanupState.invalidPages++;
+                        else
                             g_CleanupState.copiedPages++;
-                            size_t offset = g_CleanupState.offsetCopied + page * pageSize;
-                            memcpy(
-                                (BYTE*)heapAltRegion + page * pageSize,
-                                (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied + page * pageSize,
-                                pageSize);
-                            IFFAILTHROW(VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &oldProtect), "EndForkOperation: Revert to file map failed.");
-                        }
+                        size_t offset = g_CleanupState.offsetCopied + page * pageSize;
+                        memcpy(
+                            (BYTE*)heapAltRegion + page * pageSize,
+                            (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied + page * pageSize,
+                            pageSize);
+                        IFFAILTHROW(VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &oldProtect), "EndForkOperation: Revert to file map failed.");
                     }
                 }
 
@@ -960,7 +962,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
             if (g_CleanupState.currentState == osCLEANEDUP) {
                 ClearInMemoryBuffersMasterParent();
-                redisLog(REDIS_NOTICE, "Copied changed pages: %d", g_CleanupState.copiedPages);
+                redisLog(REDIS_NOTICE, "Copied changed pages: %d Invalid pages also copied: %d", g_CleanupState.copiedPages, g_CleanupState.invalidPages);
             }
         }
     }

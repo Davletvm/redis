@@ -45,7 +45,10 @@
 
 
 BOOL checkPtr(HeapExtent * ex, void * ptr) {
-    return ptr > ex->heapStart && ptr < ex->heapEnd;
+    if (ptr > ex->heapStart && ptr < ex->heapEnd)
+        return TRUE;
+    else
+        return FALSE;
 }
 
 BOOL checkSDS(HeapExtent * ex, sds s)
@@ -61,7 +64,8 @@ BOOL checkStringObject(HeapExtent * ex, robj *obj) {
     if (obj->encoding == REDIS_ENCODING_INT) {
         return TRUE;
     } else {
-        if (obj->encoding != REDIS_ENCODING_RAW) return FALSE;
+        if (obj->encoding != REDIS_ENCODING_RAW) 
+            return FALSE;
         return checkSDS(ex, obj->ptr);
     }
 }
