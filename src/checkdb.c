@@ -250,6 +250,10 @@ int dbcheckBackground() {
 }
 
 void dbcheckCommand(redisClient *c) {
+    if (server.privilidgeEnabled && !(c->flags & REDIS_PRIVILIDGED_CLIENT)) {
+        addReplyError(c, "Privilige required");
+        return;
+    }
     if (dbCheck() == REDIS_OK) {
         addReply(c, shared.ok);
     } else {
