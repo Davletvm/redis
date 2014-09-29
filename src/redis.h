@@ -1594,6 +1594,7 @@ void setkeyspacescriptCommand(redisClient *c);
 void setclientaddrCommand(redisClient *c);
 void protectkeyCommand(redisClient *c);
 void unprotectkeyCommand(redisClient *c);
+void dbcheckCommand(redisClient * c);
 void isprotectkeyCommand(redisClient *c);
 void privilidgeClientCommand(redisClient *c);
 void watchCommand(redisClient *c);
