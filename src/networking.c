@@ -115,7 +115,6 @@ redisClient *createClient(int fd) {
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
     c->throttled_list_node = NULL;
-    c->unauthenticated_list_node = NULL;
     c->client_to_close_node = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
@@ -575,37 +574,22 @@ static void acceptCommonHandler(int fd, int flags) {
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
-        // The client we want to free is the oldest non-authenticated client, if any
-        if (listLength(server.unauthenticated_clients)) {
-            redisClient *tof = listFirst(server.unauthenticated_clients)->value;
-            char *err = "-ERR max number of clients reached\r\n";
+    if (listLength(server.clients) > server.maxclients && (!privClient || server.currentPrivPortClients > REDIS_PRIVPORT_FDS)) {
+        char *err = "-ERR max number of clients reached\r\n";
 
-            /* That's a best effort error message, don't check write errors */
-            if (write(tof->fd, err, strlen(err)) == -1) {
-                /* Nothing to do, Just to avoid the warning... */
-            }
-            freeClient(tof);
-        } else if (!privClient || server.currentPrivPortClients > REDIS_PRIVPORT_FDS) {
-            char *err = "-ERR max number of clients reached\r\n";
-
-            /* That's a best effort error message, don't check write errors */
-            if (write(c->fd, err, strlen(err)) == -1) {
-                /* Nothing to do, Just to avoid the warning... */
-            }
-            server.stat_rejected_conn++;
-            freeClient(c);
-            return;
+        /* That's a best effort error message, don't check write errors */
+        if (write(c->fd, err, strlen(err)) == -1) {
+            /* Nothing to do, Just to avoid the warning... */
         }
-    }
-    if (!privClient) {
-        listAddNodeTail(server.unauthenticated_clients, c);
-        c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
-    } else {
-        server.currentPrivPortClients++;
+        server.stat_rejected_conn++;
+        freeClient(c);
+        return;
     }
     server.stat_numconnections++;
     c->flags |= flags;
+    if (privClient) {
+        server.currentPrivPortClients++;
+    }
 }
 
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -811,9 +795,6 @@ void freeClient(redisClient *c) {
 
     if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
         listDelNode(server.repl_inMemorySend->throttle.throttledClients, c->throttled_list_node);
-    }
-    if (c->unauthenticated_list_node) {
-        listDelNode(server.unauthenticated_clients, c->unauthenticated_list_node);
     }
 
     /* Release other dynamically allocated client structure fields,
