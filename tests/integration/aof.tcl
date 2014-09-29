@@ -61,15 +61,6 @@ tags {"aof"} {
         test "Append a new command after loading an incomplete AOF" {
             $client incr foo
         }
-    }
-
-    # Now the AOF file is expected to be correct
-    start_server_aof [list dir $server_path aof-load-truncated yes] {
-        test "Short read + command: Server should start" {
-            assert_equal 1 [is_alive $srv]
-        }
-
-        set client [redis [dict get $srv host] [dict get $srv port]]
 
         test "Truncated AOF loaded: we expect foo to be equal to 6 now" {
             assert {[$client get foo] eq "6"}
