@@ -81,8 +81,6 @@ BOOL WriteToProcmon (wstring message)
     #define HIDWORD(_qw)    ((DWORD)(((_qw) >> (sizeof(DWORD)*8)) & DWORD(~0)))
 #endif
 
-
-
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
 const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K sections = 1TB.
 const wchar_t* cMapFileBaseName = L"RedisQFork";
