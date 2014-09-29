@@ -84,7 +84,7 @@ public:
         if (argStartIndex + parameterCount >= argc) {
             stringstream err;
             err << "Not enough parameters available for " << argv[argStartIndex];
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         vector<string> params;
         for (int argIndex = argStartIndex + 1; argIndex < argStartIndex + 1 + parameterCount; argIndex++) {
@@ -100,7 +100,7 @@ public:
         if ((int)(tokens.size() - 1) < parameterCount + startIndex) {
             stringstream err;
             err << "Not enough parameters available for " << tokens.at(0);
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         vector<string> params;
         int skipCount = 1 + startIndex;
@@ -158,7 +158,7 @@ public:
         } else {
             stringstream err;
             err << "Not enough parameters available for " << argv[argStartIndex];
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         return params;
     }
@@ -178,7 +178,7 @@ public:
         } else {
             stringstream err;
             err << "Not enough parameters available for " << tokens.at(startIndex);
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         return params;
     };
@@ -294,11 +294,11 @@ public:
         stringstream err;
         if (argStartIndex + 1 >= argc) {
             err << "Not enough parameters available for " << argv[argStartIndex];
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         if (subCommands.find(argv[argStartIndex + 1]) == subCommands.end()) {
             err << "Could not find sentinal subcommand " << argv[argStartIndex + 1];
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
 
         vector<string> params;
@@ -316,12 +316,12 @@ public:
         stringstream err;
         if (tokens.size() < 2) {
             err << "Not enough parameters available for " << tokens.at(0);
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
         string subcommand = tokens.at(startIndex + 1);
         if (subCommands.find(subcommand) == subCommands.end()) {
             err << "Could not find sentinal subcommand " << subcommand;
-            throw runtime_error(err.str());
+            throw invalid_argument(err.str());
         }
 
         vector<string> params;
@@ -346,7 +346,6 @@ static RedisParamterMapper g_redisArgMap =
 {
     // QFork flags
     { cQFork,                           &fp2 },    // qfork [QForkConrolMemoryMap handle] [parent process id]
-
     // service commands
     { cServiceName,                     &fp1 },    // service-name [name]
     { cServiceRun,                      &fp0 },    // service-run
@@ -419,6 +418,7 @@ static RedisParamterMapper g_redisArgMap =
     { "client-output-buffer-limit",     &fp4 },    // client-output-buffer-limit [class] [hard limit] [soft limit] [soft seconds]
     { "hz",                             &fp1 },    // hz [number]
     { "aof-rewrite-incremental-fsync",  &fp1 },    // aof-rewrite-incremental-fsync [yes/no]
+    { "aof-load-truncated",             &fp1 },    // aof-load-truncated [yes/no]
     { "latency-monitor-threshold",      &fp1 },    // latency-monitor-threshold [number]
     { cInclude,                         &fp1 },    // include [path]
 
@@ -470,7 +470,9 @@ void ParseConfFile(string confFile, ArgumentMap& argMap) {
             } else if (parameter.compare(cInclude) == 0) {
                 ParseConfFile(tokens.at(1), argMap);
             } else if (g_redisArgMap.find(parameter) == g_redisArgMap.end()) {
-                continue;
+                stringstream err;
+                err << "unknown conf file parameter : " + parameter;
+                throw invalid_argument(err.str());
             }
 
             vector<string> params = g_redisArgMap[parameter]->Extract(tokens);
@@ -490,9 +492,9 @@ void ParseCommandLineArguments(int argc, char** argv) {
             transform(argument.begin(), argument.end(), argument.begin(), ::tolower);
 
             if (g_redisArgMap.find(argument) == g_redisArgMap.end()) {
-                // We ignore comamnd line args we don't care about, and any that follow
-                // this means that our added special commands have to come first
-                break;
+                stringstream err;
+                err << "unknown argument: " << argument;
+                throw invalid_argument(err.str());
             }
 
             vector<string> params;
@@ -502,7 +504,7 @@ void ParseCommandLineArguments(int argc, char** argv) {
                     for (auto p : sentinelSubCommands) {
                         params.push_back(p);
                     }
-                } catch (runtime_error re) {
+                } catch (invalid_argument iaerr) {
                     // if no subcommands could be mapped, then assume this is the parameterless --sentinel command line only argument
                 }
             } else if (argument == cServiceRun ) {

@@ -14,6 +14,64 @@ HIGH:     There is a critical bug that may affect a subset of users. Upgrade!
 CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
 --------------------------------------------------------------------------------
 
+--[ Redis 2.8.15 ] Release date: 12 Sep 2014
+
+# UPGRADE URGENCY: LOW for Redis, HIGH for Sentinel.
+
+* [FIX] Sentinel critical bug fixed: the absolute majority was computed in a
+        wrong way because of a programming error. Now the implementation does
+        what the specification says and the majority to authorize a failover
+        (that should not be confused with the ODOWN quorum) is the majority of
+        *all* the Sentinels ever seen for a given master, regardless of their
+        current state.
+* [FIX] GETRANGE test no longer fails for 32 bit builds (Matt Stancliff).
+* [FIX] Limit SCAN latency when the hash table is in an odd state (very few
+        populted buckets because rehashing is in progress). (Xiaost and
+        Salvatore Sanfilippo)
+
+* [NEW] Redis is now able to load truncated AOF files without requiring a
+        redis-check-aof utility run. The default now is to load truncated
+        (but apparently not corrupted) AOFs, you can change this in redis.conf.
+        (Salvatore Sanfilippo).
+* [NEW] Sentinel: ability to announce itself with an arbitrary IP/port to work
+        in the context of natted networks. However this is probably still
+        not enough since there is no equivalent mechanism for slaves listed
+        in the master INFO output. (Dara Kong and Salvatore Sanfilippo)
+
+--[ Redis 2.8.14 ] Release date: 1 Sep 2014
+
+# UPGRADE URGENCY: HIGH for Lua scripting users, the server could crash because
+                   of a bug introduced in Redis 2.8.10, otherwise LOW.
+                   LOW for Redis Sentinel.
+
+* [FIX] Don't prevent use of shared integers if maxmemory policy is non-LRU.
+        (Salvatore Sanfilippo)
+* [FIX] Fail SYNC if background save child aborted due to a signal.
+        (Yossi Gottlieb)
+* [FIX] Different small redis-cli fixes. (Dov Murik, Charsyam, cubicdaiya,
+        Kashif Rasul, Jan-Erik Rediger, Matt Stancliff)
+* [FIX] AIX compilation fixes. (Siah Lyimo)
+* [FIX] A number of other smaller issues.
+* [FIX] Improved SIGINT handling (Matt Stancliff, Salvatore Sanfilippo)
+* [FIX] Use unsigned types in SDS header to raise limit to 4GB.
+        (Matt Stancliff, Salvatore Sanfilippo)
+* [FIX] Handle signed/unsigned comparisons with more care around the code.
+        (Salvatore Sanfilippo)
+* [FIX] Colorized test output fixed to don't change the background color.
+        (Mariano Pérez Rodríguez)
+* [FIX] More Sentinel IPv6 fixes. (Eiichi Sato)
+* [FIX] Deny CLIENT command in scripts. (Matt Stancliff)
+* [FIX] Allow datasets with more than 2 billion of keys, initial work.
+* [FIX] Fix a Lua scripting crash by storing the length of the static
+        argv when first allocated. (Paddy Byers)
+
+* [NEW] Pub/Sub PING. (Salvatore Sanfilippo)
+* [NEW] Much faster ZUNIONSTORE. (Kyle Hubert, Salvatore Sanfilippo)
+* [NEW] Faster ll2string() implementation. (Salvatore Sanfilippo)
+* [NEW] **WARNING, minor API change**: PUBSUB NUMSUB: return type modified
+        to integer. (Matt Stancliff)
+* [NEW] redis-benchmark support for AUTH. (CharSyam)
+
 --[ Redis 2.8.13 ] Release date: 14 Jul 2014
 
 # UPGRADE URGENCY: LOW for Redis and Sentinel, this is a features enhancement
@@ -51,8 +109,7 @@ CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
         SRI_PROMOTED flag). (Salvatore Sanfilippo)
 * [FIX] Cancel SHUTDOWN if initial AOF is being written. (Matt Stancliff)
 * [FIX] Sentinel: bind source address for outcoming connections. (Matt
- Stancliff).
-
+        Stancliff).
 * [FIX] Less timing sensitive Sentinel tests. (Salvatore Sanfilippo).
 
 * [NEW] redis-cli --intrinsic-latency stopped with SIGINT still reports

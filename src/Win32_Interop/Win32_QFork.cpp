@@ -241,11 +241,11 @@ bool ReportSpecialSystemErrors(int error) {
                 "will be created in the current working directory. Windows is reporting that\n"
                 "there is insufficient disk space available for this file (Windows error 0x70).\n" 
                 "You may fix this problem by either reducing the size of the Redis heap with\n"
-                "the --maxheap flag, or by starting redis from a working directory with\n"
-                "sufficient space available for the Redis heap. \n"
+                "the --maxheap flag, or by moving the heap file to a local drive with sufficient\n"
+                "space."
                 "\n"
                 "Please see the documentation included with the binary distributions for more \n"
-                "details on the --maxheap flag.\n"
+                "details on the --maxheap and --heapdir flags.\n"
                 "\n"
                 "Redis can not continue. Exiting."
                 );
@@ -1303,8 +1303,16 @@ extern "C"
         try {
             ParseCommandLineArguments(argc, argv);
             SetupLogging();
-        } catch (runtime_error &re) {
-            cout << re.what() << endl;
+        } catch (system_error syserr) {
+            exit(-1);
+        } catch (runtime_error runerr) {
+            cout << runerr.what() << endl;
+            exit(-1);
+        } catch (invalid_argument &iaerr) {
+            cout << iaerr.what() << endl;
+            exit(-1);
+        } catch (exception othererr) {
+            cout << othererr.what() << endl;
             exit(-1);
         }
         
