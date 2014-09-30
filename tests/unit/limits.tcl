@@ -17,5 +17,5 @@ start_server {tags {"limits"} overrides {maxclients 10}} {
 
         assert {$numclients > 8 && $numclients <= 10}
         set correctFailPoint
-    } 0
+    } 1
 }

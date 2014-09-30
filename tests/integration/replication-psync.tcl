@@ -18,8 +18,14 @@ proc stop_bg_complex_data {handle} {
 # You can specifiy backlog size, ttl, delay before reconnection, test duration
 # in seconds, and an additional condition to verify at the end.
 proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
+
+foreach imr {yes no} {
+test "Testing with repl-inmemory $imr" {}
     start_server {tags {"repl"}} {
         start_server {} {
+
+            r 0 config set repl-inmemory $imr
+            r -1 config set repl-inmemory $imr
 
             set master [srv -1 client]
             set master_host [srv -1 host]
@@ -122,6 +128,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond} {
             }
         }
     }
+}
 }
 
 test_psync {ok psync} 6 1000000 3600 0 {
