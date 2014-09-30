@@ -132,6 +132,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_MAXMEMORY_SAMPLES 3
 #define REDIS_DEFAULT_AOF_FILENAME "appendonly.aof"
 #define REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE 0
+#define REDIS_DEFAULT_AOF_LOAD_TRUNCATED 1
 #define REDIS_DEFAULT_ACTIVE_REHASHING 1
 #define REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC 1
 #define REDIS_DEFAULT_MIN_SLAVES_TO_WRITE 0
@@ -842,8 +843,9 @@ struct redisServer {
     int aof_lastbgrewrite_status;   /* REDIS_OK or REDIS_ERR */
     unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;/* fsync incrementally while rewriting? */
-	int aof_last_write_status;      /* REDIS_OK or REDIS_ERR */
-	int aof_last_write_errno;       /* Valid if aof_last_write_status is ERR */
+    int aof_last_write_status;      /* REDIS_OK or REDIS_ERR */
+    int aof_last_write_errno;       /* Valid if aof_last_write_status is ERR */
+    int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
@@ -893,9 +895,15 @@ struct redisServer {
     redisClient *cached_master; /* Cached master to be reused for PSYNC. */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_state;          /* Replication status if the instance is a slave */
+#ifdef _WIN64
+    int64_t repl_transfer_size; /* Size of RDB to read from master during sync. */
+    int64_t repl_transfer_read; /* Amount of RDB read from master during sync. */
+    int64_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+#else
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
+#endif
     int repl_transfer_s;     /* Slave -> Master SYNC socket */
     int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
