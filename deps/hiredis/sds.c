@@ -123,7 +123,7 @@ void sdsclear(sds s) {
 /* Enlarge the free space at the end of the sds string so that the caller
  * is sure that after calling this function can overwrite up to addlen
  * bytes after the end of the string, plus one more byte for nul term.
- * 
+ *
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
 sds sdsMakeRoomFor(sds s, size_t addlen) {
@@ -200,10 +200,12 @@ size_t sdsAllocSize(sds s) {
 void sdsIncrLen(sds s, int incr) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    assert(sh->free >= incr);
+    if (incr >= 0)
+        assert(sh->free >= (unsigned int)incr);
+    else
+        assert(sh->len >= (unsigned int)(-incr));
     sh->len += incr;
     sh->free -= incr;
-    assert(sh->free >= 0);
     s[sh->len] = '\0';
 }
 
@@ -324,7 +326,7 @@ int sdsll2str(char *s, long long value) {
         s++;
         p--;
     }
-    return l;
+    return (int)l;
 }
 
 /* Identical sdsll2str(), but for unsigned long long type. */
@@ -353,7 +355,7 @@ int sdsull2str(char *s, unsigned long long v) {
         s++;
         p--;
     }
-    return l;
+    return (int)l;
 }
 
 /* Create an sds string from a long long value. It is much faster than:
@@ -388,6 +390,7 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
         buf[buflen-2] = '\0';
         va_copy(cpy,ap);
         vsnprintf(buf, buflen, fmt, cpy);
+        va_end(ap);
         if (buf[buflen-2] != '\0') {
             if (buf != staticbuf) zfree(buf);
             buflen *= 2;
@@ -454,10 +457,10 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
 
     va_start(ap,fmt);
     f = fmt;    /* Next format specifier byte to process. */
-    i = initlen; /* Position of the next byte to write to dest str. */
+    i = (int)initlen; /* Position of the next byte to write to dest str. */
     while(*f) {
         char next, *str;
-        int l;
+        unsigned int l;
         long long num;
         unsigned long long unum;
 
@@ -475,7 +478,7 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
             case 's':
             case 'S':
                 str = va_arg(ap,char*);
-                l = (next == 's') ? strlen(str) : sdslen(str);
+                l = (int)((next == 's') ? strlen(str) : sdslen(str));
                 if (sh->free < l) {
                     s = sdsMakeRoomFor(s,l);
                     sh = (void*) (s-(sizeof(struct sdshdr)));

@@ -57,6 +57,8 @@
 #include <lua.h>
 #include <signal.h>
 
+typedef long long mstime_t; /* millisecond time type. */
+
 #include "ae.h"      /* Event driven programming library */
 #include "sds.h"     /* Dynamic safe strings */
 #include "dict.h"    /* Hash tables */
@@ -67,6 +69,8 @@
 #include "intset.h"  /* Compact integer set structure */
 #include "version.h" /* Version macro */
 #include "util.h"    /* Misc functions useful in many places */
+#include "latency.h" /* Latency monitor API */
+#include "sparkline.h" /* ASII graphs API */
 
 #include "redisLog.h" /* moved logging for hiredis and RedisCli usage /*
 
@@ -77,7 +81,7 @@
 /* Static server configuration */
 #define REDIS_DEFAULT_HZ        10      /* Time interrupt calls/sec. */
 #define REDIS_MIN_HZ            1
-#define REDIS_MAX_HZ            500 
+#define REDIS_MAX_HZ            500
 #define REDIS_SERVERPORT        6379    /* TCP port */
 #define REDIS_TCP_BACKLOG       511     /* TCP listen backlog */
 #define REDIS_MAXIDLETIME       0       /* default client timeout: infinite */
@@ -144,6 +148,7 @@
 #define REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW 100
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
+#define REDIS_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -181,6 +186,8 @@
 #define REDIS_CMD_LOADING 512               /* "l" flag */
 #define REDIS_CMD_STALE 1024                /* "t" flag */
 #define REDIS_CMD_SKIP_MONITOR 2048         /* "M" flag */
+#define REDIS_CMD_ASKING 4096               /* "k" flag */
+#define REDIS_CMD_FAST 8192                 /* "F" flag */
 
 /* Object types */
 #define REDIS_STRING 0
@@ -200,11 +207,6 @@
 #define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */
 #define REDIS_ENCODING_INTSET 6  /* Encoded as intset */
 #define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist */
-#ifdef _WIN32
-#define REDIS_ENCODING_HTARRAY  12        /* read-only dict array for bgsave */
-#define REDIS_ENCODING_LINKEDLISTARRAY 13 /* read-only list array for bgsave */
-#define REDIS_ENCODING_HTZARRAY  14       /* read-only zset dict array for bgsave */
-#endif
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
@@ -410,7 +412,6 @@
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
-typedef long long mstime_t;
 /* A redis object, that is a type able to hold a string / list / set */
 
 /* The actual Redis Object */
@@ -726,6 +727,12 @@ typedef struct redisInMemorySendCookie
  * Global server state
  *----------------------------------------------------------------------------*/
 
+/* AIX defines hz to __hz, we don't use this define and in order to allow
+ * Redis build on AIX we need to undef it. */
+#ifdef _AIX
+#undef hz
+#endif
+
 struct redisServer {
     /* General */
     char *configfile;           /* Absolute config file path, or NULL */
@@ -782,6 +789,7 @@ struct redisServer {
     long long stat_keyspace_misses; /* Number of failed lookups of keys */
     size_t stat_peak_memory;        /* Max used memory record */
     long long stat_fork_time;       /* Time needed to perform latest fork() */
+    double stat_fork_rate;          /* Fork rate in GB/sec. */
     long long stat_rejected_conn;   /* Clients rejected because of maxclients */
     long long stat_sync_full;       /* Number of full resyncs with slaves. */
     long long stat_sync_partial_ok; /* Number of accepted PSYNC requests. */
@@ -919,9 +927,9 @@ struct redisServer {
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
-    int repl_scriptcache_size;          /* Max number of elements. */
+    unsigned int repl_scriptcache_size; /* Max number of elements. */
     /* Limits */
-    int maxclients;                 /* Max number of simultaneous clients */
+    unsigned int maxclients;            /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
@@ -973,6 +981,9 @@ struct redisServer {
     int lua_timedout;     /* True if we reached the time limit for script
                              execution. */
     int lua_kill;         /* Kill the script if true. */
+    /* Latency monitor */
+    long long latency_monitor_threshold;
+    dict *latency_events;
     /* Assert & bug reporting */
     char *assert_failed;
     char *assert_file;
@@ -1114,11 +1125,10 @@ void freeClient(redisClient *c);
 void freeClientAsync(redisClient *c);
 void resetClient(redisClient *c);
 void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask);
-void addReply(redisClient *c, robj *obj);
 void *addDeferredMultiBulkLength(redisClient *c);
 void setDeferredMultiBulkLength(redisClient *c, void *node, long length);
-void addReplySds(redisClient *c, sds s);
 void processInputBuffer(redisClient *c);
+void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask);
@@ -1126,7 +1136,6 @@ void addReplyBulk(redisClient *c, robj *obj);
 void addReplyBulkCString(redisClient *c, char *s);
 void addReplyBulkCBuffer(redisClient *c, void *p, size_t len);
 void addReplyBulkLongLong(redisClient *c, long long ll);
-void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void addReply(redisClient *c, robj *obj);
 void addReplySds(redisClient *c, sds s);
 void addReplyError(redisClient *c, char *err);
@@ -1266,10 +1275,6 @@ void stopLoading(void);
 
 /* RDB persistence */
 #include "rdb.h"
-#ifdef _WIN32
-robj *cowEnsureWriteCopy(redisDb *db, robj *key, robj *val);
-void cowEnsureExpiresCopy(redisDb *db);
-#endif
 
 /* AOF persistence */
 void flushAppendOnlyFile(int force);
@@ -1329,7 +1334,7 @@ void redisLog(int level, const char *fmt, ...);
 #endif
 void redisLogRaw(int level, const char *msg);
 void redisLogFromHandler(int level, const char *msg);
-void usage();
+void usage(void);
 void updateDictResizePolicy(void);
 int htNeedsResize(dict *dict);
 void oom(const char *msg);
@@ -1400,7 +1405,7 @@ pubsubScript* addKeyspaceScript(robj* event, robj* key, robj* script, robj* sha)
 /* Configuration */
 void loadServerConfig(char *filename, char *options);
 void appendServerSaveParams(time_t seconds, int changes);
-void resetServerSaveParams();
+void resetServerSaveParams(void);
 struct rewriteConfigState; /* Forward declaration to export API. */
 void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sds line, int force);
 int rewriteConfig(char *path);
@@ -1462,6 +1467,7 @@ uint64_t redisBuildId(void);
 void authCommand(redisClient *c);
 void pingCommand(redisClient *c);
 void echoCommand(redisClient *c);
+void commandCommand(redisClient *c);
 void setCommand(redisClient *c);
 void setnxCommand(redisClient *c);
 void setexCommand(redisClient *c);
@@ -1616,6 +1622,7 @@ void pfaddCommand(redisClient *c);
 void pfcountCommand(redisClient *c);
 void pfmergeCommand(redisClient *c);
 void pfdebugCommand(redisClient *c);
+void latencyCommand(redisClient *c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

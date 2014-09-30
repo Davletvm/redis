@@ -103,7 +103,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
  * The program is aborted if the key was not already present. */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     struct dictEntry *de = dictFind(db->dict,key->ptr);
-    
+
     redisAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
 }
@@ -430,9 +430,7 @@ int parseScanCursorOrReply(redisClient *c, robj *o, unsigned long *cursor) {
  * In the case of a Hash object the function returns both the field and value
  * of every element on the Hash. */
 void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
-    int rv;
     int i, j;
-    char buf[REDIS_LONGSTR_SIZE];
     list *keys = listCreate();
     listNode *node, *nextnode;
     long count = 10;
@@ -466,7 +464,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
             i += 2;
         } else if (!strcasecmp(c->argv[i]->ptr, "match") && j >= 2) {
             pat = c->argv[i+1]->ptr;
-            patlen = sdslen(pat);
+            patlen = (int)sdslen(pat);
 
             /* The pattern always matches if it is exactly "*", so it is
              * equivalent to disabling it. */
@@ -512,7 +510,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
         privdata[1] = o;
         do {
             cursor = dictScan(ht, cursor, scanCallback, privdata);
-        } while (cursor && listLength(keys) < count);
+        } while (cursor && listLength(keys) < (unsigned long)count);
     } else if (o->type == REDIS_SET) {
         int pos = 0;
         int64_t ll;
@@ -555,7 +553,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
                 len = ll2string(buf,sizeof(buf),(long)kobj->ptr);
                 if (!stringmatchlen(pat, patlen, buf, len, 0)) filter = 1;
             } else {
-                if (!stringmatchlen(pat, patlen, kobj->ptr, sdslen(kobj->ptr), 0))
+                if (!stringmatchlen(pat, patlen, kobj->ptr, (int)sdslen(kobj->ptr), 0))
                     filter = 1;
             }
         }
@@ -586,9 +584,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
 
     /* Step 4: Reply to the client. */
     addReplyMultiBulkLen(c, 2);
-    rv = snprintf(buf, sizeof(buf), "%lu", cursor);
-    redisAssert(rv < sizeof(buf));
-    addReplyBulkCBuffer(c, buf, rv);
+    addReplyBulkLongLong(c,cursor);
 
     addReplyMultiBulkLen(c, listLength(keys));
     while ((node = listFirst(keys)) != NULL) {
@@ -716,11 +712,16 @@ void moveCommand(redisClient *c) {
     robj *o;
     redisDb *src, *dst;
     int srcid;
+    long long dbid;
 
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
-    if (selectDb(c,atoi(c->argv[2]->ptr)) == REDIS_ERR) {
+
+    if (getLongLongFromObject(c->argv[2],&dbid) == REDIS_ERR ||
+        dbid < INT_MIN || dbid > INT_MAX ||
+        selectDb(c,dbid) == REDIS_ERR)
+    {
         addReply(c,shared.outofrangeerr);
         return;
     }
@@ -842,7 +843,7 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * the slave key expiration is controlled by the master that will
      * send us synthesized DEL operations for expired keys.
      *
-     * Still we try to return the right information to the caller, 
+     * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
     if (server.masterhost != NULL) {
