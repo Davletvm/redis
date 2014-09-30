@@ -259,7 +259,6 @@ void memtest_test(size_t megabytes, int passes) {
             memtest_compare_times(m, bytes, pass, 4);
         }
     }
-    free(m);
 }
 
 void memtest_non_destructive_invert(void *addr, size_t size) {
