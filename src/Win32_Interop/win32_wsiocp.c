@@ -346,10 +346,6 @@ int aeWinSocketConnect(int fd, const SOCKADDR_STORAGE *ss) {
             result = FDAPI_ConnectEx(fd, (SOCKADDR*)ss, sizeof(SOCKADDR_IN6), NULL, 0, NULL, &sockstate->ov_read);
             break;
         }
-        default:
-        {
-            DebugBreak();
-        }
     }
 
     if (result != TRUE) {
