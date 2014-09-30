@@ -336,16 +336,10 @@ VOID ServiceInstall(int argc, char ** argv) {
     }
 
     RedisEventLog().InstallEventLogSource(szPath);
-
-    // make sure NT AUTHORITY\\NetworkService" has rights to every directory where a files may be accessed (CONF,AOF,RDB,DAT)
-    stringstream aceMessage;
-    aceMessage << "Granting read/write access to 'NT AUTHORITY\\NetworkService' on: ";
-    for (auto folder : GetAccessPaths()) {
-        SetAccessACLOnFolder(userName, folder);
-        aceMessage << "\"" << folder.c_str() << "\" ";
-    }
-    ServicePipeWriter::getInstance().Write(aceMessage.str().c_str());
-
+	string folder = szPath;
+	folder = folder.substr(0, folder.rfind('\\'));
+    SetAccessACLOnFolder(userName, folder);
+   
     ServicePipeWriter::getInstance().Write("Redis successfully installed as a service.");
 }
 
