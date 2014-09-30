@@ -399,10 +399,6 @@ int aeWinSocketConnectBind(int fd, const SOCKADDR_STORAGE *ss, const char* sourc
             result = bind(fd, (SOCKADDR*)&addr, sizeof(addr));
             break;
         }
-        default:
-        {
-                   DebugBreak();
-        }
     }
 
     result = FDAPI_ConnectEx(fd, (const LPSOCKADDR)ss, StorageSize(ss), NULL, 0, NULL, &sockstate->ov_read);
