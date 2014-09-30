@@ -1113,7 +1113,7 @@ int processInlineBuffer(redisClient *c) {
         c->repl_ack_time = server.unixtime;
 
     /* Leave data after the first line of the query in the buffer */
-    sdsrange(c->querybuf,querylen+2,-1);
+    sdsrange(c->querybuf,(int)(querylen+2),-1);
 
     /* Setup argv array on client structure */
     if (c->argv) zfree(c->argv);
@@ -1178,7 +1178,7 @@ int processMultibulkBuffer(redisClient *c) {
             return REDIS_ERR;
         }
 
-        pos = (newline-c->querybuf)+2;
+        pos = (int)((newline-c->querybuf)+2);
         if (ll <= 0) {
             sdsrange(c->querybuf,pos,-1);
             return REDIS_OK;
@@ -1225,7 +1225,7 @@ int processMultibulkBuffer(redisClient *c) {
                 return REDIS_ERR;
             }
 
-            pos += newline-(c->querybuf+pos)+2;
+            pos += (int)(newline-(c->querybuf+pos)+2);
             if (ll >= REDIS_MBULK_BIG_ARG) {
                 size_t qblen;
 
@@ -1238,10 +1238,10 @@ int processMultibulkBuffer(redisClient *c) {
                 qblen = sdslen(c->querybuf);
                 /* Hint the sds library about the amount of bytes this string is
                  * going to contain. */
-                if (qblen < ll+2)
+                if (qblen < (size_t)ll+2)
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-qblen);
             }
-            c->bulklen = ll;
+            c->bulklen = (long)ll;
         }
 
         /* Read bulk argument */
@@ -1604,6 +1604,7 @@ void clientCommand(redisClient *c) {
         if (c->argc == 3) {
             /* Old style syntax: CLIENT KILL <addr> */
             addr = c->argv[2]->ptr;
+            skipme = 0; /* With the old form, you can kill yourself. */
         } else if (c->argc > 3) {
             int i = 2; /* Next option index. */
 
@@ -1651,7 +1652,9 @@ void clientCommand(redisClient *c) {
         while ((ln = listNext(&li)) != NULL) {
             client = listNodeValue(ln);
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (type != -1 && getClientType(client) != type) continue;
+            if (type != -1 &&
+                (client->flags & REDIS_MASTER ||
+                 getClientType(client) != type)) continue;
             if (id != 0 && client->id != id) continue;
             if (c == client && skipme) continue;
             if ((client->flags & REDIS_PRIVILIDGED_CLIENT) && !(c->flags & REDIS_PRIVILIDGED_CLIENT)) 
@@ -1679,7 +1682,7 @@ void clientCommand(redisClient *c) {
          * only after we queued the reply to its output buffers. */
         if (close_this_client) c->flags |= REDIS_CLOSE_AFTER_REPLY;
     } else if (!strcasecmp(c->argv[1]->ptr,"setname") && c->argc == 3) {
-        int j, len = sdslen(c->argv[2]->ptr);
+        int j, len = (int)sdslen(c->argv[2]->ptr);
         char *p = c->argv[2]->ptr;
 
         /* Setting the client name to an empty string actually removes
@@ -1739,7 +1742,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
     va_start(ap,argc);
     for (j = 0; j < argc; j++) {
         robj *a;
-        
+
         a = va_arg(ap, robj*);
         argv[j] = a;
         incrRefCount(a);
@@ -1761,7 +1764,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
  * The new val ref count is incremented, and the old decremented. */
 void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
     robj *oldval;
-   
+
     redisAssertWithInfo(c,NULL,i < c->argc);
     oldval = c->argv[i];
     c->argv[i] = newval;
