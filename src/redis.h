@@ -977,7 +977,7 @@ struct redisServer {
     redisClient *lua_caller;   /* The client running EVAL right now, or NULL */
     int lua_inKeyspaceScript;
     dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
-    mstime_t lua_time_limit;  /* Script timeout in seconds */
+    mstime_t lua_time_limit;  /* Script timeout in milliseconds */
 	mstime_t lua_event_limit;
 	mstime_t lua_time_start;  /* Start time of script */
     int lua_write_dirty;  /* True if a write command was called during the
