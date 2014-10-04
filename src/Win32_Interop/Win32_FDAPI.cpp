@@ -30,6 +30,7 @@
 #include "Win32_ANSI.h"
 #include <string>
 #include "..\redisLog.h"
+
 using namespace std;
 
 #define CATCH_AND_REPORT()  catch(const std::exception &){::redisLog(REDIS_WARNING, "FDAPI: std exception");}catch(...){::redisLog(REDIS_WARNING, "FDAPI: other exception");}
@@ -85,6 +86,17 @@ redis_getaddrinfo getaddrinfo = NULL;
 redis_inet_ntop inet_ntop = NULL;
 }
 
+
+ForceCOWBUfferProto forceCOWBuffer;
+void FDAPI_SetForceCOWBuffer(ForceCOWBUfferProto proto) {
+    forceCOWBuffer = proto;
+}
+
+__forceinline void ForceCOWBufferProxy(LPVOID buf, size_t size) {
+    if (forceCOWBuffer) {
+        forceCOWBuffer(buf, size);
+    }
+}
 
 auto f_WSAStartup = dllfunctor_stdcall<int, WORD, LPWSADATA>("ws2_32.dll", "WSAStartup");
 int InitWinsock() {
@@ -550,7 +562,8 @@ ssize_t redis_read_impl(int fd, void *buf, size_t count) {
     try {
         SOCKET s = RFDMap::getInstance().lookupSocket( fd );
         if( s != INVALID_SOCKET ) {
-            int retval = f_recv( s, (char*)buf, (unsigned int)count, 0);
+            ForceCOWBufferProxy(buf, count);
+            int retval = f_recv(s, (char*)buf, (unsigned int)count, 0);
             if (retval == -1) {
                 errno = GetLastError();
                 if (errno == WSAEWOULDBLOCK) {
