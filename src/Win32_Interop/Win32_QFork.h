@@ -72,6 +72,7 @@ typedef struct QForkBeginInfo {
 StartupStatus QForkStartup(int argc, char** argv);
 BOOL QForkShutdown();
 
+
 // For master process use only
 BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, unsigned __int32 dictHashSeed);
 OperationStatus GetForkOperationStatus(BOOL forceEnd);
