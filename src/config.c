@@ -1009,25 +1009,25 @@ void configSetCommand(redisClient *c) {
         server.privilidgeEnabled = yn;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-window")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 10 || ll > 5000) goto badfmt;
-        server.repl_inMemoryThrottleWindow = ll;
+        server.repl_inMemoryThrottleWindow = (int) ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-replbw")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll <= 0) goto badfmt;
-        server.repl_inMemoryThrottleMaxReplBW = (ll << 0) / 1;
+        server.repl_inMemoryThrottleMaxReplBW = (int) ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-databw")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll <= 0) goto badfmt;
-        server.repl_inMemoryThrottleMinDataBW = (ll << 0) / 1;
+        server.repl_inMemoryThrottleMinDataBW = (int) ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-strict")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR) goto badfmt;
-        server.repl_inMemoryThrottleReceiveCheck = ll;
+        server.repl_inMemoryThrottleReceiveCheck = (int) ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-target")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1 || ll > 60*60) goto badfmt;
-        server.repl_inMemoryThrottleMaxTime = ll * 1000;
+        server.repl_inMemoryThrottleMaxTime = (int)(ll * 1000);
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-send-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
-        server.repl_inMemorySendBuffer = ll;
+        server.repl_inMemorySendBuffer = (int)ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-receive-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
-        server.repl_inMemoryReceiveBuffer = ll;
+        server.repl_inMemoryReceiveBuffer = (int)ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
 

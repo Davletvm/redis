@@ -965,7 +965,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                     size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
                 }
 
-                int block = g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize;
+                int block = (int)(g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize);
                 void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap,
                     FILE_MAP_ALL_ACCESS,
                     HIDWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),

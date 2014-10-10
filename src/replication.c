@@ -1702,6 +1702,11 @@ int slaveTryPartialResynchronization(int fd) {
     reply = sendSynchronousCommand(fd,"PSYNC",psync_runid,psync_offset,NULL);
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
+        if (server.cached_master && server.privilidgeEnabled) {
+            // Instead of clearing the DB, exit and restart
+            redisLog(REDIS_WARNING, "FULL SYNC from cached master - exiting.");
+            exit(-100);
+        }
         char *runid = NULL, *offset = NULL;
 
         /* FULL RESYNC, parse the reply in order to extract the run id
