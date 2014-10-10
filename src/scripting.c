@@ -212,7 +212,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     static robj **argv = NULL;
     static int argv_size = 0;
     static robj *cached_objects[LUA_CMD_OBJCACHE_SIZE];
-    static int cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+    static size_t cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
 
     /* Require at least one argument */
     if (argc == 0) {
@@ -222,9 +222,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     }
 
     /* Build the arguments vector */
-    if (!argv) {
-        argv = zmalloc(sizeof(robj*)*argc);
-    } else if (argv_size < argc) {
+    if (argv_size < argc) {
         argv = zrealloc(argv,sizeof(robj*)*argc);
         argv_size = argc;
     }
@@ -256,8 +254,8 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             argv[j] = cached_objects[j];
             cached_objects[j] = NULL;
             memcpy(s,obj_s,obj_len+1);
-            sh->free += sh->len - obj_len;
-            sh->len = obj_len;
+            sh->free += (int)(sh->len - obj_len);
+            sh->len = (int)obj_len;
         } else {
             argv[j] = createStringObject(obj_s, obj_len);
         }
@@ -401,6 +399,7 @@ cleanup:
     if (c->argv != argv) {
         zfree(c->argv);
         argv = NULL;
+        argv_size = 0;
     }
 
     if (raise_error) {
@@ -912,6 +911,9 @@ void evalGenericCommand(redisClient *c, int evalsha) {
         return;
     if (numkeys > (c->argc - 3)) {
         addReplyError(c,"Number of keys can't be greater than number of args");
+        return;
+    } else if (numkeys < 0) {
+        addReplyError(c,"Number of keys can't be negative");
         return;
     }
 

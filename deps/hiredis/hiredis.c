@@ -663,7 +663,7 @@ int redisReaderGetReply(redisReader *r, void **reply) {
     /* Discard part of the buffer when we've consumed at least 1k, to avoid
      * doing unnecessary calls to memmove() in sds.c. */
     if (r->pos >= 1024) {
-        sdsrange(r->buf,(int)r->pos,-1);
+        sdsrange(r->buf,(int)(r->pos),-1);
         r->pos = 0;
         r->len = sdslen(r->buf);
     }
@@ -1135,11 +1135,11 @@ redisContext *redisConnectFd(int fd) {
 }
 
 #ifdef _WIN32
-redisContext *redisPreConnectNonBlock(const char *ip, int port, struct sockaddr_in *sa) {
+redisContext *redisPreConnectNonBlock(const char *ip, int port, SOCKADDR_STORAGE *ss) {
     redisContext *c = redisContextInit();
     c->fd = -1;
     c->flags &= ~REDIS_BLOCK;
-    redisContextPreConnectTcp(c, ip, port, NULL, sa);
+    redisContextPreConnectTcp(c, ip, port, NULL, ss);
     return c;
 }
 #endif

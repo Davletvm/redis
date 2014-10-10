@@ -6,10 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include "hiredis.h"
-#include "async.h"
-#include "adapters\ae.h"
 
+#include <hiredis.h>
+#include <async.h>
+#include <adapters\ae.h>
 
 /* Put event loop in the global scope, so it can be explicitly stopped */
 static aeEventLoop *loop;
@@ -40,8 +40,7 @@ void disconnectCallback(const redisAsyncContext *c, int status) {
         return;
     }
 
-	/* Stop event loop to exit program */
-	aeStop(loop);
+    printf("Disconnected...\n");
 }
 
 int main (int argc, char **argv) {
@@ -62,10 +61,9 @@ int main (int argc, char **argv) {
     }
 
 #ifndef _WIN32
-    loop = aeCreateEventLoop(1024*10);
+    loop = aeCreateEventLoop(64);
 #endif
-
-	redisAeAttach(loop, c);
+    redisAeAttach(loop, c);
     redisAsyncSetConnectCallback(c,connectCallback);
     redisAsyncSetDisconnectCallback(c,disconnectCallback);
     redisAsyncCommand(c, NULL, NULL, "SET key %b", argv[argc-1], strlen(argv[argc-1]));
