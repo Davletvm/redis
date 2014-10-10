@@ -573,6 +573,7 @@ ssize_t redis_read_impl(int fd, void *buf, size_t count) {
             }
             return retval;
         } else {
+            ForceCOWBufferProxy(buf, count);
             int posixFD = RFDMap::getInstance().lookupPosixFD( fd );
             if( posixFD != -1 ) {
                 int retval = crt_read(posixFD, buf,(unsigned int)count);
