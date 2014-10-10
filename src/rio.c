@@ -157,6 +157,9 @@ static int WaitForFreeBuffer(rio * r)
             return 0;
         }
     }
+    if (!found) {
+        redisLog(REDIS_WARNING, "Timed out waiting for free buffer.");
+    }
     return found;
 }
 
