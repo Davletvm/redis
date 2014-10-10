@@ -190,14 +190,14 @@ redisContext *redisConnectUnix(const char *path);
 redisContext *redisConnectUnixWithTimeout(const char *path, const struct timeval tv);
 redisContext *redisConnectUnixNonBlock(const char *path);
 redisContext *redisConnectFd(int fd);
-int redisSetTimeout(redisContext* c, const struct timeval tv);
-int redisEnableKeepAlive(redisContext* c);
+int redisSetTimeout(redisContext *c, const struct timeval tv);
+int redisEnableKeepAlive(redisContext *c);
 void redisFree(redisContext *c);
 int redisFreeKeepFd(redisContext *c);
 int redisBufferRead(redisContext *c);
 int redisBufferWrite(redisContext *c, int *done);
 #ifdef _WIN32
-redisContext *redisPreConnectNonBlock(const char *ip, int port, struct sockaddr_in *sa);
+redisContext *redisPreConnectNonBlock(const char *ip, int port, SOCKADDR_STORAGE *sa);
 int redisBufferReadDone(redisContext *c, char *buf, int nread);
 int redisBufferWriteDone(redisContext *c, int nwritten, int *done);
 #endif

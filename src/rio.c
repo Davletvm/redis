@@ -57,7 +57,10 @@
 #include "rio.h"
 #include "crc64.h"
 #include "config.h"
-#include "redis.h"
+
+#ifdef _WIN32
+#include "Win32_Interop\Win32_FDAPI.h"
+#endif
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioBufferWrite(rio *r, const void *buf, size_t len) {
@@ -83,7 +86,6 @@ static off_t rioBufferTell(rio *r) {
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     size_t retval;
-
     retval = fwrite(buf,len,1,r->io.file.fp);
     r->io.file.buffered += (off_t)len;
 
@@ -461,7 +463,7 @@ size_t rioWriteBulkCount(rio *r, char prefix, int count) {
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len) {
     size_t nwritten;
 
-    if ((nwritten = rioWriteBulkCount(r,'$',len)) == 0) return 0;
+    if ((nwritten = rioWriteBulkCount(r,'$',(int)len)) == 0) return 0;
     if (len > 0 && rioWrite(r,buf,len) == 0) return 0;
     if (rioWrite(r,"\r\n",2) == 0) return 0;
     return nwritten+len+2;
