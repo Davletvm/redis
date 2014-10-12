@@ -987,7 +987,9 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                 for (int page = 0; page < pages; page++) {
                     size_t offset = g_CleanupState.offsetCopied + page * pageSize;
                     LPVOID addr = (BYTE*)g_pQForkControl->heapStart + offset;
-                    if (IsAddrCOW(addr)) {
+                    int bit;
+                    uint64_t slot = AddrToBitSlot(addr, &bit);
+                    if ((g_CleanupState.pageBitMap[slot] & (1ULL << bit)) != 0) {
 
                         g_CleanupState.copiedPages++;
                         memcpy(
@@ -995,6 +997,8 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                             (BYTE*)addr,
                             pageSize);
                         IFFAILTHROW(VirtualProtect(addr, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &oldProtect), "EndForkOperation: Revert to file map failed.");
+                    } else {
+                        g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
                     }
                 }
 
