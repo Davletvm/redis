@@ -252,8 +252,8 @@ LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
             if (IsAddrInHeap(addr) && !IsAddrCOW(addr)) {
                 DWORD oldProtect;
                 if (g_CleanupState.currentState >= osEXITED) {
-                    IFFAILTHROW(VirtualProtect(addr, 1, PAGE_READWRITE, &oldProtect), "Unable to mark as ReadWrite in Handler.");
-                    return EXCEPTION_CONTINUE_EXECUTION;
+                    if (VirtualProtect(addr, 1, PAGE_READWRITE, &oldProtect))
+                        return EXCEPTION_CONTINUE_EXECUTION;
                 } else {
                     if (VirtualProtect(addr, 1, PAGE_WRITECOPY, &oldProtect)) {
                         int bit;
