@@ -195,7 +195,10 @@ void ForceCOWBuffer(LPVOID addr, size_t size) {
             if ((g_CleanupState.pageBitMap[idx] & (1ULL << bitidx)) == 0) {
                 BYTE * baddr = (BYTE*) g_pQForkControl->heapStart + (((idx << 6) + bitidx) << 12);
                 DWORD oldProtect;
-                if (VirtualProtect(baddr, 1, PAGE_WRITECOPY, &oldProtect)) {
+                if (g_CleanupState.currentState >= osEXITED) {
+                    IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_READWRITE, &oldProtect), "Unable to mark as ReadWrite in ForceCOW.");
+                } else {
+                    IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_WRITECOPY, &oldProtect), "Unable to mark as WriteCopy in ForceCOW.");
                     g_CleanupState.pageBitMap[idx] |= (1ULL << bitidx);
                 }
             }
@@ -248,11 +251,16 @@ LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
             LPVOID addr = (LPVOID) exinfo->ExceptionRecord->ExceptionInformation[1];
             if (IsAddrInHeap(addr) && !IsAddrCOW(addr)) {
                 DWORD oldProtect;
-                if (VirtualProtect(addr, 1, PAGE_WRITECOPY, &oldProtect)) {
-                    int bit;
-                    uint64_t slot = AddrToBitSlot(addr, &bit);
-                    g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
+                if (g_CleanupState.currentState >= osEXITED) {
+                    IFFAILTHROW(VirtualProtect(addr, 1, PAGE_READWRITE, &oldProtect), "Unable to mark as ReadWrite in Handler.");
                     return EXCEPTION_CONTINUE_EXECUTION;
+                } else {
+                    if (VirtualProtect(addr, 1, PAGE_WRITECOPY, &oldProtect)) {
+                        int bit;
+                        uint64_t slot = AddrToBitSlot(addr, &bit);
+                        g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                    }
                 }
             }
         }
