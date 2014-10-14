@@ -61,6 +61,7 @@ typedef struct aeWatchedItem {
 /* structure that keeps state of sockets and Completion port handle */
 typedef struct aeApiState {
     HANDLE iocp;
+    HANDLE privIocp;
     int setsize;
     OVERLAPPED_ENTRY entries[MAX_COMPLETE_PER_POLL];
     list lookup[MAX_SOCKET_LOOKUP];
@@ -229,7 +230,7 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
                 redisLog(REDIS_DEBUG, "WT: completion requested %d", id);
-                PostQueuedCompletionStatus(state->iocp, 0, ((unsigned long)(-(int)(rval - WAIT_OBJECT_0))), (LPOVERLAPPED) id);
+                PostQueuedCompletionStatus(state->privIocp, 0, ((unsigned long)(-(int)(rval - WAIT_OBJECT_0))), (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
             LeaveCriticalSection(&(state->threadCS));
@@ -288,6 +289,10 @@ static void aeApiFree(aeEventLoop *eventLoop) {
             CloseHandle(state->iocp);
             state->iocp = NULL;
         }
+        if (state->privIocp) {
+            CloseHandle(state->privIocp);
+            state->privIocp = NULL;
+        }
         DeleteCriticalSection(&(state->threadCS));
         FreeMemoryNoCOW(state);
     }
@@ -316,6 +321,13 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
     if (state->iocp == NULL) {
         goto err;
     }
+    state->privIocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE,
+        NULL,
+        0,
+        1);
+    if (state->privIocp == NULL) {
+        goto err;
+    }
 
     pGetQueuedCompletionStatusEx = NULL;
     kernel32_module = GetModuleHandleA("kernel32.dll");
@@ -336,7 +348,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
 
     state->setsize = eventLoop->setsize;
     /* initialize the IOCP socket code with state reference */
-    aeWinInit(state, state->iocp, aeGetSockState, aeDelSockState);
+    aeWinInit(state, state->iocp, state->privIocp, aeGetSockState, aeDelSockState);
     return 0;
 err:
     aeApiFree(eventLoop);
@@ -348,6 +360,10 @@ static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
     return 0;
 }
 
+HANDLE aeGetIocp(aeEventLoop * eventLoop, aeSockState * sockstate) {
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    return (sockstate->masks & PRIV_SOCKET) ? state->privIocp : state->iocp;
+}
 
 
 /* monitor state changes for a socket */
@@ -379,7 +395,7 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
             if (sockstate->wreqs == 0) {
                 asendreq *areq = (asendreq *)AllocMemoryNoCOW(sizeof(asendreq));
                 memset(areq, 0, sizeof(asendreq));
-                if (PostQueuedCompletionStatus(state->iocp,
+                if (PostQueuedCompletionStatus(aeGetIocp(eventLoop, sockstate),
                                             0,
                                             fd,
                                             &areq->ov) == 0) {
@@ -462,55 +478,33 @@ void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
 
 /* return array of sockets that are ready for read or write 
    depending on the mask for each socket */
-static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxCompletes) {
     aeApiState *state = (aeApiState *)eventLoop->apidata;
     aeSockState *sockstate;
     ULONG j;
     int numevents = 0;
     ULONG numComplete = 0;
     int rc;
+    if (maxCompletes > MAX_COMPLETE_PER_POLL) maxCompletes = MAX_COMPLETE_PER_POLL;
     int mswait = tvp ? (tvp->tv_sec * 1000) + (tvp->tv_usec / 1000) : INFINITE;
 
-    if (pGetQueuedCompletionStatusEx != NULL) {
-        /* first get an array of completion notifications */
-        rc = pGetQueuedCompletionStatusEx(state->iocp,
-                                        state->entries,
-                                        MAX_COMPLETE_PER_POLL,
-                                        &numComplete,
-                                        mswait,
-                                        FALSE);
-    } else {
-        /* need to get one at a time. Use first array element */
-        rc = GetQueuedCompletionStatus(state->iocp,
-                                        &state->entries[0].dwNumberOfBytesTransferred,
-                                        &state->entries[0].lpCompletionKey,
-                                        &state->entries[0].lpOverlapped,
-                                        mswait);
-        if (!rc && state->entries[0].lpOverlapped == NULL) {
-            // timeout. Return.
-            return 0;
-        } else {
-            // check if more completions are ready
-            int lrc = 1;
-            rc = 1;
-            numComplete = 1;
+    rc = pGetQueuedCompletionStatusEx(state->privIocp,
+                                    state->entries,
+                                    maxCompletes,
+                                    &numComplete,
+                                    0,
+                                    FALSE);
+    maxCompletes -= numComplete;
+    int numComplete2 = 0;
+    rc = pGetQueuedCompletionStatusEx(state->iocp,
+        state->entries + numComplete,
+        maxCompletes,
+        &numComplete2,
+        mswait,
+        FALSE);
+    numComplete += numComplete2;
 
-            while (numComplete < MAX_COMPLETE_PER_POLL) {
-                lrc = GetQueuedCompletionStatus(state->iocp,
-                                                &state->entries[numComplete].dwNumberOfBytesTransferred,
-                                                &state->entries[numComplete].lpCompletionKey,
-                                                &state->entries[numComplete].lpOverlapped,
-                                                0);
-                if (lrc) {
-                   numComplete++;
-                } else {
-                    if (state->entries[numComplete].lpOverlapped == NULL) break;
-                }
-            }
-        }
-    }
-
-    if (rc && numComplete > 0) {
+    if (numComplete > 0) {
         LPOVERLAPPED_ENTRY entry = state->entries;
         for (j = 0; j < numComplete && numevents < state->setsize; j++, entry++) {
             int rfd = (int)entry->lpCompletionKey;

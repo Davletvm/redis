@@ -1775,6 +1775,8 @@ void adjustOpenFilesLimit(void) {
 int listenToPort(int port, int *fds, int *count) {
     int j;
 
+    void * privData = (port == server.privport && server.privilidgeEnabled) ? (void*)-1 : NULL;
+
     /* Force binding of 0.0.0.0 if no bind address is specified, always
      * entering the loop if j == 0. */
     if (server.bindaddr_count == 0) server.bindaddr[0] = NULL;
@@ -1782,14 +1784,14 @@ int listenToPort(int port, int *fds, int *count) {
         if (server.bindaddr[j] == NULL) {
             /* Bind * for both IPv6 and IPv4, we enter here only if
              * server.bindaddr_count == 0. */
-            fds[*count] = anetTcp6Server(server.neterr,port,NULL,
-                server.tcp_backlog);
+            fds[*count] = anetTcp6ServerEx(server.neterr,port,NULL,
+                server.tcp_backlog, privData);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
             }
-            fds[*count] = anetTcpServer(server.neterr,port,NULL,
-                server.tcp_backlog);
+            fds[*count] = anetTcpServerEx(server.neterr,port,NULL,
+                server.tcp_backlog, privData);
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
@@ -1800,12 +1802,12 @@ int listenToPort(int port, int *fds, int *count) {
             if (*count) break;
         } else if (strchr(server.bindaddr[j],':')) {
             /* Bind IPv6 address. */
-            fds[*count] = anetTcp6Server(server.neterr,port,server.bindaddr[j],
-                server.tcp_backlog);
+            fds[*count] = anetTcp6ServerEx(server.neterr,port,server.bindaddr[j],
+                server.tcp_backlog, privData);
         } else {
             /* Bind IPv4 address. */
-            fds[*count] = anetTcpServer(server.neterr,port,server.bindaddr[j],
-                server.tcp_backlog);
+            fds[*count] = anetTcpServerEx(server.neterr,port,server.bindaddr[j],
+                server.tcp_backlog, privData);
         }
         if (fds[*count] == ANET_ERR) {
             redisLog(REDIS_WARNING,

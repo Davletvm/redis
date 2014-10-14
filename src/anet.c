@@ -451,7 +451,7 @@ int anetWrite(int fd, char *buf, int count)
     return totlen;
 }
 
-static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
+static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, void * privdata) {
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
@@ -459,7 +459,7 @@ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int 
     }
 
 #ifdef _WIN32
-    if (aeWinListen(s, backlog) == SOCKET_ERROR) {
+    if (aeWinListenEx(s, backlog, privdata) == SOCKET_ERROR) {
 #else
     if (listen(s, backlog) == -1) {
 #endif
@@ -480,7 +480,7 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
+static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, void * privdata)
 {
     int s, rv;
     char _port[6];  /* strlen("65535") */
@@ -506,7 +506,7 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
 #else
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
 #endif
-        if (anetListen(err,s,p->ai_addr,(socklen_t)p->ai_addrlen,backlog) == ANET_ERR) goto error;
+        if (anetListen(err,s,p->ai_addr,(socklen_t)p->ai_addrlen,backlog, privdata) == ANET_ERR) goto error;
         goto end;
     }
     if (p == NULL) {
@@ -523,12 +523,22 @@ end:
 
 int anetTcpServer(char *err, int port, char *bindaddr, int backlog)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog, NULL);
 }
 
 int anetTcp6Server(char *err, int port, char *bindaddr, int backlog)
 {
-    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog, NULL);
+}
+
+int anetTcpServerEx(char *err, int port, char *bindaddr, int backlog, void *privdata)
+{
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog, privdata);
+}
+
+int anetTcp6ServerEx(char *err, int port, char *bindaddr, int backlog, void *privdata)
+{
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog, privdata);
 }
 
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog)

@@ -71,6 +71,10 @@
 #endif
 #endif
 
+#define MIN_COMPLETES 5
+#define MAX_COMPLETES MAX_COMPLETE_PER_POLL
+
+
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -86,6 +90,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
+    eventLoop->numCompletes = MAX_COMPLETES;
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -315,6 +320,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         te = eventLoop->timeEventHead;
         while(te) {
             te->when_sec = 0;
+            te->when_ms = 0;
             te = te->next;
         }
     }
@@ -438,7 +444,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             }
         }
 
-        numevents = aeApiPoll(eventLoop, tvp);
+        numevents = aeApiPoll(eventLoop, tvp, eventLoop->numCompletes);
         for (j = 0; j < numevents; j++) {
             aeFileEvent *fe;
             int mask = eventLoop->fired[j].mask;
