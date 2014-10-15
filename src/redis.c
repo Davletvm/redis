@@ -718,7 +718,7 @@ int activeExpireCycleTryExpire(redisDb *db, struct dictEntry *de, long long now)
  * executed, where the time limit is a percentage of the REDIS_HZ period
  * as specified by the REDIS_EXPIRELOOKUPS_TIME_PERC define. */
 
-void activeExpireCycle(int type) {
+void activeExpireCycle(int type, long long start) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
     static unsigned int current_db = 0; /* Last DB tested. */
@@ -727,7 +727,7 @@ void activeExpireCycle(int type) {
 
     int j, iteration = 0;
     int dbs_per_call = REDIS_DBCRON_DBS_PER_CALL;
-    long long start = ustime(), timelimit;
+    long long timelimit;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exited
@@ -982,7 +982,7 @@ void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
     if (server.active_expire_enabled && server.masterhost == NULL)
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW, ustime());
 
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
@@ -1346,6 +1346,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     return 1000/server.hz;
 }
 
+
+static long long lastSleep;
+
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
@@ -1353,11 +1356,28 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     listNode *ln;
     redisClient *c;
     REDIS_NOTUSED(eventLoop);
+    long long now = ustime();
+
+    // If we took twice as long as the default period to process the last
+    // event set, process fewer events next time
+    if (((now - lastSleep) / 1000) > 2 * (1000 / server.hz)) {
+        int delta = ((now - lastSleep) / 1000) * server.hz / 1000;
+        eventLoop->numCompletes -= delta;
+        if (eventLoop->numCompletes < MIN_COMPLETES) {
+            eventLoop->numCompletes = MIN_COMPLETES;
+        }
+    } else if (eventLoop->numCompletes < MAX_COMPLETES) {
+        eventLoop->numCompletes += 1;
+        if (eventLoop->numCompletes > MAX_COMPLETES) {
+            eventLoop->numCompletes = MAX_COMPLETES;
+        }
+    }
+    lastSleep = now;
 
     /* Run a fast expire cycle (the called function will return
-     * ASAP if a fast cycle is not needed). */
+    * ASAP if a fast cycle is not needed). */
     if (server.active_expire_enabled && server.masterhost == NULL)
-        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+        activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST, now);
 
     /* Try to process pending commands for clients that were just unblocked. */
     while (listLength(server.unblocked_clients)) {

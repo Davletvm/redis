@@ -71,9 +71,10 @@
 #endif
 #endif
 
-#define MIN_COMPLETES 5
-#define MAX_COMPLETES MAX_COMPLETE_PER_POLL
 
+#if MAX_COMPLETES != MAX_COMPLETE_PER_POLL
+#error Defines must match
+#endif
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
@@ -389,7 +390,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * the events that's possible to process without to wait are processed.
  *
  * The function returns the number of events processed. */
-int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
+int aeProcessEvents(aeEventLoop *eventLoop, int flags, int msDefaultTimeout)
 {
     int processed = 0, numevents;
 
@@ -436,9 +437,9 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             } else {
                 /* Otherwise we can block */
                 tvp = NULL; /* wait forever */
-                if (defaultTimeout > -1) {
-                    tv.tv_sec = defaultTimeout;
-                    tv.tv_usec = 0;
+                if (msDefaultTimeout > -1) {
+                    tv.tv_sec = msDefaultTimeout / 1000;
+                    tv.tv_usec = (msDefaultTimeout % 1000) * 1000;
                     tvp = &tv;
                 }
             }

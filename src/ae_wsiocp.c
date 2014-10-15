@@ -494,6 +494,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxComplet
                                     &numComplete,
                                     0,
                                     FALSE);
+    if (!rc) numComplete = 0;
     maxCompletes -= numComplete;
     int numComplete2 = 0;
     rc = pGetQueuedCompletionStatusEx(state->iocp,
@@ -502,6 +503,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxComplet
         &numComplete2,
         mswait,
         FALSE);
+    if (!rc) numComplete2 = 0;
     numComplete += numComplete2;
 
     if (numComplete > 0) {

@@ -171,7 +171,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
             return SOCKET_ERROR;
         }
         
-        if ((sockstate = aeGetSockState(iocpState, fd)) == NULL) {
+        if ((sockstate = aeGetSockState(iocpState, acceptsock)) == NULL) {
             redisLog(REDIS_WARNING, "aeWinAccept - Cannot get sockstate for accept'ed socket");
             errno = WSAEINVAL;
             return SOCKET_ERROR;
@@ -211,7 +211,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     FreeMemoryNoCOW(areq->buf);
     FreeMemoryNoCOW(areq);
 
-    if ((sockstate = aeGetSockState(iocpState, fd)) == NULL) {
+    if ((sockstate = aeGetSockState(iocpState, acceptsock)) == NULL) {
         redisLog(REDIS_WARNING, "aeWinAccept - Cannot get sockstate for AcceptEx'ed socket");
         errno = WSAEINVAL;
         return SOCKET_ERROR;
@@ -478,7 +478,7 @@ int aeWinSocketAttach(int fd) {
         errno = WSAGetLastError();
         return -1;
     }
-    sockstate->masks = SOCKET_ATTACHED;
+    sockstate->masks |= SOCKET_ATTACHED;
     sockstate->wreqs = 0;
 
     return 0;
