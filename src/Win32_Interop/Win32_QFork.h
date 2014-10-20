@@ -81,6 +81,7 @@ void AbortForkOperation(BOOL blockUntilCleanedUp);
 void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode);
 void ClearInMemoryBuffersMasterParent();
 void GetHeapExtent(HeapExtent * pextent);
+void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * totalPages);
 
 // For DLMalloc use only
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh);

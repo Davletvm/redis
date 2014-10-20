@@ -130,7 +130,8 @@ struct CleanupState {
     size_t offsetCopied;
     size_t copyBatchSize;
     int copiedPages;
-    int invalidPages;
+    int cowPages;
+    int scannedPages;
     int exitCode;
     int heapBlocksToCleanup;
     time_t forkExitTimeout;
@@ -199,6 +200,7 @@ void ForceCOWBuffer(LPVOID addr, size_t size) {
                     IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_READWRITE, &oldProtect), "Unable to mark as ReadWrite in ForceCOW.");
                 } else {
                     IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_WRITECOPY, &oldProtect), "Unable to mark as WriteCopy in ForceCOW.");
+                    g_CleanupState.cowPages++;
                     g_CleanupState.pageBitMap[idx] |= (1ULL << bitidx);
                 }
             }
@@ -259,6 +261,7 @@ LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
                         int bit;
                         uint64_t slot = AddrToBitSlot(addr, &bit);
                         g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
+                        g_CleanupState.cowPages++;
                         return EXCEPTION_CONTINUE_EXECUTION;
                     }
                 }
@@ -880,6 +883,14 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
     }
 }
 
+void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * totalPages)
+{
+    *cowPages = g_CleanupState.cowPages;
+    *copiedPages = g_CleanupState.copiedPages;
+    *scannedPages = g_CleanupState.scannedPages;
+    *totalPages = g_CleanupState.heapBlocksToCleanup * (int)(g_pQForkControl->heapBlockSize / pageSize);
+}
+
 
 void EndForkOperation(int * pExitCode)
 {
@@ -993,6 +1004,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                     "AdvanceForkCleanup: VirtualProtect 4 failed.");
 
                 for (int page = 0; page < pages; page++) {
+                    g_CleanupState.scannedPages++;
                     size_t offset = g_CleanupState.offsetCopied + page * pageSize;
                     LPVOID addr = (BYTE*)g_pQForkControl->heapStart + offset;
                     int bit;

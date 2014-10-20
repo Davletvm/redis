@@ -108,7 +108,7 @@ int anetKeepAlive(char *err, int fd, int interval) {
     if(WSAIoctl(fd, SIO_KEEPALIVE_VALS, &alive, sizeof(alive), 
        NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR) { 
         anetSetError(err, "WSAIotcl(SIO_KEEPALIVE_VALS) failed with error code %d\n", WSAGetLastError()); 
-    	return ANET_ERR; 
+        return ANET_ERR; 
     } 
 #else
     /* Default settings are more or less garbage, with the keepalive time
