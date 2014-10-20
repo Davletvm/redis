@@ -1299,8 +1299,8 @@ eoferr: /* unexpected end of file is handled here with a fatal exit, unless we a
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this. */
-void backgroundSaveDoneHandler(int exitcode, int bysignal) {
-    if (!bysignal && exitcode == 0 && !server.repl_inMemoryReceive) {
+void backgroundSaveDoneHandler(int exitcode, int bysignal, int inmemory) {
+    if (!bysignal && exitcode == 0 && !inmemory) {
         redisLog(REDIS_NOTICE,
             "Background saving terminated with success");
         server.dirty = server.dirty - server.dirty_before_bgsave;
