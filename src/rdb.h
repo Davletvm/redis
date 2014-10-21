@@ -109,7 +109,7 @@ int rdbSaveObject(rio *rdb, robj *o);
 off_t rdbSavedObjectLen(robj *o);
 off_t rdbSavedObjectPages(robj *o);
 robj *rdbLoadObject(int type, rio *rdb);
-void backgroundSaveDoneHandler(int exitcode, int bysignal);
+void backgroundSaveDoneHandler(int exitcode, int bysignal, int inmemory);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, long long now);
 robj *rdbLoadStringObject(rio *rdb);
 

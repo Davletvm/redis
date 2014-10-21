@@ -1064,7 +1064,6 @@ int forkCleanupCron(struct aeEventLoop *eventLoop, long long id, void *clientDat
         if (opStatus == osCLEANING) {
             AdvanceCleanupForkOperation(FALSE, NULL);
         } else if (opStatus == osCLEANEDUP) {
-            EndForkOperation(NULL);
             server.forkcleanup = 0;
         } else {
             server.forkcleanup = 0;
@@ -1248,14 +1247,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         } else if (opStatus == osEXITED) {
             redisLog(REDIS_NOTICE, !failed ? "Child work completed" : "Child work failed");
 
-            bysignal = failed;
- 
-            AdvanceCleanupForkOperation(FALSE, &exitcode);
+            AdvanceCleanupForkOperation(FALSE, NULL);
             server.forkcleanup = 1;
             if (aeCreateTimeEvent(server.el, 1, forkCleanupCron, NULL, NULL) == AE_ERR) {
                 redisPanic("Can't create the serverCron time event.");
                 exit(1);
             }
+
+        } else if (opStatus == osCLEANEDUP) {
+            EndForkOperation(&exitcode);
+            bysignal = failed;
 
             pid = (server.rdb_child_pid != -1) ? server.rdb_child_pid : server.aof_child_pid;
         }
@@ -1273,7 +1274,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 #endif
         if (pid != 0) {
             if (pid == server.rdb_child_pid) {
-                backgroundSaveDoneHandler(exitcode,bysignal);
+                backgroundSaveDoneHandler(exitcode,bysignal,inMemory);
             } else if (pid == server.aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);
             } else {
