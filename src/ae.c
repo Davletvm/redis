@@ -89,6 +89,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->timeEventHead = NULL;
     eventLoop->timeEventNextId = 0;
     eventLoop->stop = 0;
+    eventLoop->nosleep = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
     eventLoop->numCompletes = MAX_COMPLETES;
@@ -401,6 +402,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int msDefaultTimeout)
 
     /* Nothing to do? return ASAP */
     if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
+    if (eventLoop->nosleep) flags |= AE_DONT_WAIT;
 
     /* Note that we want call select() even if there are no
      * file events to process as long as we want to process time

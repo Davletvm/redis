@@ -150,6 +150,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 #define REDIS_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
+#define REDIS_DEFALT_PENDING_DELETE_QUANTA 1000
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -754,6 +755,8 @@ struct redisServer {
     int cronloops;              /* Number of times the cron function run */
     char runid[REDIS_RUN_ID_SIZE+1];  /* ID always different at every exec. */
     int sentinel_mode;          /* True if this instance is a Sentinel. */
+    list * pendingDeletes;
+    int pendingDeleteQuanta;
     /* Networking */
     int port;                   /* TCP listening port */
     int privport;
@@ -920,6 +923,7 @@ struct redisServer {
     int repl_inMemoryThrottleReceiveCheck;
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
+    int postponeDeletes;
     int privilidgeEnabled;
     int cpu_time_ms_per_sec;
     unsigned long long cpu_time_lastusage_ms;
@@ -1109,6 +1113,7 @@ extern struct sharedObjectsStruct shared;
 extern dictType setDictType;
 extern dictType zsetDictType;
 extern dictType dbDictType;
+extern dictType keyptrDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;
@@ -1276,6 +1281,8 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
 void TransitionToFreeWindow(int final);
 int CheckThrottleWindowUpdate(redisClient * c);
 void updateThrottleState();
+void addToPendingDeletes(robj * obj);
+void processPendingDeletes();
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
@@ -1313,6 +1320,7 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
+int zslFreeCount(zskiplist * zsl, int count);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score);
 int zslDelete(zskiplist *zsl, double score, robj *obj);

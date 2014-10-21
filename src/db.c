@@ -211,8 +211,19 @@ long long emptyDb(void(callback)(void*)) {
 
     for (j = 0; j < server.dbnum; j++) {
         removed += dictSize(server.db[j].dict);
-        dictEmpty(server.db[j].dict,callback);
-        dictEmpty(server.db[j].expires,callback);
+        if (server.postponeDeletes) {
+            robj *o = createObject(REDIS_HASH, server.db[j].dict);
+            o->encoding = REDIS_ENCODING_HT;
+            decrRefCount(o);
+            o = createObject(REDIS_HASH, server.db[j].expires);
+            o->encoding = REDIS_ENCODING_HT;
+            decrRefCount(o);
+            server.db[j].dict = dictCreate(&dbDictType, NULL);
+            server.db[j].expires = dictCreate(&keyptrDictType, NULL);
+        } else {
+            dictEmpty(server.db[j].dict, callback);
+            dictEmpty(server.db[j].expires, callback);
+        }
     }
     server.protects_used = 0;
     return removed;
@@ -260,11 +271,24 @@ void flushPingCallback(void * data) {
 }
 
 
+
+
 void flushdbCommand(redisClient *c) {
     server.dirty += dictSize(c->db->dict);
     signalFlushedDb(c->db->id);
-    dictEmpty(c->db->dict,flushPingCallback);
-    dictEmpty(c->db->expires,flushPingCallback);
+    if (server.postponeDeletes) {
+        robj *o = createObject(REDIS_HASH, c->db->dict);
+        o->encoding = REDIS_ENCODING_HT;
+        decrRefCount(o);
+        o = createObject(REDIS_HASH, c->db->expires);
+        o->encoding = REDIS_ENCODING_HT;
+        decrRefCount(o);
+        c->db->dict = dictCreate(&dbDictType, NULL);
+        c->db->expires = dictCreate(&keyptrDictType, NULL);
+    } else {
+        dictEmpty(c->db->dict, flushPingCallback);
+        dictEmpty(c->db->expires, flushPingCallback);
+    }
     addReply(c,shared.ok);
 }
 

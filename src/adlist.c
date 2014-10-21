@@ -82,6 +82,31 @@ void listRelease(list *list)
     zfree(list);
 }
 
+
+int listReleaseCount(list * list, unsigned int count) {
+    unsigned long len;
+    listNode *current, *next;
+
+    current = list->head;
+    len = list->len;
+    if (len > count) len = count;
+    while (len--) {
+        next = current->next;
+        if (list->free) list->free(current->value);
+        zfree(current);
+        current = next;
+    }
+    if (!current) {
+        int left = count - list->len;
+        zfree(list);
+        return left ? left : 1;
+    } else {
+        list->len -= count;
+        list->head = current;
+        return 0;
+    }
+}
+
 /* Add a new node to the list, to head, contaning the specified 'value'
  * pointer as value.
  *

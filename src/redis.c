@@ -1158,6 +1158,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(2000) {
+        if (listLength(server.pendingDeletes)) {
+            redisLog(REDIS_VERBOSE, "Object pending deletion: %d", listLength(server.pendingDeletes));
+        }
         if (server.repl_inMemorySend) {
             redisInMemoryReplSend * inm = server.repl_inMemorySend;
             int cowPages, copiedPages, scannedPages, totalPages;
@@ -1404,6 +1407,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
+
+    processPendingDeletes();
+
+    eventLoop->nosleep = listLength(server.pendingDeletes);
 }
 
 /* =========================== Server initialization ======================== */
@@ -1646,6 +1653,7 @@ void initServerConfig(void) {
     server.time_last_slave_ping = server.cpu_time_lastreported;
     server.cpu_time_lastusage_ms = 0;
     server.privilidgeEnabled = 0;
+    server.postponeDeletes = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -1905,6 +1913,8 @@ void initServer(void) {
     lib = LoadLibraryA("advapi32.dll");
     RtlGenRandom = (RtlGenRandomFunc)GetProcAddress(lib, "SystemFunction036");
 #endif
+    server.pendingDeletes = listCreate();
+    server.pendingDeleteQuanta = REDIS_DEFALT_PENDING_DELETE_QUANTA;
 
     server.current_client = NULL;
     server.clients = listCreate();
@@ -3368,6 +3378,154 @@ void monitorCommand(redisClient *c) {
     addReply(c,shared.ok);
 }
 
+
+void addToPendingDeletes(robj * o) {
+    zset *zs;
+    switch (o->type) {
+    case REDIS_SET:
+        switch (o->encoding) {
+        case REDIS_ENCODING_HT:
+            dictPendingRelease((dict*)o->ptr);
+            break;
+        case REDIS_ENCODING_INTSET:
+            zfree(o->ptr);
+            zfree(o);
+            return;
+        default:
+            redisPanic("Unknown set encoding type");
+        }
+        break;
+    case REDIS_STRING: 
+        if (o->encoding == REDIS_ENCODING_RAW) {
+            sdsfree(o->ptr);
+        }
+        zfree(o);
+        return;
+    case REDIS_LIST:
+        switch (o->encoding) {
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            zfree(o);
+            return;
+        }
+        break;
+    case REDIS_ZSET: 
+        switch (o->encoding) {
+        case REDIS_ENCODING_SKIPLIST:
+            zs = o->ptr;
+            dictPendingRelease(zs->dict);
+            break;
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            zfree(o);
+            return;
+        default:
+            redisPanic("Unknown sorted set encoding");
+        }
+        break;
+    case REDIS_HASH: 
+        switch (o->encoding) {
+        case REDIS_ENCODING_HT:
+            dictPendingRelease((dict*)o->ptr);
+            break;
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            zfree(o);
+            return;
+        default:
+            redisPanic("Unknown hash encoding type");
+            break;
+        }
+        break;
+    default:
+        redisPanic("Unknown object type"); 
+        break;
+    }
+    listAddNodeTail(server.pendingDeletes, o);
+}
+
+
+
+int freePendingListObject(robj *o, int quantaLeft) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_LINKEDLIST:
+        return listReleaseCount((list*)o->ptr, server.pendingDeleteQuanta);
+        break;
+    default:
+        redisPanic("Unknown list encoding type");
+    }
+}
+
+int freePendingSetObject(robj * o, int quantaLeft) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_HT:
+        return dictReleaseCount((dict*)o->ptr, quantaLeft);
+        break;
+    default:
+        redisPanic("Unknown set encoding type");
+    }
+}
+
+int freePendingZsetObject(robj *o, int quantaLeft) {
+    zset *zs;
+    switch (o->encoding) {
+    case REDIS_ENCODING_SKIPLIST:
+        zs = o->ptr;
+        if (zs->dict) {
+            if (quantaLeft = dictReleaseCount(zs->dict, quantaLeft)) {
+                zs->dict = NULL;
+            } else {
+                return 0;
+            }
+        }
+        if (quantaLeft = zslFreeCount(zs->zsl, quantaLeft)) {
+            zfree(zs);
+        }
+        return quantaLeft;
+    default:
+        redisPanic("Unknown sorted set encoding");
+    }
+}
+
+
+int freePendingHashObject(robj *o, int quantaLeft) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_HT:
+        return dictReleaseCount((dict*)o->ptr, quantaLeft);
+    default:
+        redisPanic("Unknown hash encoding type");
+        break;
+    }
+}
+
+
+void processPendingDelete() {
+    int quantaLeft = server.pendingDeleteQuanta;
+    while (quantaLeft > 0 && listLength(server.pendingDeletes)) {
+        robj* o;
+        o = listFirst(server.pendingDeletes)->value;
+        switch (o->type) {
+        case REDIS_LIST: quantaLeft = freePendingListObject(o, quantaLeft); break;
+        case REDIS_SET: quantaLeft = freePendingSetObject(o, quantaLeft); break;
+        case REDIS_ZSET: quantaLeft = freePendingZsetObject(o, quantaLeft); break;
+        case REDIS_HASH: quantaLeft = freePendingHashObject(o, quantaLeft); break;
+        default: redisPanic("Unknown object type"); break;
+        }
+        if (quantaLeft) {
+            zfree(o);
+            listDelNode(server.pendingDeletes, listFirst(server.pendingDeletes));
+        }
+    }
+}
+
+void processPendingDeletes() {
+    if (!listLength(server.pendingDeletes)) return;
+    processPendingDelete();
+}
+
+
+
+
 /* ============================ Maxmemory directive  ======================== */
 
 /* This function gets called when 'maxmemory' is set on the config file to limit
@@ -3386,13 +3544,13 @@ void monitorCommand(redisClient *c) {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    size_t mem_used, mem_tofree, mem_freed;
+    size_t mem_used, mem_tofree, mem_freed, mem_heap;
     int slaves = listLength(server.slaves);
     mstime_t latency;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
-    mem_used = zmalloc_used_memory();
+    mem_heap = mem_used = zmalloc_used_memory();
     if (slaves) {
         listIter li;
         listNode *ln;
@@ -3427,6 +3585,15 @@ int freeMemoryIfNeeded(void) {
     long long when; 
     latencyStartMonitor(latency);
     while (mem_freed < mem_tofree) {
+        {
+            if (listLength(server.pendingDeletes)) {
+                long long delta = zmalloc_used_memory();
+                processPendingDelete();
+                delta -= zmalloc_used_memory();
+                mem_freed += (size_t) delta;
+                continue;
+            }
+        }
         int j, k, keys_freed = 0;
         robj *o;
         for (j = 0; j < server.dbnum; j++) {

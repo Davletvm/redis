@@ -100,6 +100,7 @@ typedef struct aeEventLoop {
     aeTimeEvent *timeEventHead;
     int stop;
     int numCompletes;
+    int nosleep;
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
 } aeEventLoop;

@@ -40,6 +40,7 @@
 
 #define DICT_OK 0
 #define DICT_ERR 1
+#define DICT_LEFT 2
 
 /* Unused arguments generate annoying warnings... */
 #define DICT_NOTUSED(V) ((void) V)
@@ -169,6 +170,8 @@ dictEntry *dictReplaceRaw(dict *d, void *key);
 int dictDelete(dict *d, const void *key);
 int dictDeleteNoFree(dict *d, const void *key);
 void dictRelease(dict *d);
+int dictReleaseCount(dict *d, int count);
+void dictPendingRelease(dict * d);
 dictEntry * dictFind(dict *d, const void *key);
 void *dictFetchValue(dict *d, const void *key);
 int dictResize(dict *d);
