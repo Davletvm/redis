@@ -1371,7 +1371,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     // If we took twice as long as the default period to process the last
     // event set, process fewer events next time
     if (((now - lastSleep) / 1000) > 2 * (1000 / server.hz)) {
-        int delta = ((now - lastSleep) / 1000) * server.hz / 1000;
+        int delta = (int)(((now - lastSleep) / 1000) * server.hz / 1000);
         eventLoop->numCompletes -= delta;
         if (eventLoop->numCompletes < MIN_COMPLETES) {
             eventLoop->numCompletes = MIN_COMPLETES;
@@ -3544,7 +3544,7 @@ void processPendingDeletes() {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    size_t mem_used, mem_tofree, mem_freed, mem_heap;
+    long long mem_used, mem_tofree, mem_freed, mem_heap;
     int slaves = listLength(server.slaves);
     mstime_t latency;
 
@@ -3558,7 +3558,7 @@ int freeMemoryIfNeeded(void) {
         listRewind(server.slaves,&li);
         while((ln = listNext(&li))) {
             redisClient *slave = listNodeValue(ln);
-            unsigned long long obuf_bytes = getClientOutputBufferMemoryUsage(slave);
+            long long obuf_bytes = getClientOutputBufferMemoryUsage(slave);
             if (obuf_bytes > mem_used)
                 mem_used = 0;
             else
@@ -3571,7 +3571,7 @@ int freeMemoryIfNeeded(void) {
     }
 
     /* Check if we are over the memory limit. */
-    BOOL objectMemoryExceeded = mem_used > server.maxmemory;
+    BOOL objectMemoryExceeded = mem_used > (long long) server.maxmemory;
 
     if (!objectMemoryExceeded) return REDIS_OK;
 
