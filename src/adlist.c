@@ -97,8 +97,9 @@ int listReleaseCount(list * list, unsigned int count) {
         current = next;
     }
     if (!current) {
+        int left = count - list->len;
         zfree(list);
-        return 1;
+        return left ? left : 1;
     } else {
         list->len -= count;
         list->head = current;

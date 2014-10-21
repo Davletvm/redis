@@ -150,6 +150,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_INMEMORY_SENDBUFFER (1024 * 1024)
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 #define REDIS_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
+#define REDIS_DEFALT_PENDING_DELETE_QUANTA 1000
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -1109,6 +1110,7 @@ extern struct sharedObjectsStruct shared;
 extern dictType setDictType;
 extern dictType zsetDictType;
 extern dictType dbDictType;
+extern dictType keyptrDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
 extern dictType hashDictType;

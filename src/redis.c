@@ -1159,6 +1159,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     run_with_period(2000) {
+        if (listLength(server.pendingDeletes)) {
+            redisLog(REDIS_VERBOSE, "Object pending deletion: %d", listLength(server.pendingDeletes));
+        }
         if (server.repl_inMemorySend) {
             redisInMemoryReplSend * inm = server.repl_inMemorySend;
             redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago. buffers waited on:%d / %d", 
@@ -1882,6 +1885,7 @@ void initServer(void) {
     RtlGenRandom = (RtlGenRandomFunc)GetProcAddress(lib, "SystemFunction036");
 #endif
     server.pendingDeletes = listCreate();
+    server.pendingDeleteQuanta = REDIS_DEFALT_PENDING_DELETE_QUANTA;
 
     server.current_client = NULL;
     server.clients = listCreate();
@@ -3413,7 +3417,7 @@ void addToPendingDeletes(robj * o) {
 
 
 
-int freePendingListObject(robj *o) {
+int freePendingListObject(robj *o, int quantaLeft) {
     switch (o->encoding) {
     case REDIS_ENCODING_LINKEDLIST:
         return listReleaseCount((list*)o->ptr, server.pendingDeleteQuanta);
@@ -3423,43 +3427,42 @@ int freePendingListObject(robj *o) {
     }
 }
 
-int freePendingSetObject(robj * o) {
+int freePendingSetObject(robj * o, int quantaLeft) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
-        return dictReleaseCount((dict*)o->ptr, server.pendingDeleteQuanta);
+        return dictReleaseCount((dict*)o->ptr, quantaLeft);
         break;
     default:
         redisPanic("Unknown set encoding type");
     }
 }
 
-int freePendingZsetObject(robj *o) {
+int freePendingZsetObject(robj *o, int quantaLeft) {
     zset *zs;
     switch (o->encoding) {
     case REDIS_ENCODING_SKIPLIST:
         zs = o->ptr;
         if (zs->dict) {
-            if (dictReleaseCount(zs->dict, server.pendingDeleteQuanta)) {
+            if (quantaLeft = dictReleaseCount(zs->dict, quantaLeft)) {
                 zs->dict = NULL;
+            } else {
+                return 0;
             }
-            return 0;
-        } else {
-            if (zslFreeCount(zs->zsl,server.pendingDeleteQuanta)) {
-                zfree(zs);
-                return 1;
-            }
-            return 0;
         }
+        if (quantaLeft = zslFreeCount(zs->zsl, quantaLeft)) {
+            zfree(zs);
+        }
+        return quantaLeft;
     default:
         redisPanic("Unknown sorted set encoding");
     }
 }
 
 
-int freePendingHashObject(robj *o) {
+int freePendingHashObject(robj *o, int quantaLeft) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
-        return dictReleaseCount((dict*)o->ptr, server.pendingDeleteQuanta);
+        return dictReleaseCount((dict*)o->ptr, quantaLeft);
     default:
         redisPanic("Unknown hash encoding type");
         break;
@@ -3468,20 +3471,21 @@ int freePendingHashObject(robj *o) {
 
 
 void processPendingDelete() {
-    robj* o;
-    if (!listLength(server.pendingDeletes)) return;
-    o = listFirst(server.pendingDeletes)->value;
-    int freed = 0;
-    switch (o->type) {
-    case REDIS_LIST: freed = freePendingListObject(o); break;
-    case REDIS_SET: freed = freePendingSetObject(o); break;
-    case REDIS_ZSET: freed = freePendingZsetObject(o); break;
-    case REDIS_HASH: freed = freePendingHashObject(o); break;
-    default: redisPanic("Unknown object type"); break;
-    }
-    if (freed) {
-        zfree(o);
-        listDelNode(server.pendingDeletes, listFirst(server.pendingDeletes));
+    int quantaLeft = server.pendingDeleteQuanta;
+    while (quantaLeft > 0 && listLength(server.pendingDeletes)) {
+        robj* o;
+        o = listFirst(server.pendingDeletes)->value;
+        switch (o->type) {
+        case REDIS_LIST: quantaLeft = freePendingListObject(o, quantaLeft); break;
+        case REDIS_SET: quantaLeft = freePendingSetObject(o, quantaLeft); break;
+        case REDIS_ZSET: quantaLeft = freePendingZsetObject(o, quantaLeft); break;
+        case REDIS_HASH: quantaLeft = freePendingHashObject(o, quantaLeft); break;
+        default: redisPanic("Unknown object type"); break;
+        }
+        if (quantaLeft) {
+            zfree(o);
+            listDelNode(server.pendingDeletes, listFirst(server.pendingDeletes));
+        }
     }
 }
 

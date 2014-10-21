@@ -103,7 +103,8 @@ void zslFree(zskiplist *zsl) {
 int zslFreeCount(zskiplist * zsl, int count) {
     zskiplistNode *node = zsl->header->level[0].forward, *next;
 
-    while (node && count--) {
+    while (node && count) {
+        count--;
         next = node->level[0].forward;
         zslFreeNode(node);
         node = next;
@@ -114,7 +115,7 @@ int zslFreeCount(zskiplist * zsl, int count) {
     } else {
         zfree(zsl->header);
         zfree(zsl);
-        return 1;
+        return count ? count : 1;
     }
 }
 

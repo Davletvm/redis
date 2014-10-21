@@ -545,11 +545,11 @@ int _dictClearCount(dict *d, dictht *ht, int count) {
             zfree(he);
             ht->used--;
             he = nextHe;
-            if (--count > 0 && ht->used) {
+            if (--count == 0 && ht->used) {
                 ht->sizemask = i;
                 ht->table[i] = he;
 
-                return DICT_LEFT;
+                return 0;
             }
         }
     }
@@ -557,7 +557,7 @@ int _dictClearCount(dict *d, dictht *ht, int count) {
     zfree(ht->table);
     /* Re-initialize the table */
     _dictReset(ht);
-    return DICT_OK; /* never fails */
+    return count ? count : 1; 
 }
 
 
@@ -576,10 +576,10 @@ void dictPendingRelease(dict * d) {
 }
 
 int dictReleaseCount(dict *d, int count) {
-    if (d->ht[0].table && _dictClearCount(d, &d->ht[0], count) == DICT_LEFT) return 0;
-    if (d->ht[1].table && _dictClearCount(d, &d->ht[0], count) == DICT_LEFT) return 0;
+    if (d->ht[0].table && !(count = _dictClearCount(d, &d->ht[0], count))) return 0;
+    if (d->ht[1].table && !(count = _dictClearCount(d, &d->ht[0], count))) return 0;
     zfree(d);
-    return 1;
+    return count;
 }
 
 
