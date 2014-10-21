@@ -1161,12 +1161,18 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     run_with_period(2000) {
         if (server.repl_inMemorySend) {
             redisInMemoryReplSend * inm = server.repl_inMemorySend;
-            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago. buffers waited on:%d / %d", 
+            int cowPages, copiedPages, scannedPages, totalPages;
+            GetCOWStats(&cowPages, &copiedPages, &scannedPages, &totalPages);
+            redisLog(REDIS_VERBOSE, "Bytes Sent In-Memory-Repl %lld mb. Speed: %lld mb/sec.  Started %lld seconds ago. buffers waited on:%d / %d.  COW pages:%d, copied:%d, scanned:%d, total:%d", 
                 inm->totalSent >> 20, 
                 (inm->totalSent * 1000 / (server.mstime - inm->replStart)) >> 20,
                 (server.mstime - inm->replStart) / 1000,
                 inm->countWaitedForBuffers,
-                inm->countWaitedForBuffers + inm->countBuffersImmediatelyAvailable
+                inm->countWaitedForBuffers + inm->countBuffersImmediatelyAvailable,
+                cowPages,
+                copiedPages,
+                scannedPages,
+                totalPages
                 );
         }
     }
