@@ -751,6 +751,8 @@ struct redisServer {
     int cronloops;              /* Number of times the cron function run */
     char runid[REDIS_RUN_ID_SIZE+1];  /* ID always different at every exec. */
     int sentinel_mode;          /* True if this instance is a Sentinel. */
+    list * pendingDeletes;
+    int pendingDeleteQuanta;
     /* Networking */
     int port;                   /* TCP listening port */
     int privport;
@@ -917,6 +919,7 @@ struct redisServer {
     int repl_inMemoryThrottleReceiveCheck;
     int repl_inMemorySendBuffer; /* Send buffer size */
     int repl_inMemoryReceiveBuffer; /* Receiver buffer size */
+    int postponeDeletes;
     int privilidgeEnabled;
     int cpu_time_ms_per_sec;
     unsigned long long cpu_time_lastusage_ms;
@@ -1273,6 +1276,7 @@ void sendInMemoryBuffersToSlave(aeEventLoop *el, int id);
 void TransitionToFreeWindow(int final);
 int CheckThrottleWindowUpdate(redisClient * c);
 void updateThrottleState();
+void addToPendingDeletes(robj * obj);
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);

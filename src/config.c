@@ -556,6 +556,10 @@ void loadServerConfigFromString(char *config) {
             if ((server.privilidgeEnabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0], "postpone-deletes") && argc == 2) {
+            if ((server.postponeDeletes = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0], "repl-throttle-window") && argc == 2) {
             if ((server.repl_inMemoryThrottleWindow = atoi(argv[1])) < 0) {
                 err = "invalid value for repl-throttle-window"; goto loaderr;
@@ -1007,6 +1011,10 @@ void configSetCommand(redisClient *c) {
         int yn = yesnotoi(o->ptr);
         if (yn == -1) goto badfmt;
         server.privilidgeEnabled = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr, "postpone-deletes")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.postponeDeletes = yn;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-throttle-window")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 10 || ll > 5000) goto badfmt;
         server.repl_inMemoryThrottleWindow = (int) ll;
@@ -1182,6 +1190,7 @@ void configGetCommand(redisClient *c) {
     config_get_bool_field("repl-inmemory", server.repl_inMemoryUse);
     config_get_bool_field("repl-throttle", server.repl_inMemoryThrottle);
     config_get_bool_field("privilidge", server.privilidgeEnabled);
+    config_get_bool_field("postpone-deletes", server.postponeDeletes);
 
     config_get_bool_field("aof-load-truncated",
             server.aof_load_truncated);
@@ -1970,6 +1979,7 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state, "repl-inmemory", server.repl_inMemoryUse, REDIS_DEFAULT_INMEMORYREPL);
     rewriteConfigYesNoOption(state, "repl-throttle", server.repl_inMemoryThrottle, REDIS_DEFAULT_INMEMORYTHROTTLE);
     rewriteConfigYesNoOption(state, "privilidge", server.privilidgeEnabled, 0);
+    rewriteConfigYesNoOption(state, "postpone-deletes", server.postponeDeletes, 0);
     rewriteConfigBytesOption(state, "repl-inmemory-send-buffer-size", server.repl_inMemorySendBuffer, REDIS_DEFAULT_INMEMORY_SENDBUFFER);
     rewriteConfigBytesOption(state, "repl-inmemory-receive-buffer-size", server.repl_inMemoryReceiveBuffer, REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER);
     rewriteConfigNumericalOption(state, "repl-throttle-window", server.repl_inMemoryThrottleWindow, REDIS_DEFAULT_INMEMORYTHROTTLE_WINDOW);

@@ -529,13 +529,59 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
     return DICT_OK; /* never fails */
 }
 
+
+int _dictClearCount(dict *d, dictht *ht, int count) {
+    size_t i;
+
+    /* Free all the elements */
+    for (i = ht->sizemask; i < ht->size && ht->used > 0; i++) {
+        dictEntry *he, *nextHe;
+
+        if ((he = ht->table[i]) == NULL) continue;
+        while (he) {
+            nextHe = he->next;
+            dictFreeKey(d, he);
+            dictFreeVal(d, he);
+            zfree(he);
+            ht->used--;
+            he = nextHe;
+            if (--count > 0 && ht->used) {
+                ht->sizemask = i;
+                ht->table[i] = he;
+
+                return DICT_LEFT;
+            }
+        }
+    }
+    /* Free the table and the allocated cache structure */
+    zfree(ht->table);
+    /* Re-initialize the table */
+    _dictReset(ht);
+    return DICT_OK; /* never fails */
+}
+
+
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
-    _dictClear(d,&d->ht[0],NULL);
-    _dictClear(d,&d->ht[1],NULL);
+    _dictClear(d,&d->ht[0],NULL, 0);
+    _dictClear(d,&d->ht[1],NULL, 0);
     zfree(d);
 }
+
+
+void dictPendingRelease(dict * d) {
+    d->ht[0].sizemask = 0;
+    d->ht[1].sizemask = 0;
+}
+
+int dictReleaseCount(dict *d, int count) {
+    if (d->ht[0].table && _dictClearCount(d, &d->ht[0], count) == DICT_LEFT) return 0;
+    if (d->ht[1].table && _dictClearCount(d, &d->ht[0], count) == DICT_LEFT) return 0;
+    zfree(d);
+    return 1;
+}
+
 
 dictEntry *dictFind(dict *d, const void *key)
 {

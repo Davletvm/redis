@@ -1619,6 +1619,7 @@ void initServerConfig(void) {
     server.time_last_slave_ping = server.cpu_time_lastreported;
     server.cpu_time_lastusage_ms = 0;
     server.privilidgeEnabled = 0;
+    server.postponeDeletes = 0;
 
     /* Replication partial resync backlog */
     server.repl_backlog = NULL;
@@ -1876,6 +1877,7 @@ void initServer(void) {
     lib = LoadLibraryA("advapi32.dll");
     RtlGenRandom = (RtlGenRandomFunc)GetProcAddress(lib, "SystemFunction036");
 #endif
+    server.pendingDeletes = listCreate();
 
     server.current_client = NULL;
     server.clients = listCreate();
@@ -3339,6 +3341,111 @@ void monitorCommand(redisClient *c) {
     addReply(c,shared.ok);
 }
 
+
+void addToPendingDeletes(robj * o) {
+    switch (o->type) {
+    case REDIS_SET:
+        switch (o->encoding) {
+        case REDIS_ENCODING_HT:
+            dictPendingRelease((dict*)o->ptr);
+            break;
+        case REDIS_ENCODING_INTSET:
+            zfree(o->ptr);
+            return;
+        default:
+            redisPanic("Unknown set encoding type");
+        }
+    case REDIS_STRING: 
+        if (o->encoding == REDIS_ENCODING_RAW) {
+            sdsfree(o->ptr);
+        }
+        return;
+    case REDIS_LIST:
+        switch (o->encoding) {
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            return;
+        }
+    case REDIS_ZSET: 
+        zset *zs;
+        switch (o->encoding) {
+        case REDIS_ENCODING_SKIPLIST:
+            zs = o->ptr;
+            dictPendingRelease(zs->dict);
+            break;
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            return;
+        }
+    default:
+        redisPanic("Unknown object type"); 
+        break;
+    }
+    listAddNodeTail(server.pendingDeletes, o);
+}
+
+
+
+int freePendingListObject(robj *o) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_LINKEDLIST:
+        return listReleaseCount((list*)o->ptr, server.pendingDeleteQuanta);
+        break;
+    default:
+        redisPanic("Unknown list encoding type");
+    }
+}
+
+int freePendingSetObject(robj * o) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_HT:
+        return dictReleaseCount((dict*)o->ptr, server.pendingDeleteQuanta);
+        break;
+    default:
+        redisPanic("Unknown set encoding type");
+    }
+}
+
+int freePendingZsetObject(robj *o) {
+    zset *zs;
+    switch (o->encoding) {
+    case REDIS_ENCODING_SKIPLIST:
+        zs = o->ptr;
+        dictReleaseCount(zs->dict, server.pendingDeleteQuanta);
+        zslFree(zs->zsl);
+        zfree(zs);
+        break;
+    default:
+        redisPanic("Unknown sorted set encoding");
+    }
+}
+
+
+void processPendingDelete() {
+    if (!listLength(server.pendingDeletes)) return;
+    robj * o = listFirst(server.pendingDeletes)->value;
+    int freed = 0;
+    switch (o->type) {
+    case REDIS_LIST: freed = freePendingListObject(o); break;
+    case REDIS_SET: freed = freePendingSetObject(o); break;
+    case REDIS_ZSET: freed = freePendingZsetObject(o); break;
+    case REDIS_HASH: freed = freePendingHashObject(o); break;
+    default: redisPanic("Unknown object type"); break;
+    }
+    if (freed) {
+        zfree(o);
+        listDelNode(server.pendingDeletes, listFirst(server.pendingDeletes));
+    }
+}
+
+void processPendingDeletes() {
+    if (!listLength(server.pendingDeletes)) return;
+    processPendingDelete();
+}
+
+
+
+
 /* ============================ Maxmemory directive  ======================== */
 
 /* This function gets called when 'maxmemory' is set on the config file to limit
@@ -3803,6 +3910,10 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
     redisPanic("Redis aborting for OUT OF MEMORY");
 #endif
 }
+
+
+
+
 
 void redisSetProcTitle(char *title) {
 #ifdef USE_SETPROCTITLE
