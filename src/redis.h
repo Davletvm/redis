@@ -403,7 +403,10 @@ typedef long long mstime_t; /* millisecond time type. */
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
  * The actual resolution depends on server.hz. */
-#define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
+//#define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
+#define TWH(_tw_,_num_) _tw_ ## _num_
+#define TW(_tw_,_num_) TWH(_tw_,_num_)
+#define run_with_period(_ms_) static long long TW(timewhen,__LINE__); if (server.mstime > TW(timewhen,__LINE__) ?(TW(timewhen,__LINE__) = server.mstime + _ms_) : 0)
 
 /* We can print the stacktrace, so our assert is defined this way: */
 #define redisAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_redisAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
