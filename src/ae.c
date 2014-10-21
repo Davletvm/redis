@@ -71,6 +71,11 @@
 #endif
 #endif
 
+
+#if MAX_COMPLETES != MAX_COMPLETE_PER_POLL
+#error Defines must match
+#endif
+
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -86,6 +91,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
+    eventLoop->numCompletes = MAX_COMPLETES;
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -315,6 +321,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         te = eventLoop->timeEventHead;
         while(te) {
             te->when_sec = 0;
+            te->when_ms = 0;
             te = te->next;
         }
     }
@@ -383,7 +390,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * the events that's possible to process without to wait are processed.
  *
  * The function returns the number of events processed. */
-int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
+int aeProcessEvents(aeEventLoop *eventLoop, int flags, int msDefaultTimeout)
 {
     int processed = 0, numevents;
 
@@ -430,15 +437,15 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             } else {
                 /* Otherwise we can block */
                 tvp = NULL; /* wait forever */
-                if (defaultTimeout > -1) {
-                    tv.tv_sec = defaultTimeout;
-                    tv.tv_usec = 0;
+                if (msDefaultTimeout > -1) {
+                    tv.tv_sec = msDefaultTimeout / 1000;
+                    tv.tv_usec = (msDefaultTimeout % 1000) * 1000;
                     tvp = &tv;
                 }
             }
         }
 
-        numevents = aeApiPoll(eventLoop, tvp);
+        numevents = aeApiPoll(eventLoop, tvp, eventLoop->numCompletes);
         for (j = 0; j < numevents; j++) {
             aeFileEvent *fe;
             int mask = eventLoop->fired[j].mask;

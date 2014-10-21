@@ -297,13 +297,14 @@ typedef struct aeWinSendReq {
     time_t timeSent;
 } aeWinSendReq;
 
-
+void aeWinSocketPriv(int fd);
 int aeWinSocketAttach(int fd);
 int aeWinCloseSocket(int fd);
 int aeWinReceiveDone(int fd);
 int aeWinSocketSend(int fd, char *buf, int len, 
                     void *eventLoop, void *client, void *data, void *proc);
 int aeWinListen(int rfd, int backlog);
+int aeWinListenEx(int rfd, int backlog, void * privdata);
 int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len);
 int aeWinSocketConnect(int fd, const SOCKADDR_STORAGE *ss);
 int aeWinSocketConnectBind(int fd, const SOCKADDR_STORAGE *ss, const char* source_addr);

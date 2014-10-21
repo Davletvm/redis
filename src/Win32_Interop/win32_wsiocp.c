@@ -34,6 +34,7 @@
 
 static void *iocpState;
 static HANDLE iocph;
+static HANDLE privIocph;
 static fnGetSockState * aeGetSockState;
 static fnDelSockState * aeDelSockState;
 
@@ -43,6 +44,11 @@ static fnDelSockState * aeDelSockState;
 /* for zero length reads use shared buf */
 static DWORD wsarecvflags;
 static char zreadchar[1];
+static int privPort;
+
+void aeWinPrivPort(int _privport) {
+    privPort = _privport;
+}
 
 
 int aeWinQueueAccept(int listenfd) {
@@ -102,7 +108,7 @@ int aeWinQueueAccept(int listenfd) {
 }
 
 /* listen using extension function to get faster accepts */
-int aeWinListen(int rfd, int backlog) {
+int aeWinListenEx(int rfd, int backlog, void * privdata) {
     aeSockState *sockstate;
     const GUID wsaid_acceptex = WSAID_ACCEPTEX;
     const GUID wsaid_acceptexaddrs = WSAID_GETACCEPTEXSOCKADDRS;
@@ -110,6 +116,10 @@ int aeWinListen(int rfd, int backlog) {
     if ((sockstate = aeGetSockState(iocpState, rfd)) == NULL) {
         errno = WSAEINVAL;
         return SOCKET_ERROR;
+    }
+
+    if (privdata) {
+        sockstate->masks |= PRIV_SOCKET;
     }
 
     aeWinSocketAttach(rfd);
@@ -127,6 +137,10 @@ int aeWinListen(int rfd, int backlog) {
     return 0;
 }
 
+int aeWinListen(int rfd, int backlog) {
+    return aeWinListenEx(rfd, backlog, NULL);
+}
+
 /* return the queued accept socket */
 int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     aeSockState *sockstate;
@@ -142,7 +156,7 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
         errno = WSAEINVAL;
         return SOCKET_ERROR;
     }
-
+    int flags = (sockstate->masks & PRIV_SOCKET);
 
     areq = sockstate->reqs;
     if (areq == NULL) {
@@ -156,6 +170,13 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
             }
             return SOCKET_ERROR;
         }
+        
+        if ((sockstate = aeGetSockState(iocpState, acceptsock)) == NULL) {
+            redisLog(REDIS_WARNING, "aeWinAccept - Cannot get sockstate for accept'ed socket");
+            errno = WSAEINVAL;
+            return SOCKET_ERROR;
+        }
+        sockstate->masks |= flags;
         aeWinSocketAttach(acceptsock);
         return acceptsock;
     }
@@ -168,6 +189,8 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     if (result == SOCKET_ERROR) {
         redisLog(REDIS_WARNING, "aeWinAccept - Cannot update accept context %d", GetLastError());
         errno = WSAGetLastError();
+        FreeMemoryNoCOW(areq->buf);
+        FreeMemoryNoCOW(areq);
         return SOCKET_ERROR;
     }
 
@@ -185,10 +208,17 @@ int aeWinAccept(int fd, struct sockaddr *sa, socklen_t *len) {
     memcpy(sa, premotesa, locallen);
     *len = locallen;
 
-    aeWinSocketAttach(acceptsock);
-
     FreeMemoryNoCOW(areq->buf);
     FreeMemoryNoCOW(areq);
+
+    if ((sockstate = aeGetSockState(iocpState, acceptsock)) == NULL) {
+        redisLog(REDIS_WARNING, "aeWinAccept - Cannot get sockstate for AcceptEx'ed socket");
+        errno = WSAEINVAL;
+        return SOCKET_ERROR;
+    }
+    sockstate->masks |= flags;
+    aeWinSocketAttach(acceptsock);
+
 
     /* queue another accept */
     if (aeWinQueueAccept(fd) == -1) {
@@ -437,16 +467,18 @@ int aeWinSocketAttach(int fd) {
         return -1;
     }
 
+    HANDLE h = (sockstate->masks & PRIV_SOCKET) ? privIocph : iocph;
+
     /* Associate it with the I/O completion port. */
     /* Use FD as completion key. */
     if (FDAPI_CreateIoCompletionPortOnFD(fd,
-                                         iocph,
+                                         h,
                                          (ULONG_PTR)fd,
                                          0) == NULL) {
         errno = WSAGetLastError();
         return -1;
     }
-    sockstate->masks = SOCKET_ATTACHED;
+    sockstate->masks |= SOCKET_ATTACHED;
     sockstate->wreqs = 0;
 
     return 0;
@@ -506,10 +538,11 @@ int aeWinCloseSocket(int fd) {
     return 0;
 }
 
-void aeWinInit(void *state, HANDLE iocp, fnGetSockState *getSockState,
+void aeWinInit(void *state, HANDLE iocp, HANDLE privIocp, fnGetSockState *getSockState,
                                         fnDelSockState *delSockState) {
     iocpState = state;
     iocph = iocp;
+    privIocph = privIocp;
     aeGetSockState = getSockState;
     aeDelSockState = delSockState;
 }

@@ -239,7 +239,7 @@ static int PollForRead(redisInMemoryReplReceive * inm)
             (server.mstime - inm->replStart)/ 1000);
     }
 
-    aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
+    aeProcessEvents(server.el, AE_FILE_EVENTS, 1000 / server.hz);
 
     if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROR) {
         redisLog(REDIS_WARNING, "Error while reading: %d", inm->endStateFlags);
