@@ -100,6 +100,24 @@ void zslFree(zskiplist *zsl) {
     zfree(zsl);
 }
 
+int zslFreeCount(zskiplist * zsl, int count) {
+    zskiplistNode *node = zsl->header->level[0].forward, *next;
+
+    while (node && count--) {
+        next = node->level[0].forward;
+        zslFreeNode(node);
+        node = next;
+    }
+    if (node) {
+        zsl->header->level[0].forward = node;
+        return 0;
+    } else {
+        zfree(zsl->header);
+        zfree(zsl);
+        return 1;
+    }
+}
+
 /* Returns a random level for the new skiplist node we are going to create.
  * The return value of this function is between 1 and ZSKIPLIST_MAXLEVEL
  * (both inclusive), with a powerlaw-alike distribution where higher

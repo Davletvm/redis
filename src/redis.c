@@ -1377,6 +1377,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Write the AOF buffer on disk */
     flushAppendOnlyFile(0);
+
+    processPendingDeletes();
+
+    eventLoop->nosleep = listLength(server.pendingDeletes);
 }
 
 /* =========================== Server initialization ======================== */
@@ -3343,6 +3347,7 @@ void monitorCommand(redisClient *c) {
 
 
 void addToPendingDeletes(robj * o) {
+    zset *zs;
     switch (o->type) {
     case REDIS_SET:
         switch (o->encoding) {
@@ -3351,23 +3356,27 @@ void addToPendingDeletes(robj * o) {
             break;
         case REDIS_ENCODING_INTSET:
             zfree(o->ptr);
+            zfree(o);
             return;
         default:
             redisPanic("Unknown set encoding type");
         }
+        break;
     case REDIS_STRING: 
         if (o->encoding == REDIS_ENCODING_RAW) {
             sdsfree(o->ptr);
         }
+        zfree(o);
         return;
     case REDIS_LIST:
         switch (o->encoding) {
         case REDIS_ENCODING_ZIPLIST:
             zfree(o->ptr);
+            zfree(o);
             return;
         }
+        break;
     case REDIS_ZSET: 
-        zset *zs;
         switch (o->encoding) {
         case REDIS_ENCODING_SKIPLIST:
             zs = o->ptr;
@@ -3375,8 +3384,26 @@ void addToPendingDeletes(robj * o) {
             break;
         case REDIS_ENCODING_ZIPLIST:
             zfree(o->ptr);
+            zfree(o);
             return;
+        default:
+            redisPanic("Unknown sorted set encoding");
         }
+        break;
+    case REDIS_HASH: 
+        switch (o->encoding) {
+        case REDIS_ENCODING_HT:
+            dictPendingRelease((dict*)o->ptr);
+            break;
+        case REDIS_ENCODING_ZIPLIST:
+            zfree(o->ptr);
+            zfree(o);
+            return;
+        default:
+            redisPanic("Unknown hash encoding type");
+            break;
+        }
+        break;
     default:
         redisPanic("Unknown object type"); 
         break;
@@ -3411,19 +3438,39 @@ int freePendingZsetObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_SKIPLIST:
         zs = o->ptr;
-        dictReleaseCount(zs->dict, server.pendingDeleteQuanta);
-        zslFree(zs->zsl);
-        zfree(zs);
-        break;
+        if (zs->dict) {
+            if (dictReleaseCount(zs->dict, server.pendingDeleteQuanta)) {
+                zs->dict = NULL;
+            }
+            return 0;
+        } else {
+            if (zslFreeCount(zs->zsl,server.pendingDeleteQuanta)) {
+                zfree(zs);
+                return 1;
+            }
+            return 0;
+        }
     default:
         redisPanic("Unknown sorted set encoding");
     }
 }
 
 
+int freePendingHashObject(robj *o) {
+    switch (o->encoding) {
+    case REDIS_ENCODING_HT:
+        return dictReleaseCount((dict*)o->ptr, server.pendingDeleteQuanta);
+    default:
+        redisPanic("Unknown hash encoding type");
+        break;
+    }
+}
+
+
 void processPendingDelete() {
+    robj* o;
     if (!listLength(server.pendingDeletes)) return;
-    robj * o = listFirst(server.pendingDeletes)->value;
+    o = listFirst(server.pendingDeletes)->value;
     int freed = 0;
     switch (o->type) {
     case REDIS_LIST: freed = freePendingListObject(o); break;
@@ -3464,13 +3511,13 @@ void processPendingDeletes() {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    size_t mem_used, mem_tofree, mem_freed;
+    size_t mem_used, mem_tofree, mem_freed, mem_heap;
     int slaves = listLength(server.slaves);
     mstime_t latency;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
-    mem_used = zmalloc_used_memory();
+    mem_heap = mem_used = zmalloc_used_memory();
     if (slaves) {
         listIter li;
         listNode *ln;
@@ -3505,6 +3552,15 @@ int freeMemoryIfNeeded(void) {
     long long when; 
     latencyStartMonitor(latency);
     while (mem_freed < mem_tofree) {
+        {
+            if (listLength(server.pendingDeletes)) {
+                long long delta = zmalloc_used_memory();
+                processPendingDelete();
+                delta -= zmalloc_used_memory();
+                mem_freed += (size_t) delta;
+                continue;
+            }
+        }
         int j, k, keys_freed = 0;
         robj *o;
         for (j = 0; j < server.dbnum; j++) {
@@ -3910,10 +3966,6 @@ void redisOutOfMemoryHandler(size_t allocation_size) {
     redisPanic("Redis aborting for OUT OF MEMORY");
 #endif
 }
-
-
-
-
 
 void redisSetProcTitle(char *title) {
 #ifdef USE_SETPROCTITLE

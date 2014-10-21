@@ -83,7 +83,7 @@ void listRelease(list *list)
 }
 
 
-int listReleaseCount(list * list, int count) {
+int listReleaseCount(list * list, unsigned int count) {
     unsigned long len;
     listNode *current, *next;
 

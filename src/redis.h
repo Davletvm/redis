@@ -1277,6 +1277,7 @@ void TransitionToFreeWindow(int final);
 int CheckThrottleWindowUpdate(redisClient * c);
 void updateThrottleState();
 void addToPendingDeletes(robj * obj);
+void processPendingDeletes();
 
 /* Generic persistence functions */
 void startLoading(FILE *fp);
@@ -1314,6 +1315,7 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
+int zslFreeCount(zskiplist * zsl, int count);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score);
 int zslDelete(zskiplist *zsl, double score, robj *obj);

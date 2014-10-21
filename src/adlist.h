@@ -73,7 +73,7 @@ typedef struct list {
 list *listCreate(void);
 void listClear(list * list);
 void listRelease(list *list);
-int listReleaseCount(list * list, int count);
+int listReleaseCount(list * list, unsigned int count);
 list *listAddNodeHead(list *list, void *value);
 list *listAddNodeTail(list *list, void *value);
 list *listInsertNode(list *list, listNode *old_node, void *value, int after);
