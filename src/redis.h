@@ -274,10 +274,11 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Client classes for client limits, currently used only for
  * the max-client-output-buffer limit implementation. */
-#define REDIS_CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients + MONITORs */
+#define REDIS_CLIENT_TYPE_NORMAL 0 /* Normal req-reply clients */
 #define REDIS_CLIENT_TYPE_SLAVE 1  /* Slaves. */
 #define REDIS_CLIENT_TYPE_PUBSUB 2 /* Clients subscribed to PubSub channels. */
-#define REDIS_CLIENT_TYPE_COUNT 3
+#define REDIS_CLIENT_TYPE_MONITOR 3
+#define REDIS_CLIENT_TYPE_COUNT 4
 
 /* Slave replication state - from the point of view of the slave. */
 #define REDIS_REPL_NONE 0 /* No active replication */

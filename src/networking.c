@@ -1810,6 +1810,8 @@ int getClientType(redisClient *c) {
         return REDIS_CLIENT_TYPE_SLAVE;
     if (c->flags & REDIS_PUBSUB)
         return REDIS_CLIENT_TYPE_PUBSUB;
+    if (c->flags & REDIS_MONITOR)
+        return REDIS_CLIENT_TYPE_MONITOR;
     return REDIS_CLIENT_TYPE_NORMAL;
 }
 
@@ -1817,6 +1819,7 @@ int getClientTypeByName(char *name) {
     if (!strcasecmp(name,"normal")) return REDIS_CLIENT_TYPE_NORMAL;
     else if (!strcasecmp(name,"slave")) return REDIS_CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"pubsub")) return REDIS_CLIENT_TYPE_PUBSUB;
+    else if (!strcasecmp(name, "monitor")) return REDIS_CLIENT_TYPE_MONITOR;
     else return -1;
 }
 
@@ -1825,6 +1828,7 @@ char *getClientTypeName(int class) {
     case REDIS_CLIENT_TYPE_NORMAL: return "normal";
     case REDIS_CLIENT_TYPE_SLAVE:  return "slave";
     case REDIS_CLIENT_TYPE_PUBSUB: return "pubsub";
+    case REDIS_CLIENT_TYPE_MONITOR: return "monitor";
     default:                       return NULL;
     }
 }
@@ -1906,6 +1910,17 @@ void flushSlavesOutputBuffers(void) {
             listLength(slave->reply))
         {
             sendReplyToClient(server.el,slave->fd,slave,0);
+        }
+    }
+    listRewind(server.monitors, &li);
+    while ((ln = listNext(&li))) {
+        redisClient *monitor = listNodeValue(ln);
+        int events;
+
+        events = aeGetFileEvents(server.el, monitor->fd);
+        if (events & AE_WRITABLE &&
+            listLength(monitor->reply)) {
+            sendReplyToClient(server.el, monitor->fd, monitor, 0);
         }
     }
 }

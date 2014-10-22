@@ -3546,6 +3546,7 @@ void processPendingDeletes() {
 int freeMemoryIfNeeded(void) {
     long long mem_used, mem_tofree, mem_freed, mem_heap;
     int slaves = listLength(server.slaves);
+    int monitors = listLength(server.monitors);
     mstime_t latency;
 
     /* Remove the size of slaves output buffers and AOF buffer from the
@@ -3559,6 +3560,20 @@ int freeMemoryIfNeeded(void) {
         while((ln = listNext(&li))) {
             redisClient *slave = listNodeValue(ln);
             long long obuf_bytes = getClientOutputBufferMemoryUsage(slave);
+            if (obuf_bytes > mem_used)
+                mem_used = 0;
+            else
+                mem_used -= obuf_bytes;
+        }
+    }
+    if (monitors) {
+        listIter li;
+        listNode *ln;
+
+        listRewind(server.monitors, &li);
+        while ((ln = listNext(&li))) {
+            redisClient *monitor = listNodeValue(ln);
+            long long obuf_bytes = getClientOutputBufferMemoryUsage(monitor);
             if (obuf_bytes > mem_used)
                 mem_used = 0;
             else

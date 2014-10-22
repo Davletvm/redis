@@ -57,7 +57,8 @@ static struct {
 clientBufferLimitsConfig clientBufferLimitsDefaults[REDIS_CLIENT_TYPE_COUNT] = {
     {0, 0, 0}, /* normal */
     {1024*1024*256, 1024*1024*64, 60}, /* slave */
-    {1024*1024*32, 1024*1024*8, 60}  /* pubsub */
+    {1024*1024*32, 1024*1024*8, 60},  /* pubsub */
+    { 0, 0, 0 } /* monitor */
 };
 
 /*-----------------------------------------------------------------------------
