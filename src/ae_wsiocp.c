@@ -306,9 +306,11 @@ static void aeApiFree(aeEventLoop *eventLoop) {
 static int aeApiCreate(aeEventLoop *eventLoop) {
     HMODULE kernel32_module;
     aeApiState *state = (aeApiState *)AllocMemoryNoCOW(sizeof(aeApiState));
+    
 
     if (!state) return -1;
 
+    memset(state, 0, sizeof(aeApiState));
     eventLoop->apidata = state;
 
     InitializeCriticalSectionAndSpinCount(&(state->threadCS), 5000);
@@ -487,23 +489,53 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxComplet
     int rc;
     if (maxCompletes > MAX_COMPLETE_PER_POLL) maxCompletes = MAX_COMPLETE_PER_POLL;
     int mswait = tvp ? (tvp->tv_sec * 1000) + (tvp->tv_usec / 1000) : INFINITE;
-
+    
     rc = pGetQueuedCompletionStatusEx(state->privIocp,
                                     state->entries,
                                     maxCompletes,
                                     &numComplete,
                                     0,
                                     FALSE);
-    if (!rc) numComplete = 0;
+    if (!rc) {
+        numComplete = 0;
+    } else {
+        mswait = 0; // don't wait if we have any events
+    }
     maxCompletes -= numComplete;
     int numComplete2 = 0;
     rc = pGetQueuedCompletionStatusEx(state->iocp,
         state->entries + numComplete,
         maxCompletes,
         &numComplete2,
-        mswait,
+        0,
         FALSE);
-    if (!rc) numComplete2 = 0;
+    if (!rc) {
+        numComplete2 = 0;
+        if (mswait != 0) {
+            FILETIME beforeWait;
+            FILETIME afterWait;
+            GetSystemTimePreciseAsFileTime(&beforeWait);
+            rc = pGetQueuedCompletionStatusEx(state->iocp,
+                state->entries + numComplete,
+                maxCompletes,
+                &numComplete2,
+                mswait,
+                FALSE);
+            GetSystemTimePreciseAsFileTime(&afterWait);
+            time_t timeBefore = 0;
+            time_t timeAfter = 0;
+            timeBefore |= beforeWait.dwHighDateTime;
+            timeBefore <<= 32;
+            timeBefore |= beforeWait.dwLowDateTime;
+            timeAfter |= afterWait.dwHighDateTime;
+            timeAfter <<= 32;
+            timeAfter |= afterWait.dwLowDateTime;
+            eventLoop->totalIdleTime += (timeAfter - timeBefore); // in 100nanoseconds
+            if (!rc)
+                numComplete2 = 0;
+        }
+    } else {
+    }
     numComplete += numComplete2;
 
     if (numComplete > 0) {
