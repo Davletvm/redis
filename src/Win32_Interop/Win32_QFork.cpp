@@ -101,6 +101,7 @@ struct BlockData {
 
 struct QForkControl {
     int availableBlocksInHeap;                 // number of blocks in blockMap (dynamically determined at run time)
+    int maxAvailableBlockInHeap;
     SIZE_T heapBlockSize;           
     BlockData heapBlockMap[cMaxBlocks];
     LPVOID heapStart;
@@ -481,7 +482,21 @@ BOOL QForkMasterInit() {
         
         g_pQForkControl->heapBlockSize = cAllocationGranularity;
 
+        {
+            MEMORYSTATUSEX memstatus;
+            memstatus.dwLength = sizeof(MEMORYSTATUSEX);
+
+            IFFAILTHROW(GlobalMemoryStatusEx(&memstatus), "QForkMasterInit: Cannot get global memory status.");
+            DWORDLONG cMaxMemory = memstatus.ullTotalPhys * 10;
+            if (cMaxMemory > cMaxBlocks * cAllocationGranularity) {
+                cMaxMemory = cMaxBlocks * cAllocationGranularity;
+            }
+            g_pQForkControl->maxAvailableBlockInHeap = (int)(cMaxMemory / cAllocationGranularity);
+        }
+
         g_pQForkControl->availableBlocksInHeap = 0;
+
+
 
         // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
         // Clean up anything we can to prevent excessive disk usage.
@@ -504,7 +519,7 @@ BOOL QForkMasterInit() {
         }
 
 
-        SIZE_T mmSize = cMaxBlocks * cAllocationGranularity;
+        SIZE_T mmSize = g_pQForkControl->maxAvailableBlockInHeap * cAllocationGranularity;
             
         // Find a place in the virtual memory space where we can reserve space for our allocations that is likely
         // to be available in the forked process.  (If this ever fails in the forked process, we will have to launch
@@ -521,7 +536,7 @@ BOOL QForkMasterInit() {
 
         g_pQForkControl->heapStart = pHigh;        
 
-        for (int n = 0; n < cMaxBlocks; n++) {
+        for (int n = 0; n < g_pQForkControl->maxAvailableBlockInHeap; n++) {
             LPVOID reserved = VirtualAlloc(
                 (byte*)pHigh + n * g_pQForkControl->heapBlockSize,
                 g_pQForkControl->heapBlockSize,
@@ -1226,7 +1241,7 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
         }
         retPtr = blockStart;
     }
-    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= cMaxBlocks) {
+    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= g_pQForkControl->maxAvailableBlockInHeap) {
         LPVOID blockStart = reinterpret_cast<byte*>(g_pQForkControl->heapStart) + (g_pQForkControl->heapBlockSize * (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound));
         for (int x = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound; x < g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate; x++) {
             if (x >= g_pQForkControl->availableBlocksInHeap) {
