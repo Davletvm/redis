@@ -564,8 +564,8 @@ int _dictClearCount(dict *d, dictht *ht, int count) {
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
-    _dictClear(d,&d->ht[0],NULL, 0);
-    _dictClear(d,&d->ht[1],NULL, 0);
+    _dictClear(d,&d->ht[0],NULL);
+    _dictClear(d,&d->ht[1],NULL);
     zfree(d);
 }
 
@@ -577,7 +577,7 @@ void dictPendingRelease(dict * d) {
 
 int dictReleaseCount(dict *d, int count) {
     if (d->ht[0].table && !(count = _dictClearCount(d, &d->ht[0], count))) return 0;
-    if (d->ht[1].table && !(count = _dictClearCount(d, &d->ht[0], count))) return 0;
+    if (d->ht[1].table && !(count = _dictClearCount(d, &d->ht[1], count))) return 0;
     zfree(d);
     return count;
 }
