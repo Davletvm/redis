@@ -3067,13 +3067,11 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         if (server.loading && priviliged) {
             double perc;
             time_t eta, elapsed;
-#ifdef _WIN32
-            long long remaining_bytes = server.loading_total_bytes-
-                                    server.loading_loaded_bytes;
-#else
+
+            if (!server.loading_loaded_bytes) server.loading_loaded_bytes = 1;
+
             off_t remaining_bytes = server.loading_total_bytes-
                                     server.loading_loaded_bytes;
-#endif
 
             perc = ((double)server.loading_loaded_bytes /
                    server.loading_total_bytes) * 100;

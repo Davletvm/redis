@@ -1110,6 +1110,7 @@ void startLoading(FILE *fp) {
 #endif
     /* Load the DB */
     server.loading = 1;
+    server.loading_loaded_bytes = 0;
     server.loading_start_time = time(NULL);
     if (!fp || fstat(fileno(fp), &sb) == -1) {
         server.loading_total_bytes = 1; /* just to avoid division by zero */
