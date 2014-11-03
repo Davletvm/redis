@@ -77,7 +77,8 @@ void __redisAppendCommand(redisContext *c, char *cmd, size_t len);
 
 /* Functions managing dictionary of callbacks for pub/sub. */
 static unsigned int callbackHash(const void *key) {
-    return dictGenHashFunction((unsigned char*)key,(int)sdslen((char*)key));
+    return dictGenHashFunction((const unsigned char *)key,
+                               (int)sdslen((const sds)key));
 }
 
 static void *callbackValDup(void *privdata, const void *src) {
@@ -166,12 +167,24 @@ static void __redisAsyncCopyError(redisAsyncContext *ac) {
 
 #ifdef WIN32_IOCP
 redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
-    struct sockaddr_in sa;
-    redisContext *c = redisPreConnectNonBlock(ip, port, &sa);
+    SOCKADDR_STORAGE ss;
+    redisContext *c = redisPreConnectNonBlock(ip, port, &ss);
     redisAsyncContext *ac = redisAsyncInitialize(c);
-    if (aeWinSocketConnect(ac->c.fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (aeWinSocketConnect(ac->c.fd, &ss) != 0) {
+         ac->c.err = errno;
+        strerror_r(errno, ac->c.errstr, sizeof(ac->c.errstr));
+    }
+    __redisAsyncCopyError(ac);
+    return ac;
+}
+
+redisAsyncContext *redisAsyncConnectBind(const char *ip, int port, const char *source_addr) {
+    SOCKADDR_STORAGE ss;
+    redisContext *c = redisPreConnectNonBlock(ip, port, &ss);
+    redisAsyncContext *ac = redisAsyncInitialize(c);
+    if (aeWinSocketConnectBind(ac->c.fd, &ss, source_addr) != 0) {
         ac->c.err = errno;
-        strerror_r(errno,ac->c.errstr,sizeof(ac->c.errstr));
+        strerror_r(errno, ac->c.errstr, sizeof(ac->c.errstr));
     }
     __redisAsyncCopyError(ac);
     return ac;
@@ -195,14 +208,6 @@ redisAsyncContext *redisAsyncConnect(const char *ip, int port) {
     return ac;
 }
 #endif
-
-redisAsyncContext *redisAsyncConnectBind(const char *ip, int port,
-    const char *source_addr) {
-    redisContext *c = redisConnectBindNonBlock(ip, port, source_addr);
-    redisAsyncContext *ac = redisAsyncInitialize(c);
-    __redisAsyncCopyError(ac);
-    return ac;
-}
 
 redisAsyncContext *redisAsyncConnectUnix(const char *path) {
     redisContext *c;

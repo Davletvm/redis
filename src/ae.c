@@ -71,6 +71,11 @@
 #endif
 #endif
 
+
+#if MAX_COMPLETES != MAX_COMPLETE_PER_POLL
+#error Defines must match
+#endif
+
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
@@ -84,8 +89,11 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->timeEventHead = NULL;
     eventLoop->timeEventNextId = 0;
     eventLoop->stop = 0;
+    eventLoop->nosleep = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
+    eventLoop->numCompletes = MAX_COMPLETES;
+    eventLoop->totalIdleTime = 0;
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -175,8 +183,9 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
     aeFileEvent *fe;
     if (fd >= eventLoop->setsize) return;
     fe = &eventLoop->events[fd];
-
     if (fe->mask == AE_NONE) return;
+
+    aeApiDelEvent(eventLoop, fd, mask);
     fe->mask = fe->mask & (~mask);
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
@@ -186,7 +195,6 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
             if (eventLoop->events[j].mask != AE_NONE) break;
         eventLoop->maxfd = j;
     }
-    aeApiDelEvent(eventLoop, fd, mask);
 }
 
 int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
@@ -315,6 +323,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         te = eventLoop->timeEventHead;
         while(te) {
             te->when_sec = 0;
+            te->when_ms = 0;
             te = te->next;
         }
     }
@@ -383,7 +392,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * the events that's possible to process without to wait are processed.
  *
  * The function returns the number of events processed. */
-int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
+int aeProcessEvents(aeEventLoop *eventLoop, int flags, int msDefaultTimeout)
 {
     int processed = 0, numevents;
 
@@ -394,6 +403,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
 
     /* Nothing to do? return ASAP */
     if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
+    if (eventLoop->nosleep) flags |= AE_DONT_WAIT;
 
     /* Note that we want call select() even if there are no
      * file events to process as long as we want to process time
@@ -430,15 +440,15 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags, int defaultTimeout)
             } else {
                 /* Otherwise we can block */
                 tvp = NULL; /* wait forever */
-                if (defaultTimeout > -1) {
-                    tv.tv_sec = defaultTimeout;
-                    tv.tv_usec = 0;
+                if (msDefaultTimeout > -1) {
+                    tv.tv_sec = msDefaultTimeout / 1000;
+                    tv.tv_usec = (msDefaultTimeout % 1000) * 1000;
                     tvp = &tv;
                 }
             }
         }
 
-        numevents = aeApiPoll(eventLoop, tvp);
+        numevents = aeApiPoll(eventLoop, tvp, eventLoop->numCompletes);
         for (j = 0; j < numevents; j++) {
             aeFileEvent *fe;
             int mask = eventLoop->fired[j].mask;

@@ -33,6 +33,7 @@ typedef enum operationType {
     otRDB = 1,
     otAOF = 2,
     otRDBINMEMORY = 3,
+    otDBCHECK = 4,
 } OperationType;
 
 typedef enum operationStatus {
@@ -55,6 +56,11 @@ typedef enum startupStatus {
     ssSLAVE_EXIT = 2              // Slave completed operation. Call QForkShutdown and exit.
 } StartupStatus;
 
+typedef struct {
+    void * heapStart;
+    void * heapEnd;
+} HeapExtent;
+
 #define MAX_GLOBAL_DATA 10000
 typedef struct QForkBeginInfo {
     char filename[MAX_PATH];
@@ -66,6 +72,7 @@ typedef struct QForkBeginInfo {
 StartupStatus QForkStartup(int argc, char** argv);
 BOOL QForkShutdown();
 
+
 // For master process use only
 BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, LPVOID globalData, int sizeOfGlobalData, DWORD* childPID, unsigned __int32 dictHashSeed);
 OperationStatus GetForkOperationStatus(BOOL forceEnd);
@@ -73,6 +80,8 @@ void EndForkOperation(int * pExitCode);
 void AbortForkOperation(BOOL blockUntilCleanedUp);
 void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode);
 void ClearInMemoryBuffersMasterParent();
+void GetHeapExtent(HeapExtent * pextent);
+void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * totalPages);
 
 // For DLMalloc use only
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh);

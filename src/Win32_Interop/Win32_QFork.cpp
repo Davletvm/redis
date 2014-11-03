@@ -41,6 +41,7 @@
 #include <sstream>
 #include <stdint.h>
 #include <exception>
+#include <DbgHelp.h>
 using namespace std;
 
 //#define DEBUG_WITH_PROCMON
@@ -100,6 +101,7 @@ struct BlockData {
 
 struct QForkControl {
     int availableBlocksInHeap;                 // number of blocks in blockMap (dynamically determined at run time)
+    int maxAvailableBlockInHeap;
     SIZE_T heapBlockSize;           
     BlockData heapBlockMap[cMaxBlocks];
     LPVOID heapStart;
@@ -129,9 +131,13 @@ struct CleanupState {
     size_t offsetCopied;
     size_t copyBatchSize;
     int copiedPages;
+    int cowPages;
+    int scannedPages;
     int exitCode;
     int heapBlocksToCleanup;
     time_t forkExitTimeout;
+    LPVOID heapEnd;
+    uint64_t * pageBitMap;
 };
 
 
@@ -144,14 +150,134 @@ BOOL g_isForkedProcess;
 CleanupState g_CleanupState;
 int g_SlaveExitCode; // For slave process
 
+
+
 const long long cSentinelHeapSize = 30 * 1024 * 1024;
 extern "C" int checkForSentinelMode(int argc, char **argv);
+
+typedef void(*ForceCOWBUfferProto)(LPVOID buf, size_t size);
+extern "C" void FDAPI_SetForceCOWBuffer(ForceCOWBUfferProto proto);
 
 extern "C"
 {
     // forward def from util.h. 
     long long memtoll(const char *p, int *err);
     void TransitionToFreeWindow(int final);
+    int dbCheck();
+}
+
+
+
+__forceinline int64_t AddrToBitSlot(LPVOID addr, int * bit) {
+    uint64_t c = (uint64_t) addr;
+    c -= (uint64_t) g_pQForkControl->heapStart;
+    c = c >> 12;
+    *bit = c & ((1ULL << 6) - 1);
+    return c >> 6;
+}
+
+__forceinline bool IsAddrInHeap(LPVOID addr) {
+    return (g_CleanupState.currentState != osUNSTARTED && addr >= g_pQForkControl->heapStart && addr < g_CleanupState.heapEnd);
+}
+
+__forceinline bool IsAddrCOW(LPVOID addr) {
+    int bit;
+    uint64_t slot = AddrToBitSlot(addr, &bit);
+    return (g_CleanupState.pageBitMap[slot] & (1ULL << bit)) != 0;
+}
+
+void ForceCOWBuffer(LPVOID addr, size_t size) {
+    if (!IsAddrInHeap(addr) || size == 0) return;
+    int bitstart, bitstop;
+    uint64_t slotstart = AddrToBitSlot(addr, &bitstart);
+    uint64_t slotend = AddrToBitSlot((BYTE*)addr + size - 1, &bitstop);
+    for (uint64_t idx = slotstart; idx <= slotend; idx++) {
+        if (g_CleanupState.pageBitMap[idx] == ~0ULL) continue;
+        for (int bitidx = ((idx == slotstart) ? bitstart : 0); bitidx <= ((idx == slotend) ? bitstop : 63); bitidx++) {
+            if ((g_CleanupState.pageBitMap[idx] & (1ULL << bitidx)) == 0) {
+                BYTE * baddr = (BYTE*) g_pQForkControl->heapStart + (((idx << 6) + bitidx) << 12);
+                DWORD oldProtect;
+                if (g_CleanupState.currentState >= osEXITED) {
+                    IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_READWRITE, &oldProtect), "Unable to mark as ReadWrite in ForceCOW.");
+                } else {
+                    IFFAILTHROW(VirtualProtect(baddr, 1, PAGE_WRITECOPY, &oldProtect), "Unable to mark as WriteCopy in ForceCOW.");
+                    g_CleanupState.cowPages++;
+                    g_CleanupState.pageBitMap[idx] |= (1ULL << bitidx);
+                }
+            }
+        }
+    }
+}
+
+
+typedef BOOL(_stdcall* MiniDumpWriteDumpFunc)(HANDLE hProcess,
+    DWORD ProcessId,
+    HANDLE hFile,
+    MINIDUMP_TYPE DumpType,
+    PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam,
+    PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
+    PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
+
+
+DWORD WINAPI DumpThreadProc(void* param) {
+    redisLog(REDIS_WARNING, "Crashed.  Attempting to generate dump");
+    MINIDUMP_EXCEPTION_INFORMATION *exinfo = (MINIDUMP_EXCEPTION_INFORMATION*)param;
+    HMODULE lib = LoadLibraryA("dbghelp.dll");
+    if (lib) {
+        MiniDumpWriteDumpFunc func = (MiniDumpWriteDumpFunc)GetProcAddress(lib, "MiniDumpWriteDump");
+        if (func) {
+
+            HANDLE file = CreateFileA("dumpfile.dmp", GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+            func(GetCurrentProcess(), GetCurrentProcessId(), file, (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithDataSegs), exinfo, NULL, NULL);
+        }
+    }
+    return 0;
+}
+
+void CreateMiniDump(EXCEPTION_POINTERS * excinfo)
+{
+    MINIDUMP_EXCEPTION_INFORMATION exinfo;
+    exinfo.ExceptionPointers = excinfo;
+    exinfo.ClientPointers = FALSE;
+    exinfo.ThreadId = GetCurrentThreadId();
+
+    HANDLE h = CreateThread(NULL, 0, DumpThreadProc, excinfo ? &exinfo : NULL, 0, NULL);
+
+    WaitForSingleObject(h, INFINITE);
+}
+
+LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
+    
+    if (exinfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+        if (exinfo->ExceptionRecord->ExceptionInformation[0] == 1) {
+            LPVOID addr = (LPVOID) exinfo->ExceptionRecord->ExceptionInformation[1];
+            if (IsAddrInHeap(addr) && !IsAddrCOW(addr)) {
+                DWORD oldProtect;
+                if (g_CleanupState.currentState >= osEXITED) {
+                    if (VirtualProtect(addr, 1, PAGE_READWRITE, &oldProtect))
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                } else {
+                    if (VirtualProtect(addr, 1, PAGE_WRITECOPY, &oldProtect)) {
+                        int bit;
+                        uint64_t slot = AddrToBitSlot(addr, &bit);
+                        g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
+                        g_CleanupState.cowPages++;
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                    }
+                }
+            }
+        }
+    }
+    if (exinfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT) return EXCEPTION_CONTINUE_SEARCH;
+    if (exinfo->ExceptionRecord->ExceptionCode == DBG_CONTROL_C) return EXCEPTION_CONTINUE_SEARCH;
+    CreateMiniDump(exinfo);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+HANDLE RegisterMiniDumpHandler() {
+    HANDLE h = AddVectoredExceptionHandler(0, VectoredHandler);
+    return h;
 }
 
 
@@ -227,6 +353,9 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
                 string("QForkSlaveInit: Could not map heap in forked process. Is system swap file large enough?"));
         }
 
+        // copy redis globals into fork process
+        SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
+
         if (g_pQForkControl->inMemoryBuffersControlHandle) {
             sfMMFileInMemoryControlHandle.Assign(shParent, g_pQForkControl->inMemoryBuffersControlHandle);
             g_pQForkControl->inMemoryBuffersControlHandle = sfMMFileInMemoryControlHandle;
@@ -250,10 +379,6 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
-
-        // copy redis globals into fork process
-        SetupGlobals(g_pQForkControl->globalData.globalData, g_pQForkControl->globalData.globalDataSize, g_pQForkControl->globalData.dictHashSeed);
-        
         // execute requiested operation
         int exitCode;
         if (g_pQForkControl->typeOfOperation == OperationType::otRDB) {
@@ -325,6 +450,8 @@ BOOL QForkMasterInit() {
     // This will be reset to the correct value when config is processed
     setLogVerbosityLevel(REDIS_WARNING);
 
+    FDAPI_SetForceCOWBuffer(ForceCOWBuffer);
+
     try {
         // allocate file map for qfork control so it can be passed to the forked process
         g_hQForkControlFileMap = CreateFileMappingW(
@@ -355,7 +482,21 @@ BOOL QForkMasterInit() {
         
         g_pQForkControl->heapBlockSize = cAllocationGranularity;
 
+        {
+            MEMORYSTATUSEX memstatus;
+            memstatus.dwLength = sizeof(MEMORYSTATUSEX);
+
+            IFFAILTHROW(GlobalMemoryStatusEx(&memstatus), "QForkMasterInit: Cannot get global memory status.");
+            DWORDLONG cMaxMemory = memstatus.ullTotalPhys * 10;
+            if (cMaxMemory > cMaxBlocks * cAllocationGranularity) {
+                cMaxMemory = cMaxBlocks * cAllocationGranularity;
+            }
+            g_pQForkControl->maxAvailableBlockInHeap = (int)(cMaxMemory / cAllocationGranularity);
+        }
+
         g_pQForkControl->availableBlocksInHeap = 0;
+
+
 
         // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
         // Clean up anything we can to prevent excessive disk usage.
@@ -378,7 +519,7 @@ BOOL QForkMasterInit() {
         }
 
 
-        SIZE_T mmSize = cMaxBlocks * cAllocationGranularity;
+        SIZE_T mmSize = g_pQForkControl->maxAvailableBlockInHeap * cAllocationGranularity;
             
         // Find a place in the virtual memory space where we can reserve space for our allocations that is likely
         // to be available in the forked process.  (If this ever fails in the forked process, we will have to launch
@@ -395,7 +536,7 @@ BOOL QForkMasterInit() {
 
         g_pQForkControl->heapStart = pHigh;        
 
-        for (int n = 0; n < cMaxBlocks; n++) {
+        for (int n = 0; n < g_pQForkControl->maxAvailableBlockInHeap; n++) {
             LPVOID reserved = VirtualAlloc(
                 (byte*)pHigh + n * g_pQForkControl->heapBlockSize,
                 g_pQForkControl->heapBlockSize,
@@ -596,7 +737,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
             IFFAILTHROW(VirtualProtect(
                 (byte*)g_pQForkControl->heapStart + x * g_pQForkControl->heapBlockSize,
                 g_pQForkControl->heapBlockSize,
-                PAGE_WRITECOPY,
+                PAGE_READONLY,
                 &oldProtect),
                 "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         }
@@ -632,14 +773,16 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
 
         // wait for "forked" process to map memory
         IFFAILTHROW(WaitForMultipleObjects(3, handles, FALSE, 100000) == WAIT_OBJECT_0, "Forked Process did not respond successfully in a timely manner.");
-        
+
         // signal the 2nd process that we want to do some work
         SetEvent(g_pQForkControl->startOperation);
 
-        memset(&g_CleanupState, 0, sizeof(g_CleanupState));
+        EndForkOperation(NULL);
         g_CleanupState.currentState = osINPROGRESS;
         g_CleanupState.inMemory = (type == otRDBINMEMORY);
         g_CleanupState.heapBlocksToCleanup = g_pQForkControl->availableBlocksInHeap;
+        g_CleanupState.heapEnd = (char*)g_pQForkControl->heapStart + g_pQForkControl->heapBlockSize * g_pQForkControl->availableBlocksInHeap;
+        g_CleanupState.pageBitMap = (uint64_t*)calloc(g_pQForkControl->heapBlockSize * g_pQForkControl->availableBlocksInHeap / pageSize / (8 * 8), sizeof(uint64_t));
 
         (*childPID) = pi.dwProcessId;
         redisLog(REDIS_NOTICE, "Forked successfully");
@@ -705,6 +848,9 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
             g_CleanupState.failed = (WaitForSingleObject(g_pQForkControl->operationFailed, 0) == WAIT_OBJECT_0);
             if (g_CleanupState.failed || WaitForSingleObject(g_pQForkControl->operationComplete, 0) == WAIT_OBJECT_0) {
                 g_CleanupState.currentState = osCOMPLETE;
+            } else if (g_hForkedProcess && (WaitForSingleObject(g_hForkedProcess, 0) == WAIT_OBJECT_0)) {
+                g_CleanupState.failed = TRUE;
+                g_CleanupState.currentState = osEXITED;
             }
             if (!forceEnd) 
                 return (OperationStatus)(g_CleanupState.currentState | (g_CleanupState.failed ? osFAILED : 0) | (g_CleanupState.inMemory ? osINMEMORY : 0));
@@ -752,13 +898,22 @@ OperationStatus GetForkOperationStatus(BOOL forceEnd) {
     }
 }
 
+void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * totalPages)
+{
+    *cowPages = g_CleanupState.cowPages;
+    *copiedPages = g_CleanupState.copiedPages;
+    *scannedPages = g_CleanupState.scannedPages;
+    *totalPages = g_CleanupState.heapBlocksToCleanup * (int)(g_pQForkControl->heapBlockSize / pageSize);
+}
+
 
 void EndForkOperation(int * pExitCode)
 {
     if (pExitCode != NULL) {
         *pExitCode = g_CleanupState.exitCode;
     }
-    _ASSERT(g_CleanupState.currentState == osCLEANEDUP);
+    _ASSERT(g_CleanupState.currentState == osCLEANEDUP || g_CleanupState.currentState == osUNSTARTED);
+    if (g_CleanupState.pageBitMap) free(g_CleanupState.pageBitMap);
     memset(&g_CleanupState, 0, sizeof(g_CleanupState));
 }
 
@@ -792,7 +947,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                     throw std::system_error(
                         GetLastError(),
                         system_category(),
-                        "BeginForkOperation: UnmapViewOfFile failed");
+                        "AdvanceForkCleanup: UnmapViewOfFile failed");
                 }
                 g_pQForkControl->inMemoryBuffersControl = NULL;
             }
@@ -804,13 +959,13 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
             // restore protection constants on shared memory blocks 
             DWORD oldProtect = 0;
-            IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_READWRITE, &oldProtect), "EndForkOperation: VirtualProtect 3 failed.");            
+            IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_READWRITE, &oldProtect), "AdvanceForkCleanup: VirtualProtect 3 failed.");            
 
             LPVOID controlCopy = malloc(sizeof(QForkControl));
-            IFFAILTHROW(controlCopy, "EndForkOperation: allocation failed.");
+            IFFAILTHROW(controlCopy, "AdvanceForkCleanup: allocation failed.");
 
             memcpy(controlCopy, g_pQForkControl, sizeof(QForkControl));
-            IFFAILTHROW(UnmapViewOfFile(g_pQForkControl), "EndForkOperation: UnmapViewOfFile failed.");
+            IFFAILTHROW(UnmapViewOfFile(g_pQForkControl), "AdvanceForkCleanup: UnmapViewOfFile failed.");
             
             g_pQForkControl = (QForkControl*)
                 MapViewOfFileEx(
@@ -819,7 +974,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
                 0, 0,
                 0,
                 g_pQForkControl);
-            IFFAILTHROW(g_pQForkControl, "EndForkOperation: Remapping ForkControl failed.");
+            IFFAILTHROW(g_pQForkControl, "AdvanceForkCleanup: Remapping ForkControl failed.");
             
             memcpy(g_pQForkControl, controlCopy, sizeof(QForkControl));
             delete controlCopy;
@@ -835,68 +990,60 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
         if (g_CleanupState.currentState == osCLEANING) {
 
-            PSAPI_WORKING_SET_EX_INFORMATION *pwsi = new PSAPI_WORKING_SET_EX_INFORMATION[g_CleanupState.copyBatchSize];
-            IFFAILTHROW(pwsi, "pwsi == NULL");
+            HANDLE hProcess = GetCurrentProcess();
+
             size_t size = g_CleanupState.copyBatchSize * pageSize;
             do {
+
                 if (g_CleanupState.offsetCopied + size > g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize) {
                     size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
                 }
 
-                int block = g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize;
-                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap, 
-                    FILE_MAP_ALL_ACCESS, 
+                int block = (int)(g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize);
+                void * heapAltRegion = MapViewOfFileEx(g_pQForkControl->heapBlockMap[block].heapMemoryMap,
+                    FILE_MAP_ALL_ACCESS,
                     HIDWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
                     LODWORD(g_CleanupState.offsetCopied - g_pQForkControl->heapBlockSize * block),
-                    size, 
+                    size,
                     0);
                 IFFAILTHROW(heapAltRegion, "MapViewOfFileEx failure");
 
-                HANDLE hProcess = GetCurrentProcess();
                 int pages = (int)(size / pageSize);
-                
+
                 DWORD oldProtect;
                 IFFAILTHROW(VirtualProtect(
-                                (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied, 
-                                size, 
-                                PAGE_READWRITE,
-                                &oldProtect),
-                        "EndForkOperation: VirtualProtect 4 failed.");
-                
-
-                memset(pwsi, 0, sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages);
-                for (int page = 0; page < pages; page++) {
-                    pwsi[page].VirtualAddress = (BYTE*)g_pQForkControl->heapStart + page * pageSize + g_CleanupState.offsetCopied;
-                }
-                IFFAILTHROW(QueryWorkingSetEx(
-                                hProcess,
-                                pwsi,
-                                sizeof(PSAPI_WORKING_SET_EX_INFORMATION) * pages),
-                        "QueryWorkingSet failure");
+                    (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied,
+                    size,
+                    PAGE_READWRITE,
+                    &oldProtect),
+                    "AdvanceForkCleanup: VirtualProtect 4 failed.");
 
                 for (int page = 0; page < pages; page++) {
-                    if (pwsi[page].VirtualAttributes.Valid == 1) {
-                        // A 0 share count indicates a COW page
-                        if (pwsi[page].VirtualAttributes.ShareCount == 0) {
-                            g_CleanupState.copiedPages++;
-                            size_t offset = g_CleanupState.offsetCopied + page * pageSize;
-                            memcpy(
-                                (BYTE*)heapAltRegion + page * pageSize,
-                                (BYTE*)g_pQForkControl->heapStart + g_CleanupState.offsetCopied + page * pageSize,
-                                pageSize);
-                            IFFAILTHROW(VirtualProtect((BYTE*)g_pQForkControl->heapStart + offset, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &oldProtect), "EndForkOperation: Revert to file map failed.");
-                        }
+                    g_CleanupState.scannedPages++;
+                    size_t offset = g_CleanupState.offsetCopied + page * pageSize;
+                    LPVOID addr = (BYTE*)g_pQForkControl->heapStart + offset;
+                    int bit;
+                    uint64_t slot = AddrToBitSlot(addr, &bit);
+                    if ((g_CleanupState.pageBitMap[slot] & (1ULL << bit)) != 0) {
+
+                        g_CleanupState.copiedPages++;
+                        memcpy(
+                            (BYTE*)heapAltRegion + page * pageSize,
+                            (BYTE*)addr,
+                            pageSize);
+                        IFFAILTHROW(VirtualProtect(addr, pageSize, PAGE_READWRITE | PAGE_REVERT_TO_FILE_MAP, &oldProtect), "EndForkOperation: Revert to file map failed.");
+                    } else {
+                        g_CleanupState.pageBitMap[slot] |= (1ULL << bit);
                     }
                 }
 
-                IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "EndForkOperation: UnmapViewOfFile failed.");
+                IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "AdvanceForkCleanup: UnmapViewOfFile failed.");
                 g_CleanupState.offsetCopied += size;
                 if (g_CleanupState.offsetCopied == g_CleanupState.heapBlocksToCleanup * g_pQForkControl->heapBlockSize) {
                     g_CleanupState.currentState = osCLEANEDUP;
                     break;
                 }
             } while (forceEnd);
-            delete pwsi;
 
             if (g_CleanupState.currentState == osCLEANEDUP) {
                 ClearInMemoryBuffersMasterParent();
@@ -1094,7 +1241,7 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
         }
         retPtr = blockStart;
     }
-    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= cMaxBlocks) {
+    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= g_pQForkControl->maxAvailableBlockInHeap) {
         LPVOID blockStart = reinterpret_cast<byte*>(g_pQForkControl->heapStart) + (g_pQForkControl->heapBlockSize * (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound));
         for (int x = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound; x < g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate; x++) {
             if (x >= g_pQForkControl->availableBlocksInHeap) {
@@ -1184,6 +1331,12 @@ void SetupLogging() {
     }
 }
 
+
+void GetHeapExtent(HeapExtent * pextent) {
+    pextent->heapStart = g_pQForkControl->heapStart;
+    pextent->heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize);
+}
+
 extern "C"
 {
     // The external main() is redefined as redis_main() by Win32_QFork.h.
@@ -1199,6 +1352,8 @@ extern "C"
             exit(-1);
         }
         
+        RegisterMiniDumpHandler();
+
         try {
 #ifdef DEBUG_WITH_PROCMON
             hProcMonDevice =
@@ -1241,3 +1396,6 @@ extern "C"
         }
     }
 }
+
+
+

@@ -30,6 +30,7 @@
 #include "Win32_ANSI.h"
 #include <string>
 #include "..\redisLog.h"
+
 using namespace std;
 
 #define CATCH_AND_REPORT()  catch(const std::exception &){::redisLog(REDIS_WARNING, "FDAPI: std exception");}catch(...){::redisLog(REDIS_WARNING, "FDAPI: other exception");}
@@ -45,6 +46,7 @@ redis_WSACleanup WSACleanup = NULL;
 redis_WSAGetOverlappedResult WSAGetOverlappedResult = NULL;
 
 // other API forwards
+redis_fwrite fdapi_fwrite = NULL;
 redis_setmode fdapi_setmode = NULL;
 redis_select select = NULL;
 redis_ntohl ntohl = NULL;
@@ -85,6 +87,18 @@ redis_getaddrinfo getaddrinfo = NULL;
 redis_inet_ntop inet_ntop = NULL;
 }
 
+
+ForceCOWBUfferProto forceCOWBuffer;
+void FDAPI_SetForceCOWBuffer(ForceCOWBUfferProto proto) {
+    forceCOWBuffer = proto;
+}
+
+__forceinline void ForceCOWBufferProxy(LPVOID buf, size_t size) {
+    if (forceCOWBuffer) {
+        forceCOWBuffer(buf, size);
+    }
+}
+
 auto f_WSAStartup = dllfunctor_stdcall<int, WORD, LPWSADATA>("ws2_32.dll", "WSAStartup");
 int InitWinsock() {
    WSADATA t_wsa;
@@ -97,7 +111,7 @@ int InitWinsock() {
     if(iError != NO_ERROR || LOBYTE(t_wsa.wVersion) != 2 || HIBYTE(t_wsa.wVersion) != 2 ) {
         exit(1);
     } else {
-      return 0;
+        return 0;
     }
 }
 
@@ -105,6 +119,8 @@ auto f_WSACleanup = dllfunctor_stdcall<int>("ws2_32.dll", "WSACleanup");
 int  CleanupWinsock() {
     return f_WSACleanup();
 }
+
+
 
 BOOL SetFDInformation(int FD, DWORD mask, DWORD flags){
     try
@@ -547,7 +563,8 @@ ssize_t redis_read_impl(int fd, void *buf, size_t count) {
     try {
         SOCKET s = RFDMap::getInstance().lookupSocket( fd );
         if( s != INVALID_SOCKET ) {
-            int retval = f_recv( s, (char*)buf, (unsigned int)count, 0);
+            ForceCOWBufferProxy(buf, count);
+            int retval = f_recv(s, (char*)buf, (unsigned int)count, 0);
             if (retval == -1) {
                 errno = GetLastError();
                 if (errno == WSAEWOULDBLOCK) {
@@ -556,6 +573,7 @@ ssize_t redis_read_impl(int fd, void *buf, size_t count) {
             }
             return retval;
         } else {
+            ForceCOWBufferProxy(buf, count);
             int posixFD = RFDMap::getInstance().lookupPosixFD( fd );
             if( posixFD != -1 ) {
                 int retval = crt_read(posixFD, buf,(unsigned int)count);
@@ -906,6 +924,10 @@ int redis_setmode_impl(int fd,int mode) {
     return crtsetmode(fd,mode);
 }
 
+size_t redis_fwrite_impl(const void * _Str, size_t _Size, size_t _Count, FILE * _File) {
+    return crtfwrite(_Str, _Size, _Count, _File);
+}
+
 auto f_select = dllfunctor_stdcall<int, int, fd_set*, fd_set*, fd_set*, const struct timeval*>("ws2_32.dll", "select");
 int redis_select_impl(int nfds, fd_set *readfds, fd_set *writefds,fd_set *exceptfds, struct timeval *timeout) {
    try { 
@@ -1019,6 +1041,43 @@ const char* redis_inet_ntop_impl(int af, const void *src, char *dst, size_t size
     }
 }
 
+BOOL ParseStorageAddress(const char *ip, int port, SOCKADDR_STORAGE* pSotrageAddr) {
+    struct addrinfo hints, *res;
+    int status;
+    char port_buffer[6];
+
+    sprintf(port_buffer, "%hu", port);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    /* Setting AI_PASSIVE will give you a wildcard address if addr is NULL */
+    hints.ai_flags = AI_NUMERICSERV | AI_PASSIVE;
+
+    if ((status = getaddrinfo(ip, port_buffer, &hints, &res) != 0)) {
+        fprintf(stderr, "getaddrinfo: %S\n", gai_strerror(status));
+        return FALSE;
+    }
+
+    /* Note, we're taking the first valid address, there may be more than one */
+    memcpy(pSotrageAddr, res->ai_addr, res->ai_addrlen);
+
+    freeaddrinfo(res);
+    return TRUE;
+}
+
+int StorageSize(SOCKADDR_STORAGE *ss) {
+    switch (ss->ss_family) {
+        case AF_INET:
+            return sizeof(SOCKADDR_IN);
+        case AF_INET6:
+            return sizeof(SOCKADDR_IN6);
+        default:
+            return -1;
+    }
+}
+
+
 class Win32_FDSockMap {
 public:
     static Win32_FDSockMap& getInstance() {
@@ -1055,6 +1114,7 @@ private:
         inet_addr = redis_inet_addr_impl;
         gethostbyname = redis_gethostbyname_impl;
         inet_ntoa = redis_inet_ntoa_impl; 
+        fdapi_fwrite = redis_fwrite_impl;
         fdapi_setmode = redis_setmode_impl;
         WSASetLastError = redis_WSASetLastError_impl;
         WSAGetLastError = redis_WSAGetLastError_impl;
@@ -1072,6 +1132,7 @@ private:
         freeaddrinfo = redis_freeaddrinfo_impl;
         getaddrinfo = redis_getaddrinfo_impl;
         inet_ntop = redis_inet_ntop_impl;
+        accept = redis_accept_impl;
     }
 
     ~Win32_FDSockMap() {

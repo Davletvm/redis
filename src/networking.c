@@ -92,7 +92,7 @@ redisClient *createClient(int fd) {
     c->bulklen = -1;
     c->sentlen = 0;
     c->flags = 0;
-    c->ctime = c->lastinteraction = server.unixtime;
+    c->ctime = c->lastinteraction = c->lastSuccessfulSend = server.unixtime;
     c->authenticated = 0;
     c->replstate = REDIS_REPL_NONE;
     c->reploff = 0;
@@ -115,7 +115,6 @@ redisClient *createClient(int fd) {
     c->pubsub_patterns = listCreate();
     c->peerid = NULL;
     c->throttled_list_node = NULL;
-    c->unauthenticated_list_node = NULL;
     c->client_to_close_node = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
@@ -431,6 +430,7 @@ void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
     asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
+
 /* Add a double as a bulk reply */
 void addReplyDouble(redisClient *c, double d) {
     char dbuf[128], sbuf[128];
@@ -569,31 +569,27 @@ static void acceptCommonHandler(int fd, int flags) {
 #endif
         return;
     }
+    int privClient = flags & REDIS_PRIVPORT_CLIENT;
     /* If maxclient directive is set and this is one client more... close the
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
-        // The client we want to free is the oldest non-authenticated client, if any
-        if (listLength(server.unauthenticated_clients)) {
-            redisClient *tof = listFirst(server.unauthenticated_clients)->value;
-            freeClient(tof);
-        } else {
-            char *err = "-ERR max number of clients reached\r\n";
+    if (listLength(server.clients) > server.maxclients && (!privClient || server.currentPrivPortClients > REDIS_PRIVPORT_FDS)) {
+        char *err = "-ERR max number of clients reached\r\n";
 
-            /* That's a best effort error message, don't check write errors */
-            if (write(c->fd, err, strlen(err)) == -1) {
-                /* Nothing to do, Just to avoid the warning... */
-            }
-            server.stat_rejected_conn++;
-            freeClient(c);
-            return;
+        /* That's a best effort error message, don't check write errors */
+        if (write(c->fd, err, strlen(err)) == -1) {
+            /* Nothing to do, Just to avoid the warning... */
         }
+        server.stat_rejected_conn++;
+        freeClient(c);
+        return;
     }
-    listAddNodeTail(server.unauthenticated_clients, c);
-    c->unauthenticated_list_node = listLast(server.unauthenticated_clients);
     server.stat_numconnections++;
     c->flags |= flags;
+    if (privClient) {
+        server.currentPrivPortClients++;
+    }
 }
 
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -602,17 +598,25 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
+    BOOL success = FALSE;
 
     while(max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
-            if (errno != EWOULDBLOCK)
+            if (errno != EWOULDBLOCK || !success) {
                 redisLog(REDIS_WARNING,
                     "Accepting client connection: %s", server.neterr);
+                if (!success) {
+                    redisLog(REDIS_WARNING,
+                        "Accepting failure on first iteration");
+                }
+            }
             return;
+
         }
-        redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0);
+        redisLog(REDIS_VERBOSE,"[AGG] Accepted %s", cip);
+        success = TRUE;
+        acceptCommonHandler(cfd, (privdata && server.privilidgeEnabled) ? (REDIS_PRIVILIDGED_CLIENT | REDIS_PRIVPORT_CLIENT) : 0);
     }
 }
 
@@ -761,6 +765,7 @@ void freeClient(redisClient *c) {
         }
         if (server.repl_inMemorySend && server.repl_inMemorySend->slave == c) {
             AbortForkOperation(FALSE);
+            server.repl_inMemorySend->slave = NULL;
         }
         l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
@@ -784,11 +789,12 @@ void freeClient(redisClient *c) {
         listDelNode(server.clients_to_close,c->client_to_close_node);
     }
 
+    if (c->flags & REDIS_PRIVPORT_CLIENT) {
+        server.currentPrivPortClients--;
+    }
+
     if (c->throttled_list_node && server.repl_inMemorySend && server.repl_inMemorySend->throttle.throttledClients) {
         listDelNode(server.repl_inMemorySend->throttle.throttledClients, c->throttled_list_node);
-    }
-    if (c->unauthenticated_list_node) {
-        listDelNode(server.unauthenticated_clients, c->unauthenticated_list_node);
     }
 
     /* Release other dynamically allocated client structure fields,
@@ -837,6 +843,10 @@ void sendReplyBufferDone(aeEventLoop *el, int fd, void *privdata, int written) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(fd);
 
+    if (written > 0 && req->timeSent > c->lastSuccessfulSend) {
+        c->lastSuccessfulSend = req->timeSent;
+    }
+
     c->outstanding_writes--;
     if (c->bufpos == offset) {
         c->bufpos = 0;
@@ -866,6 +876,10 @@ void sendReplyListDone(aeEventLoop *el, int fd, void *privdata, int written) {
         server.orphaned_outstanding_writes--;
         server.orphaned_sent_bytes -= (unsigned long) objmem;
         return;
+    }
+
+    if (written > 0 && req->timeSent > c->lastSuccessfulSend) {
+        c->lastSuccessfulSend = req->timeSent;
     }
 
     c->sent_bytes -= (unsigned long) objmem;
@@ -903,7 +917,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             result = aeWinSocketSend(fd,c->buf+c->sentlen, nwritten,
                                         el, c, c->buf, sendReplyBufferDone);
             if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
-                redisLog(REDIS_VERBOSE, "Error writing to client: %s", wsa_strerror(errno));
+                redisLog(REDIS_VERBOSE, "[AGG] Error writing to client: %s", wsa_strerror(errno));
                 freeClient(c);
                 return;
             }
@@ -928,7 +942,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
                                         el, c, o, sendReplyListDone);
             if (result == SOCKET_ERROR && errno != WSA_IO_PENDING) {
                 redisLog(REDIS_VERBOSE,
-                    "Error writing to client: %s", wsa_strerror(errno));
+                    "[AGG] Error writing to client: %s", wsa_strerror(errno));
                 decrRefCount(o);
                 freeClient(c);
                 return;
@@ -1099,7 +1113,7 @@ int processInlineBuffer(redisClient *c) {
         c->repl_ack_time = server.unixtime;
 
     /* Leave data after the first line of the query in the buffer */
-    sdsrange(c->querybuf,querylen+2,-1);
+    sdsrange(c->querybuf,(int)(querylen+2),-1);
 
     /* Setup argv array on client structure */
     if (c->argv) zfree(c->argv);
@@ -1164,7 +1178,7 @@ int processMultibulkBuffer(redisClient *c) {
             return REDIS_ERR;
         }
 
-        pos = (newline-c->querybuf)+2;
+        pos = (int)((newline-c->querybuf)+2);
         if (ll <= 0) {
             sdsrange(c->querybuf,pos,-1);
             return REDIS_OK;
@@ -1211,7 +1225,7 @@ int processMultibulkBuffer(redisClient *c) {
                 return REDIS_ERR;
             }
 
-            pos += newline-(c->querybuf+pos)+2;
+            pos += (int)(newline-(c->querybuf+pos)+2);
             if (ll >= REDIS_MBULK_BIG_ARG) {
                 size_t qblen;
 
@@ -1224,10 +1238,10 @@ int processMultibulkBuffer(redisClient *c) {
                 qblen = sdslen(c->querybuf);
                 /* Hint the sds library about the amount of bytes this string is
                  * going to contain. */
-                if (qblen < ll+2)
+                if (qblen < (size_t)ll+2)
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-qblen);
             }
-            c->bulklen = ll;
+            c->bulklen = (long)ll;
         }
 
         /* Read bulk argument */
@@ -1315,7 +1329,16 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd && CheckThrottleWindowUpdate(c)) return;
+    if (!(c->flags & REDIS_PRIVILIDGED_CLIENT) && c->lastcmd) {
+        if (server.repl_inMemorySend && server.repl_inMemorySend->slave != c && server.repl_inMemorySend->throttle.state != THROTTLE_NONE) {
+            if (CheckThrottleWindowUpdate(c)) {
+                server.repl_inMemorySend->throttle.rejected++;
+                return;
+            } else {
+                server.repl_inMemorySend->throttle.accepted++;
+            }
+        }
+    }
 
     server.current_client = c;
     readlen = REDIS_IOBUF_LEN;
@@ -1353,7 +1376,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             nread = 0;
         } else {
 #ifdef _WIN32
-            redisLog(REDIS_VERBOSE, "Reading from client: %s",wsa_strerror(errno));
+            redisLog(REDIS_VERBOSE, "[AGG] Reading from client: %s",wsa_strerror(errno));
 #else
             redisLog(REDIS_VERBOSE, "Reading from client: %s",strerror(errno));
 #endif
@@ -1361,7 +1384,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
     } else if (nread == 0) {
-        redisLog(REDIS_VERBOSE, "Client closed connection");
+        redisLog(REDIS_VERBOSE, "[AGG] Client closed connection");
         freeClient(c);
         return;
     }
@@ -1394,11 +1417,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *biggest_input_buffer,
                           unsigned long *writes_outstanding,
-                          unsigned long *total_sent_bytes) {
+                          unsigned long long *total_sent_bytes) {
     redisClient *c;
     listNode *ln;
     listIter li;
-    unsigned long lol = 0, bib = 0, wo = 0, tsb = 0;
+    unsigned long lol = 0, bib = 0, wo = 0;
+    unsigned long long tsb = 0;
 
     listRewind(server.clients,&li);
     while ((ln = listNext(&li)) != NULL) {
@@ -1547,6 +1571,17 @@ sds getAllClientsInfoString(redisClient * cc) {
     return o;
 }
 
+
+// this commands returns nothing
+void setclientaddrCommand(redisClient *c) {
+    if (!(c->flags & REDIS_FIRST_COMMAND)) return;
+    if (c->peerid)
+        c->peerid = sdscpy(c->peerid, c->argv[1]->ptr);
+    else
+        c->peerid = sdsnew(c->argv[1]->ptr);
+}
+
+
 void clientCommand(redisClient *c) {
     listNode *ln;
     listIter li;
@@ -1569,6 +1604,7 @@ void clientCommand(redisClient *c) {
         if (c->argc == 3) {
             /* Old style syntax: CLIENT KILL <addr> */
             addr = c->argv[2]->ptr;
+            skipme = 0; /* With the old form, you can kill yourself. */
         } else if (c->argc > 3) {
             int i = 2; /* Next option index. */
 
@@ -1616,10 +1652,13 @@ void clientCommand(redisClient *c) {
         while ((ln = listNext(&li)) != NULL) {
             client = listNodeValue(ln);
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (type != -1 && getClientType(client) != type) continue;
+            if (type != -1 &&
+                (client->flags & REDIS_MASTER ||
+                 getClientType(client) != type)) continue;
             if (id != 0 && client->id != id) continue;
             if (c == client && skipme) continue;
-
+            if ((client->flags & REDIS_PRIVILIDGED_CLIENT) && !(c->flags & REDIS_PRIVILIDGED_CLIENT)) 
+                continue;
             /* Kill it. */
             if (c == client) {
                 close_this_client = 1;
@@ -1643,7 +1682,7 @@ void clientCommand(redisClient *c) {
          * only after we queued the reply to its output buffers. */
         if (close_this_client) c->flags |= REDIS_CLOSE_AFTER_REPLY;
     } else if (!strcasecmp(c->argv[1]->ptr,"setname") && c->argc == 3) {
-        int j, len = sdslen(c->argv[2]->ptr);
+        int j, len = (int)sdslen(c->argv[2]->ptr);
         char *p = c->argv[2]->ptr;
 
         /* Setting the client name to an empty string actually removes
@@ -1703,7 +1742,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
     va_start(ap,argc);
     for (j = 0; j < argc; j++) {
         robj *a;
-        
+
         a = va_arg(ap, robj*);
         argv[j] = a;
         incrRefCount(a);
@@ -1725,7 +1764,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
  * The new val ref count is incremented, and the old decremented. */
 void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
     robj *oldval;
-   
+
     redisAssertWithInfo(c,NULL,i < c->argc);
     oldval = c->argv[i];
     c->argv[i] = newval;
@@ -1752,7 +1791,7 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
  * Note: this function is very fast so can be called as many time as
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. */
-unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
+unsigned long long getClientOutputBufferMemoryUsage(redisClient *c) {
     unsigned long list_item_size = sizeof(listNode)+sizeof(robj);
 
     return c->reply_bytes + c->sent_bytes + (list_item_size*listLength(c->reply));
@@ -1771,6 +1810,8 @@ int getClientType(redisClient *c) {
         return REDIS_CLIENT_TYPE_SLAVE;
     if (c->flags & REDIS_PUBSUB)
         return REDIS_CLIENT_TYPE_PUBSUB;
+    if (c->flags & REDIS_MONITOR)
+        return REDIS_CLIENT_TYPE_MONITOR;
     return REDIS_CLIENT_TYPE_NORMAL;
 }
 
@@ -1778,6 +1819,7 @@ int getClientTypeByName(char *name) {
     if (!strcasecmp(name,"normal")) return REDIS_CLIENT_TYPE_NORMAL;
     else if (!strcasecmp(name,"slave")) return REDIS_CLIENT_TYPE_SLAVE;
     else if (!strcasecmp(name,"pubsub")) return REDIS_CLIENT_TYPE_PUBSUB;
+    else if (!strcasecmp(name, "monitor")) return REDIS_CLIENT_TYPE_MONITOR;
     else return -1;
 }
 
@@ -1786,6 +1828,7 @@ char *getClientTypeName(int class) {
     case REDIS_CLIENT_TYPE_NORMAL: return "normal";
     case REDIS_CLIENT_TYPE_SLAVE:  return "slave";
     case REDIS_CLIENT_TYPE_PUBSUB: return "pubsub";
+    case REDIS_CLIENT_TYPE_MONITOR: return "monitor";
     default:                       return NULL;
     }
 }
@@ -1798,7 +1841,7 @@ char *getClientTypeName(int class) {
  *               Otherwise zero is returned. */
 int checkClientOutputBufferLimits(redisClient *c) {
     int soft = 0, hard = 0, class;
-    unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+    unsigned long long used_mem = getClientOutputBufferMemoryUsage(c);
 
     class = getClientType(c);
     if (server.client_obuf_limits[class].hard_limit_bytes &&
@@ -1839,7 +1882,7 @@ int checkClientOutputBufferLimits(redisClient *c) {
  * called from contexts where the client can't be freed safely, i.e. from the
  * lower level functions pushing data inside the client output buffers. */
 void asyncCloseClientOnOutputBufferLimitReached(redisClient *c) {
-    redisAssert(c->reply_bytes < ULONG_MAX-(1024*64));
+
     if (c->reply_bytes == 0 || c->flags & REDIS_CLOSE_ASAP) return;
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);
@@ -1867,6 +1910,17 @@ void flushSlavesOutputBuffers(void) {
             listLength(slave->reply))
         {
             sendReplyToClient(server.el,slave->fd,slave,0);
+        }
+    }
+    listRewind(server.monitors, &li);
+    while ((ln = listNext(&li))) {
+        redisClient *monitor = listNodeValue(ln);
+        int events;
+
+        events = aeGetFileEvents(server.el, monitor->fd);
+        if (events & AE_WRITABLE &&
+            listLength(monitor->reply)) {
+            sendReplyToClient(server.el, monitor->fd, monitor, 0);
         }
     }
 }

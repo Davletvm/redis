@@ -40,6 +40,7 @@ typedef int ssize_t;
 #define INCL_WINSOCK_API_PROTOTYPES 0 // Important! Do not include Winsock API definitions to avoid conflicts with API entry points defnied below.
 #include <WinSock2.h>
 #include <fcntl.h>
+#include <stdio.h>
 
 // the following are required to be defined before WS2tcpip is included.
 typedef void (*redis_WSASetLastError)(int iError);
@@ -149,6 +150,7 @@ typedef BOOL (*redis_WSAGetOverlappedResult)(int rfd,LPWSAOVERLAPPED lpOverlappe
 
 // other API forwards
 typedef int (*redis_setmode)(int fd,int mode);
+typedef size_t (*redis_fwrite)(const void * _Str, size_t _Size, size_t _Count, FILE * _File);
 
 // API prototypes must match the unix implementation
 typedef int (*redis_socket)(int af,int type,int protocol);
@@ -183,6 +185,7 @@ typedef int (*redis_isatty)(int fd);
 typedef int (*redis_access)(const char *pathname, int mode);
 typedef u_int64 (*redis_lseek64)(int fd, u_int64 offset, int whence); 
 typedef intptr_t (*redis_get_osfhandle)(int fd);
+typedef void(*ForceCOWBUfferProto)(LPVOID buf, size_t size);
 
 // access() mode definitions 
 #define X_OK    0
@@ -227,6 +230,7 @@ extern redis_getpeername getpeername;
 extern redis_getsockname getsockname;
 extern redis_ntohs ntohs;
 extern redis_setmode fdapi_setmode;
+extern redis_fwrite fdapi_fwrite;
 
 extern redis_select select;
 extern redis_ntohl ntohl;
@@ -245,11 +249,17 @@ BOOL FDAPI_AcceptEx(int listenFD,int acceptFD,PVOID lpOutputBuffer,DWORD dwRecei
 BOOL FDAPI_ConnectEx(int fd,const struct sockaddr *name,int namelen,PVOID lpSendBuffer,DWORD dwSendDataLength,LPDWORD lpdwBytesSent,LPOVERLAPPED lpOverlapped);
 void FDAPI_GetAcceptExSockaddrs(int fd, PVOID lpOutputBuffer,DWORD dwReceiveDataLength,DWORD dwLocalAddressLength,DWORD dwRemoteAddressLength,LPSOCKADDR *LocalSockaddr,LPINT LocalSockaddrLength,LPSOCKADDR *RemoteSockaddr,LPINT RemoteSockaddrLength);
 int FDAPI_UpdateAcceptContext( int fd );
+void FDAPI_SetForceCOWBuffer(ForceCOWBUfferProto proto);
+
+// other networking functions
+BOOL ParseStorageAddress(const char *ip, int port, SOCKADDR_STORAGE* pSotrageAddr);
+int StorageSize(SOCKADDR_STORAGE *ss);
 
 // macroize CRT definitions to point to our own
 #ifndef FDAPI_NOCRTREDEFS
 #define close(fd) fdapi_close(fd)
 #define setmode(fd,mode) fdapi_setmode(fd,mode)
+#define fwrite(Str, Size, Count, File) fdapi_fwrite(Str,Size,Count,File)
 #define _get_osfhandle(fd) fdapi_get_osfhandle(fd)
 
 #define _INC_STAT_INL
@@ -257,5 +267,7 @@ int FDAPI_UpdateAcceptContext( int fd );
 #endif
 
 #ifdef __cplusplus
+
+bool IsWindowsVersionAtLeast(WORD wMajorVersion, WORD wMinorVersion, WORD wServicePackMajor);
 }
 #endif

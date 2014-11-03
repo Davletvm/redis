@@ -455,10 +455,6 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
             return rdbSaveType(rdb,REDIS_RDB_TYPE_LIST_ZIPLIST);
         else if (o->encoding == REDIS_ENCODING_LINKEDLIST)
             return rdbSaveType(rdb,REDIS_RDB_TYPE_LIST);
-#ifdef _WIN32
-        else if (o->encoding == REDIS_ENCODING_LINKEDLISTARRAY)
-            return rdbSaveType(rdb,REDIS_RDB_TYPE_LIST);
-#endif
         else
             redisPanic("Unknown list encoding");
     case REDIS_SET:
@@ -466,10 +462,6 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
             return rdbSaveType(rdb,REDIS_RDB_TYPE_SET_INTSET);
         else if (o->encoding == REDIS_ENCODING_HT)
             return rdbSaveType(rdb,REDIS_RDB_TYPE_SET);
-#ifdef _WIN32
-        else if (o->encoding == REDIS_ENCODING_HTARRAY)
-            return rdbSaveType(rdb,REDIS_RDB_TYPE_SET);
-#endif
         else
             redisPanic("Unknown set encoding");
     case REDIS_ZSET:
@@ -477,10 +469,6 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
             return rdbSaveType(rdb,REDIS_RDB_TYPE_ZSET_ZIPLIST);
         else if (o->encoding == REDIS_ENCODING_SKIPLIST)
             return rdbSaveType(rdb,REDIS_RDB_TYPE_ZSET);
-#ifdef _WIN32
-        else if (o->encoding == REDIS_ENCODING_HTZARRAY)
-            return rdbSaveType(rdb,REDIS_RDB_TYPE_ZSET);
-#endif
         else
             redisPanic("Unknown sorted set encoding");
     case REDIS_HASH:
@@ -488,10 +476,6 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
             return rdbSaveType(rdb,REDIS_RDB_TYPE_HASH_ZIPLIST);
         else if (o->encoding == REDIS_ENCODING_HT)
             return rdbSaveType(rdb,REDIS_RDB_TYPE_HASH);
-#ifdef _WIN32
-        else if (o->encoding == REDIS_ENCODING_HTARRAY)
-            return rdbSaveType(rdb,REDIS_RDB_TYPE_HASH);
-#endif
         else
             redisPanic("Unknown hash encoding");
     default:
@@ -548,7 +532,7 @@ int rdbSaveObject(rio *rdb, robj *o) {
             dictEntry *de;
             dictIterator *di = dictGetIterator(set);
 
-            if ((n = rdbSaveLen(rdb,dictSize(set))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb,(uint32_t)dictSize(set))) == -1) return -1;
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
@@ -577,7 +561,7 @@ int rdbSaveObject(rio *rdb, robj *o) {
             dictEntry *de;
             dictIterator *di = dictGetIterator(zs->dict);
 
-            if ((n = rdbSaveLen(rdb,dictSize(zs->dict))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb,(uint32_t)dictSize(zs->dict))) == -1) return -1;
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
@@ -605,7 +589,7 @@ int rdbSaveObject(rio *rdb, robj *o) {
             dictIterator *di = dictGetIterator(o->ptr);
             dictEntry *de;
 
-            if ((n = rdbSaveLen(rdb,dictSize((dict*)o->ptr))) == -1) return -1;
+            if ((n = rdbSaveLen(rdb,(uint32_t)dictSize((dict*)o->ptr))) == -1) return -1;
             nwritten += n;
 
             while((de = dictNext(di)) != NULL) {
@@ -719,7 +703,7 @@ int rdbSave(char *filename) {
             sds keystr = dictGetKey(de);
             robj key, *o = dictGetVal(de);
             long long expire;
-            
+
             initStaticStringObject(key,keystr);
             expire = getExpire(db,&key);
             if (rdbSaveKeyValuePair(&rdb,&key,o,expire,now) == -1) goto werr;
@@ -753,7 +737,7 @@ int rdbSave(char *filename) {
      * loading code skips the check in this case. */
     cksum = rdb.cksum;
     memrev64ifbe(&cksum);
-    rioWrite(&rdb,&cksum,8);
+    if (rioWrite(&rdb,&cksum,8) == 0) goto werr;
 
     if (filename) {
         /* Make sure data will not remain on the OS's output buffers */
@@ -827,6 +811,8 @@ int rdbSaveBackground(char *filename) {
 #endif
         /* Parent */
         server.stat_fork_time = ustime()-start;
+        server.stat_fork_rate = (double) zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024*1024*1024); /* GB per second. */
+        latencyAddSampleIfNeeded("fork",server.stat_fork_time/1000);
         if (childpid == -1) {
             server.lastbgsave_status = REDIS_ERR;
             redisLog(REDIS_WARNING,"Can't save in background: fork: %s",
@@ -846,7 +832,7 @@ int rdbSaveBackground(char *filename) {
 void rdbRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
 
-    snprintf(tmpfile,256,"temp-%d.rdb", (int) childpid);
+    snprintf(tmpfile,sizeof(tmpfile),"temp-%d.rdb", (int) childpid);
     unlink(tmpfile);
 }
 
@@ -1024,7 +1010,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb) {
 
             /* Add pair to hash table */
             ret = dictAdd((dict*)o->ptr, field, value);
-            redisAssert(ret == REDIS_OK);
+            redisAssert(ret == DICT_OK);
         }
 
         /* All pairs should be read by now */
@@ -1124,6 +1110,7 @@ void startLoading(FILE *fp) {
 #endif
     /* Load the DB */
     server.loading = 1;
+    server.loading_loaded_bytes = 0;
     server.loading_start_time = time(NULL);
     if (!fp || fstat(fileno(fp), &sb) == -1) {
         server.loading_total_bytes = 1; /* just to avoid division by zero */
@@ -1147,7 +1134,7 @@ void stopLoading(void) {
 /* Track loading progress in order to serve client's from time to time
    and if needed calculate rdb checksum  */
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
-    if (server.rdb_checksum)
+    if (server.rdb_checksum && !server.repl_inMemoryReceive)
         rioGenericUpdateChecksum(r, buf, len);
     if (server.loading_process_events_interval_bytes &&
         (r->processed_bytes + len)/server.loading_process_events_interval_bytes > r->processed_bytes/server.loading_process_events_interval_bytes)
@@ -1158,7 +1145,8 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
         updateCachedTime();
         if (server.masterhost && server.repl_state == REDIS_REPL_TRANSFER)
             replicationSendNewlineToMaster();
-        loadingProgress(r->processed_bytes);
+
+    loadingProgress((off_t)r->processed_bytes);
         if (!server.repl_inMemoryReceive) 
             processEventsWhileBlocked();
     }
@@ -1292,7 +1280,7 @@ readagain:
         if (cksum == 0) {
             if (fp) 
                 redisLog(REDIS_NOTICE,"RDB file was saved with checksum disabled: no check performed.");
-        } else if (cksum != expected) {
+        } else if (cksum != expected && fp) {
             redisLog(REDIS_WARNING,"Wrong RDB checksum. Aborting now.");
             exit(1);
         }
@@ -1312,8 +1300,8 @@ eoferr: /* unexpected end of file is handled here with a fatal exit, unless we a
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this. */
-void backgroundSaveDoneHandler(int exitcode, int bysignal) {
-    if (!bysignal && exitcode == 0 && !server.repl_inMemoryReceive) {
+void backgroundSaveDoneHandler(int exitcode, int bysignal, int inmemory) {
+    if (!bysignal && exitcode == 0 && !inmemory) {
         redisLog(REDIS_NOTICE,
             "Background saving terminated with success");
         server.dirty = server.dirty - server.dirty_before_bgsave;
@@ -1323,17 +1311,26 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
         redisLog(REDIS_WARNING, "Background saving error");
         server.lastbgsave_status = REDIS_ERR;
     } else if (bysignal) {
+        mstime_t latency;
+
         redisLog(REDIS_WARNING,
             "Background saving terminated by signal %d", bysignal);
+        latencyStartMonitor(latency);
         rdbRemoveTempFile(server.rdb_child_pid);
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("rdb-unlink-temp-file",latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * tirggering an error conditon. */
         if (bysignal != SIGUSR1)
             server.lastbgsave_status = REDIS_ERR;
     } else {
+        mstime_t latency;
         redisLog(REDIS_NOTICE,
             "Background saving for in-memory transfer terminated with success");
+        latencyStartMonitor(latency);
         rdbRemoveTempFile(server.rdb_child_pid);
+        latencyEndMonitor(latency);
+        latencyAddSampleIfNeeded("rdb-unlink-temp-file", latency);
         server.lastbgsave_status = REDIS_OK;
     }
     server.rdb_child_pid = -1;
@@ -1341,7 +1338,7 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     server.rdb_save_time_start = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
      * (the first stage of SYNC is a bulk transfer of dump.rdb) */
-    updateSlavesWaitingBgsave(exitcode == 0 ? REDIS_OK : REDIS_ERR);
+    updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? REDIS_OK : REDIS_ERR);
 }
 
 void saveCommand(redisClient *c) {

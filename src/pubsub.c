@@ -73,7 +73,7 @@ int listMatchPubsubScript(void *a, void *b) {
 
 /* Return the number of channels + patterns a client is subscribed to. */
 int clientSubscriptionsCount(redisClient *c) {
-    return dictSize(c->pubsub_channels)+
+    return (int)dictSize(c->pubsub_channels)+
            listLength(c->pubsub_patterns);
 }
 
@@ -361,8 +361,8 @@ void pubsubCommand(redisClient *c) {
             robj *cobj = dictGetKey(de);
             sds channel = cobj->ptr;
 
-            if (!pat || stringmatchlen(pat, sdslen(pat),
-                                       channel, sdslen(channel),0))
+            if (!pat || stringmatchlen(pat, (int)sdslen(pat),
+                                       channel, (int)sdslen(channel),0))
             {
                 addReplyBulk(c,cobj);
                 mblen++;
@@ -379,7 +379,7 @@ void pubsubCommand(redisClient *c) {
             list *l = dictFetchValue(server.pubsub_channels,c->argv[j]);
 
             addReplyBulk(c,c->argv[j]);
-            addReplyBulkLongLong(c,l ? listLength(l) : 0);
+            addReplyLongLong(c,l ? listLength(l) : 0);
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"numpat") && c->argc == 2) {
         /* PUBSUB NUMPAT */

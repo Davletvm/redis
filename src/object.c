@@ -232,15 +232,19 @@ void incrRefCount(robj *o) {
 void decrRefCount(robj *o) {
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
     if (o->refcount == 1) {
-        switch(o->type) {
-        case REDIS_STRING: freeStringObject(o); break;
-        case REDIS_LIST: freeListObject(o); break;
-        case REDIS_SET: freeSetObject(o); break;
-        case REDIS_ZSET: freeZsetObject(o); break;
-        case REDIS_HASH: freeHashObject(o); break;
-        default: redisPanic("Unknown object type"); break;
+        if (server.postponeDeletes) {
+            addToPendingDeletes(o);
+        } else {
+            switch (o->type) {
+            case REDIS_STRING: freeStringObject(o); break;
+            case REDIS_LIST: freeListObject(o); break;
+            case REDIS_SET: freeSetObject(o); break;
+            case REDIS_ZSET: freeZsetObject(o); break;
+            case REDIS_HASH: freeHashObject(o); break;
+            default: redisPanic("Unknown object type"); break;
+            }
+            zfree(o);
         }
-        zfree(o);
     } else {
         o->refcount--;
     }
@@ -335,7 +339,11 @@ robj *tryObjectEncoding(robj *o) {
      * Note that we also avoid using shared integers when maxmemory is used
      * because every object needs to have a private LRU field for the LRU
      * algorithm to work well. */
-    if (server.maxmemory == 0 && value >= 0 && value < REDIS_SHARED_INTEGERS) {
+    if ((server.maxmemory == 0 ||
+         (server.maxmemory_policy != REDIS_MAXMEMORY_VOLATILE_LRU &&
+          server.maxmemory_policy != REDIS_MAXMEMORY_ALLKEYS_LRU)) &&
+        value >= 0 && value < REDIS_SHARED_INTEGERS)
+    {
         decrRefCount(o);
         incrRefCount(shared.integers[value]);
         return shared.integers[value];
@@ -405,7 +413,7 @@ int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
 
         minlen = (alen < blen) ? alen : blen;
         cmp = memcmp(astr,bstr,minlen);
-        if (cmp == 0) return alen-blen;
+        if (cmp == 0) return (int)(alen-blen);
         return cmp;
     }
 }
@@ -622,7 +630,7 @@ robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
 }
 
 /* Object command allows to inspect the internals of an Redis Object.
- * Usage: OBJECT <verb> ... arguments ... */
+ * Usage: OBJECT <refcount|encoding|idletime> <key> */
 void objectCommand(redisClient *c) {
     robj *o;
 

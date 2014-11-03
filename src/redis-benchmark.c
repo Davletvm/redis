@@ -98,10 +98,9 @@ typedef struct _client {
     long long start;        /* Start time of a request */
     long long latency;      /* Request latency */
     int pending;            /* Number of pending requests (replies to consume) */
-	int prefix_pending;     /* If non-zero, number of pending prefix commands. Commands
-							   such as auth and select are prefixed to the pipeline of
-							   benchmark commands and discarded after the first send. */
-	int prefixlen;          /* Size in bytes of the pending prefix commands */
+    int selectlen;  /* If non-zero, a SELECT of 'selectlen' bytes is currently
+                       used as a prefix of the pipline of commands. This gets
+                       discarded the first time it's sent. */
 } *client;
 
 /* Prototypes */
@@ -248,23 +247,20 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
                 freeReplyObject(reply);
 
-				// This is an OK for prefix commands such as auth and select.
-				if (c->prefix_pending > 0) {
-					c->prefix_pending--;
-					c->pending--;
+                if (c->selectlen) {
+                    size_t j;
 
-					// Discard prefix commands on first response.
-					if (c->prefixlen > 0) {
-						int j;
-
-						sdsrange(c->obuf, c->prefixlen, -1);
-						for (j = 0; j < c->randlen; j++) {
-							c->randptr[j] -= c->prefixlen;
-						}
-						c->prefixlen = 0;
-					}
-					continue;
-				}
+                    /* This is the OK from SELECT. Just discard the SELECT
+                     * from the buffer. */
+                    c->pending--;
+                    sdsrange(c->obuf,c->selectlen,-1);
+                    /* We also need to fix the pointers to the strings
+                     * we need to randomize. */
+                    for (j = 0; j < c->randlen; j++)
+                        c->randptr[j] -= c->selectlen;
+                    c->selectlen = 0;
+                    continue;
+                }
 
                 if (config.requests_finished < config.requests)
                     config.latency[config.requests_finished++] = c->latency;
@@ -282,11 +278,8 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 #ifdef _WIN32
 static void writeHandlerDone(aeEventLoop *el, int fd, void *privdata, int nwritten) {
-    aeWinSendReq *req;
-    client c;
-    if (nwritten == -1) return;
-    req = (aeWinSendReq *)privdata;
-    c = (client)req->client;
+    aeWinSendReq *req = (aeWinSendReq *)privdata;
+    client c = (client)req->client;
 
     c->written += nwritten;
     if (sdslen(c->obuf) == c->written) {
@@ -364,16 +357,17 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * 2) The offsets of the __rand_int__ elements inside the command line, used
  *    for arguments randomization.
  *
- * Even when cloning another client, prefix commands are applied if needed. */
+ * Even when cloning another client, the SELECT command is automatically prefixed
+ * if needed. */
 static client createClient(char *cmd, size_t len, client from) {
     int j;
     client c = zmalloc(sizeof(struct _client));
 
     if (config.hostsocket == NULL) {
 #ifdef WIN32_IOCP
-        struct sockaddr_in sa;
-        c->context = redisPreConnectNonBlock(config.hostip,config.hostport, &sa);
-        if (aeWinSocketConnect(c->context->fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        SOCKADDR_STORAGE ss;
+        c->context = redisPreConnectNonBlock(config.hostip,config.hostport, &ss);
+        if (aeWinSocketConnect(c->context->fd, &ss) != 0) {
             c->context->err = errno;
             strerror_r(errno,c->context->errstr,sizeof(c->context->errstr));
         }
@@ -399,37 +393,40 @@ static client createClient(char *cmd, size_t len, client from) {
      * the example client buffer. */
     c->obuf = sdsempty();
 
-	/* Prefix the request buffer with AUTH and/or SELECT commands, if applicable.
-	   These commands are discarded after the first response, so if the client is
-	   reused the commands will not be used again. */
-	c->prefix_pending = 0;
-	if (config.auth != NULL)
-	{
-		c->obuf = sdscatprintf(c->obuf,"*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n",
-			strlen(config.auth),config.auth);
-		c->prefix_pending++;
-	}
+    if (config.auth) {
+        char *buf = NULL;
+        int len = redisFormatCommand(&buf, "AUTH %s", config.auth);
+        c->obuf = sdscatlen(c->obuf, buf, len);
+        free(buf);
+    }
 
+    /* If a DB number different than zero is selected, prefix our request
+     * buffer with the SELECT command, that will be discarded the first
+     * time the replies are received, so if the client is reused the
+     * SELECT command will not be used again. */
     if (config.dbnum != 0) {
         c->obuf = sdscatprintf(c->obuf,"*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
             (int)sdslen(config.dbnumstr),config.dbnumstr);
-		c->prefix_pending++;
+        c->selectlen = (int)sdslen(c->obuf);
+    } else {
+        c->selectlen = 0;
     }
-	c->prefixlen = sdslen(c->obuf);
 
     /* Append the request itself. */
     if (from) {
         c->obuf = sdscatlen(c->obuf,
-            from->obuf+from->prefixlen,
-            sdslen(from->obuf)-from->prefixlen);
+            from->obuf+from->selectlen,
+            sdslen(from->obuf)-from->selectlen);
     } else {
         for (j = 0; j < config.pipeline; j++)
             c->obuf = sdscatlen(c->obuf,cmd,len);
     }
+
     c->written = 0;
-	c->pending = config.pipeline + c->prefix_pending;
+    c->pending = config.pipeline;
     c->randptr = NULL;
     c->randlen = 0;
+    if (c->selectlen) c->pending++;
 
     /* Find substrings in the output buffer that need to be randomized. */
     if (config.randomkeys) {
@@ -438,10 +435,10 @@ static client createClient(char *cmd, size_t len, client from) {
             c->randfree = 0;
             c->randptr = zmalloc(sizeof(char*)*c->randlen);
             /* copy the offsets. */
-            for (j = 0; j < c->randlen; j++) {
+            for (j = 0; j < (int)c->randlen; j++) {
                 c->randptr[j] = c->obuf + (from->randptr[j]-from->obuf);
                 /* Adjust for the different select prefix length. */
-				c->randptr[j] += c->prefixlen - from->prefixlen;
+                c->randptr[j] += c->selectlen - from->selectlen;
             }
         } else {
             char *p = c->obuf;
@@ -468,15 +465,6 @@ static client createClient(char *cmd, size_t len, client from) {
 
 static void createMissingClients(client c) {
     int n = 0;
-    char *buf = c->obuf;
-    size_t buflen = sdslen(c->obuf);
-
-    /* If we are cloning from a client with a SELECT prefix, skip it since the
-     * client will be created with the prefixed SELECT if needed. */
-    if (c->prefixlen) {
-        buf += c->prefixlen;
-        buflen -= c->prefixlen;
-    }
 
     while(config.liveclients < config.numclients) {
         createClient(NULL,0,c);
@@ -568,6 +556,9 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i],"-s")) {
             if (lastarg) goto invalid;
             config.hostsocket = strdup(argv[++i]);
+        } else if (!strcmp(argv[i],"-a") ) {
+            if (lastarg) goto invalid;
+            config.auth = strdup(argv[++i]);
         } else if (!strcmp(argv[i],"-d")) {
             if (lastarg) goto invalid;
             config.datasize = atoi(argv[++i]);
@@ -606,9 +597,6 @@ int parseOptions(int argc, const char **argv) {
             if (lastarg) goto invalid;
             config.dbnum = atoi(argv[++i]);
             config.dbnumstr = sdsfromlonglong(config.dbnum);
-        } else if (!strcmp(argv[i],"-a") && !lastarg) {
-			if (lastarg) goto invalid;
-            config.auth = strdup(argv[++i]);
         } else if (!strcmp(argv[i],"--help")) {
             exit_status = 0;
             goto usage;
@@ -632,7 +620,7 @@ usage:
 " -h <hostname>      Server hostname (default 127.0.0.1)\n"
 " -p <port>          Server port (default 6379)\n"
 " -s <socket>        Server socket (overrides host and port)\n"
-" -a <password>      Password to use when connecting to the server\n"
+" -a <password>      Password for Redis Auth\n"
 " -c <clients>       Number of parallel connections (default 50)\n"
 " -n <requests>      Total number of requests (default 10000)\n"
 " -d <size>          Data size of SET/GET value in bytes (default 2)\n"
@@ -677,6 +665,11 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     REDIS_NOTUSED(id);
     REDIS_NOTUSED(clientData);
 
+    if (config.liveclients == 0) {
+        fprintf(stderr,"All clients disconnected... aborting.\n");
+        exit(1);
+    }
+
     if (config.csv) return 250;
     dt = (float)((mstime()-config.start)/1000.0);
     rps = (float)(config.requests_finished/dt);
@@ -706,7 +699,7 @@ int main(int argc, const char **argv) {
 
     client c;
 
-    srandom(time(NULL));
+    srandom((unsigned int)time(NULL));
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 
@@ -731,7 +724,7 @@ int main(int argc, const char **argv) {
     config.hostsocket = NULL;
     config.tests = NULL;
     config.dbnum = 0;
-	config.auth = NULL;
+    config.auth = NULL;
 
     i = parseOptions(argc,argv);
     argc -= i;

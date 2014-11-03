@@ -31,6 +31,8 @@ typedef struct InMemoryBuffersControl {
     int bufferSequence[MAXSENDBUFFER];
     int bufferState[MAXSENDBUFFER];
     int id;
+    int numberBufferWaited;
+    int numberBufferAvailable;
     int bufferSize;
     SPBuffer * buffer[MAXSENDBUFFER];
 } InMemoryBuffersControl;
@@ -46,6 +48,8 @@ extern "C" {
     int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDLE doneSent[2]);
     void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE doSend[2], HANDLE doneSent[2]);
     void ClearInMemoryBuffersMasterParent();
+    void CreateMiniDump(EXCEPTION_POINTERS * excinfo);
+    HANDLE RegisterMiniDumpHandler();
 
 #ifdef __cplusplus
 }

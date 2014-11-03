@@ -39,8 +39,12 @@
 #define ANET_NONE 0
 #define ANET_IP_ONLY (1<<0)
 
-#if defined(__sun)
+#if defined(__sun) || defined(_AIX)
 #define AF_LOCAL AF_UNIX
+#endif
+
+#ifdef _AIX
+#undef ip_len
 #endif
 
 int anetTcpConnect(char *err, char *addr, int port);
@@ -52,6 +56,8 @@ int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len);
 int anetResolveIP(char *err, char *host, char *ipbuf, size_t ipbuf_len);
 int anetTcpServer(char *err, int port, char *bindaddr, int backlog);
 int anetTcp6Server(char *err, int port, char *bindaddr, int backlog);
+int anetTcpServerEx(char *err, int port, char *bindaddr, int backlog, void* privData);
+int anetTcp6ServerEx(char *err, int port, char *bindaddr, int backlog, void* privData);
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog);
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
 int anetUnixAccept(char *err, int serversock);

@@ -88,12 +88,6 @@ unsigned int dictIntHashFunction(unsigned int key)
     return key;
 }
 
-/* Identity hash function for integer keys */
-unsigned int dictIdentityHashFunction(unsigned int key)
-{
-    return key;
-}
-
 #define DICT_HASH_FUNCTION_SEED_UNITIALIZED 5381
 
 static uint32_t dict_hash_function_seed = DICT_HASH_FUNCTION_SEED_UNITIALIZED;
@@ -314,7 +308,7 @@ int dictRehash(dict *d, int n) {
 
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
-        assert(d->ht[0].size > (unsigned)d->rehashidx);
+        assert(d->ht[0].size > (unsigned long)d->rehashidx);
         while(d->ht[0].table[d->rehashidx] == NULL) d->rehashidx++;
         de = d->ht[0].table[d->rehashidx];
         /* Move all the keys in this bucket from the old to the new hash HT */
@@ -535,6 +529,38 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
     return DICT_OK; /* never fails */
 }
 
+
+int _dictClearCount(dict *d, dictht *ht, int count) {
+    size_t i;
+
+    /* Free all the elements */
+    for (i = ht->sizemask; i < ht->size && ht->used > 0; i++) {
+        dictEntry *he, *nextHe;
+
+        if ((he = ht->table[i]) == NULL) continue;
+        while (he) {
+            nextHe = he->next;
+            dictFreeKey(d, he);
+            dictFreeVal(d, he);
+            zfree(he);
+            ht->used--;
+            he = nextHe;
+            if (--count == 0 && ht->used) {
+                ht->sizemask = i;
+                ht->table[i] = he;
+
+                return 0;
+            }
+        }
+    }
+    /* Free the table and the allocated cache structure */
+    zfree(ht->table);
+    /* Re-initialize the table */
+    _dictReset(ht);
+    return count ? count : 1; 
+}
+
+
 /* Clear & Release the hash table */
 void dictRelease(dict *d)
 {
@@ -542,6 +568,20 @@ void dictRelease(dict *d)
     _dictClear(d,&d->ht[1],NULL);
     zfree(d);
 }
+
+
+void dictPendingRelease(dict * d) {
+    d->ht[0].sizemask = 0;
+    d->ht[1].sizemask = 0;
+}
+
+int dictReleaseCount(dict *d, int count) {
+    if (d->ht[0].table && !(count = _dictClearCount(d, &d->ht[0], count))) return 0;
+    if (d->ht[1].table && !(count = _dictClearCount(d, &d->ht[1], count))) return 0;
+    zfree(d);
+    return count;
+}
+
 
 dictEntry *dictFind(dict *d, const void *key)
 {
@@ -646,7 +686,7 @@ dictEntry *dictNext(dictIterator *iter)
                     iter->fingerprint = dictFingerprint(iter->d);
             }
             iter->index++;
-            if (iter->index >= (signed) ht->size) {
+            if (iter->index >= (long) ht->size) {
                 if (dictIsRehashing(iter->d) && iter->table == 0) {
                     iter->table++;
                     iter->index = 0;
@@ -833,7 +873,7 @@ unsigned long dictScan(dict *d,
 
     if (!dictIsRehashing(d)) {
         t0 = &(d->ht[0]);
-        m0 = t0->sizemask;
+        m0 = (unsigned long)t0->sizemask;
 
         /* Emit entries at cursor */
         de = t0->table[v & m0];
@@ -852,8 +892,8 @@ unsigned long dictScan(dict *d,
             t1 = &d->ht[0];
         }
 
-        m0 = t0->sizemask;
-        m1 = t1->sizemask;
+        m0 = (unsigned long)t0->sizemask;
+        m1 = (unsigned long)t1->sizemask;
 
         /* Emit entries at cursor */
         de = t0->table[v & m0];

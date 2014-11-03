@@ -128,13 +128,14 @@ void slowlogReset(void) {
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * Redis slow log. */
 void slowlogCommand(redisClient *c) {
+    int isgetpublic = 0;
     if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"reset")) {
         slowlogReset();
         addReply(c,shared.ok);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"len")) {
         addReplyLongLong(c,listLength(server.slowlog));
     } else if ((c->argc == 2 || c->argc == 3) &&
-               !strcasecmp(c->argv[1]->ptr,"get"))
+               (!strcasecmp(c->argv[1]->ptr,"get") || (isgetpublic = !strcasecmp(c->argv[1]->ptr, "getpublic"))))
     {
         long count = 10, sent = 0;
         listIter li;
@@ -156,9 +157,13 @@ void slowlogCommand(redisClient *c) {
             addReplyLongLong(c,se->id);
             addReplyLongLong(c,se->time);
             addReplyLongLong(c,se->duration);
-            addReplyMultiBulkLen(c,se->argc);
-            for (j = 0; j < se->argc; j++)
-                addReplyBulk(c,se->argv[j]);
+            if (isgetpublic) {
+                addReplyBulk(c, se->argv[0]);
+            } else {
+                addReplyMultiBulkLen(c, se->argc);
+                for (j = 0; j < se->argc; j++)
+                    addReplyBulk(c, se->argv[j]);
+            }
             sent++;
         }
         setDeferredMultiBulkLength(c,totentries,sent);

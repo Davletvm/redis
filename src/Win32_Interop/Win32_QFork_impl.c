@@ -94,6 +94,12 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
     server.repl_inMemorySend->sentDoneEvents = doneSent;
     server.repl_inMemorySend->sequence = control->bufferSequence;
     server.repl_inMemorySend->sendState = control->bufferState;
+    server.repl_inMemorySend->countBuffersImmediatelyAvailableChild = &(control->numberBufferAvailable);
+    server.repl_inMemorySend->countBuffersImmediatelyAvailableChild[0] = 0;
+    server.repl_inMemorySend->countBuffersImmediatelyAvailable = 0;
+    server.repl_inMemorySend->countWaitedForBuffersChild = &(control->numberBufferWaited);
+    server.repl_inMemorySend->countWaitedForBuffersChild[0] = 0;
+    server.repl_inMemorySend->countWaitedForBuffers = 0;
     int IDs[MAXSENDBUFFER];
     for (int x = 0; x < MAXSENDBUFFER; x++) {
         server.repl_inMemorySend->controlAlias[x] = (redisInMemoryReplSendControl*)(server.repl_inMemorySend->buffer[x] = control->buffer[x][0].b);
@@ -104,6 +110,7 @@ void SetupInMemoryBuffersMasterParent(InMemoryBuffersControl * control, HANDLE d
         IDs[x] = server.repl_inMemorySend->id;
     }
     aeSetCallbacks(server.el, aeHandleEventCallbackProc, MAXSENDBUFFER, doSend, IDs);
+    server.repl_inMemorySend->replStart = server.mstime - 1;
 #endif
 }
 
@@ -135,6 +142,8 @@ int do_rdbSaveInMemory(InMemoryBuffersControl * buffers, HANDLE doSend[2], HANDL
     inMemoryRepl.sequence = buffers->bufferSequence;
     inMemoryRepl.sendState = buffers->bufferState;
     inMemoryRepl.prevActiveBuffer = -1;
+    inMemoryRepl.countBuffersImmediatelyAvailableChild = &(buffers->numberBufferAvailable);
+    inMemoryRepl.countWaitedForBuffersChild = &(buffers->numberBufferWaited);
     server.repl_inMemorySend = &inMemoryRepl;
     server.rdb_child_pid = GetCurrentProcessId();
     redisLog(REDIS_VERBOSE, "Child: Save inmemory starting");

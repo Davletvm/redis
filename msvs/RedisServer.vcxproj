@@ -176,7 +176,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>$(OutDir);$(OutDir)lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>psapi.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;advapi32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qwave.lib;psapi.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;advapi32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
@@ -222,6 +222,7 @@
     <ClCompile Include="..\src\aof.c" />
     <ClCompile Include="..\src\bio.c" />
     <ClCompile Include="..\src\bitops.c" />
+    <ClCompile Include="..\src\checkdb.c" />
     <ClCompile Include="..\src\config.c" />
     <ClCompile Include="..\src\crc64.c" />
     <ClCompile Include="..\src\db.c" />
@@ -230,6 +231,7 @@
     <ClCompile Include="..\src\endianconv.c" />
     <ClCompile Include="..\src\hyperloglog.c" />
     <ClCompile Include="..\src\intset.c" />
+    <ClCompile Include="..\src\latency.c" />
     <ClCompile Include="..\src\lzf_c.c" />
     <ClCompile Include="..\src\lzf_d.c" />
     <ClCompile Include="..\src\memtest.c" />
@@ -252,6 +254,7 @@
     <ClCompile Include="..\src\sha1.c" />
     <ClCompile Include="..\src\slowlog.c" />
     <ClCompile Include="..\src\sort.c" />
+    <ClCompile Include="..\src\sparkline.c" />
     <ClCompile Include="..\src\syncio.c" />
     <ClCompile Include="..\src\t_hash.c" />
     <ClCompile Include="..\src\t_list.c" />
@@ -274,6 +277,7 @@
     <ClInclude Include="..\src\fmacros.h" />
     <ClInclude Include="..\src\help.h" />
     <ClInclude Include="..\src\intset.h" />
+    <ClInclude Include="..\src\latency.h" />
     <ClInclude Include="..\src\lzf.h" />
     <ClInclude Include="..\src\lzfP.h" />
     <ClInclude Include="..\src\pqsort.h" />
@@ -285,6 +289,7 @@
     <ClInclude Include="..\src\sha1.h" />
     <ClInclude Include="..\src\slowlog.h" />
     <ClInclude Include="..\src\solarisfixes.h" />
+    <ClInclude Include="..\src\sparkline.h" />
     <ClInclude Include="..\src\testhelp.h" />
     <ClInclude Include="..\src\util.h" />
     <ClInclude Include="..\src\version.h" />

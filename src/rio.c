@@ -57,7 +57,10 @@
 #include "rio.h"
 #include "crc64.h"
 #include "config.h"
-#include "redis.h"
+
+#ifdef _WIN32
+#include "Win32_Interop\Win32_FDAPI.h"
+#endif
 
 /* Returns 1 or 0 for success/failure. */
 static size_t rioBufferWrite(rio *r, const void *buf, size_t len) {
@@ -83,7 +86,6 @@ static off_t rioBufferTell(rio *r) {
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     size_t retval;
-
     retval = fwrite(buf,len,1,r->io.file.fp);
     r->io.file.buffered += (off_t)len;
 
@@ -120,8 +122,7 @@ void SendActiveBufferIM(redisInMemoryReplSend * inm)
         else
             inm->controlAlias[inm->prevActiveBuffer]->sizeOfNext = 0;
         inm->sendState[inm->prevActiveBuffer] = INMEMORY_STATE_READYTOSEND;
-        inm->controlAlias[inm->prevActiveBuffer]->offset = 0;
-        inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
+        inm->controlAlias[inm->prevActiveBuffer]->offset = inm->sequence[inm->prevActiveBuffer] = inm->curSequence++;
         redisLog(REDIS_DEBUG, "Ready to send buffer %d, sequence:%d", inm->prevActiveBuffer, inm->sequence[inm->prevActiveBuffer]);
         ResetEvent(inm->sentDoneEvents[inm->prevActiveBuffer]);
         SetEvent(inm->doSendEvents[inm->prevActiveBuffer]);
@@ -138,7 +139,13 @@ static int WaitForFreeBuffer(rio * r)
 {
     redisLog(REDIS_DEBUG, "Waiting for free buffers.");
     redisInMemoryReplSend * inm = r->io.memorySend.inMemory;
-    WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
+    DWORD rval = WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, 0);
+    if (rval < WAIT_OBJECT_0 || rval >= WAIT_OBJECT_0 + INMEMORY_SEND_MAXSENDBUFFER) {
+        inm->countWaitedForBuffersChild[0]++;
+        WaitForMultipleObjects(INMEMORY_SEND_MAXSENDBUFFER, inm->sentDoneEvents, FALSE, server.repl_timeout * 1000);
+    } else {
+        inm->countBuffersImmediatelyAvailableChild[0]++;
+    }
     BOOL found = FALSE;
     for (int x = 0; x < INMEMORY_SEND_MAXSENDBUFFER; x++) {
         DWORD rval = WaitForSingleObject(inm->sentDoneEvents[x], 0);
@@ -151,6 +158,9 @@ static int WaitForFreeBuffer(rio * r)
         } else if (rval != WAIT_TIMEOUT) {
             return 0;
         }
+    }
+    if (!found) {
+        redisLog(REDIS_WARNING, "Timed out waiting for free buffer.");
     }
     return found;
 }
@@ -208,6 +218,12 @@ static size_t rioMemoryWrite(rio *r, const void *buf, size_t len) {
 static int PollForRead(redisInMemoryReplReceive * inm)
 {
     updateCachedTime();
+    trackOperationsPerSecond();
+
+    if (server.repl_inMemoryReceive != inm) {
+        redisLog(REDIS_WARNING, "Disconnected while reading");
+        return 0;
+    }
 
     int timeout = (int)(server.repl_timeout - (server.unixtime - server.repl_transfer_lastio));
     if (timeout <= 0) {
@@ -217,15 +233,14 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 
     if (server.unixtime % 2 == 0 && inm->lastTick != server.unixtime) {
         inm->lastTick = server.unixtime;
-        redisLog(REDIS_VERBOSE, "Bytes Received In-Memory-Repl %lld", inm->totalRead);
+        redisLog(REDIS_VERBOSE, "Bytes Received In-Memory-Repl %lld mb. Speed: %lld mb/sec. Started %lld secs ago.",
+            inm->totalRead >> 20,
+            (inm->totalRead  * 1000 / (server.mstime - inm->replStart)) >> 20,
+            (server.mstime - inm->replStart)/ 1000);
     }
 
-    aeProcessEvents(server.el, AE_FILE_EVENTS, timeout);
+    aeProcessEvents(server.el, AE_FILE_EVENTS, 1000 / server.hz);
 
-    if (server.repl_inMemoryReceive != inm) {
-        redisLog(REDIS_WARNING, "Disconnected while reading");
-        return 0;
-    }
     if (inm->endStateFlags & INMEMORY_ENDSTATE_ERROR) {
         redisLog(REDIS_WARNING, "Error while reading: %d", inm->endStateFlags);
         return 0;
@@ -235,7 +250,10 @@ static int PollForRead(redisInMemoryReplReceive * inm)
 
 
 static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
+    // the virtual buffer is just an offset into the buffer, and a size remaining.
     while (1) {
+
+        // keep looping until we have the complete 1st control block
         if (!inm->sendControlRead.sizeOfThis) {
             if (!PollForRead(inm))
                 return 0;
@@ -245,7 +263,11 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
         off_t offsetWritten = inm->posBufferWritten + inm->posBufferStartOffset;
         off_t offsetRead = inm->posBufferRead + inm->posBufferStartOffset;
         off_t offsetNextControl = inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis;
+        // these are global offsets, to simplify logic below
 
+        // if we have exhausted the contents of our buffer,
+        // then zero the positions, and try to fill it again.  This way we will always try to read the max number of
+        // bytes, subject to known length of stream outstanding
         if (offsetRead == offsetWritten) {
             inm->posBufferRead = 0;
             inm->posBufferWritten = 0;
@@ -254,17 +276,26 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
             continue;
         }
 
+        // if we have read up to the next control block (of which we have at least a part)
         if (offsetRead == offsetNextControl) {
+            // if we have the complete control block already read in
             if (offsetWritten >= (off_t)(offsetNextControl + sizeof(redisInMemoryReplSendControl))) {
+                // then copy it into ControlRead, and jump over it
                 inm->posBufferRead = (unsigned long) (offsetNextControl + sizeof(redisInMemoryReplSendControl) - inm->posBufferStartOffset);
                 memcpy(&inm->sendControlRead,
                     inm->buffer + inm->sendControlRead.offset + inm->sendControlRead.sizeOfThis - inm->posBufferStartOffset,
                     sizeof(redisInMemoryReplSendControl));
+                // set the global offset of the now current ControlRead
                 inm->sendControlRead.offset = offsetNextControl;
+                // go again, see if can now produce the virtual buffer
                 continue;
             } else {
                 redisLog(REDIS_VERBOSE, "In middle of control block");
+                // this is fairly rare, in that we stopped the network read in the middle of a control block
+                // we have to move it to the beginning of the physical buffer so that we can be sure that we can
+                // always read in all of it
                 memcpy(inm->buffer, offsetNextControl - inm->posBufferStartOffset + inm->buffer, offsetWritten - offsetNextControl);
+                // reset pos variables correctly, and read from network again
                 inm->posBufferRead = 0;
                 inm->posBufferWritten = (unsigned long)(offsetWritten - offsetNextControl);
                 inm->posBufferStartOffset = offsetNextControl;
@@ -274,13 +305,17 @@ static int CreateVirtualBuffer(redisInMemoryReplReceive * inm) {
             }
         }
 
+        // at this point we know that offsetRead < offsetNextControl
 
+        // if the next control is available, then the virtual buffer extends up to it
         if (offsetNextControl < offsetWritten) {
             inm->virtualBuffer.size = (int)(offsetNextControl - offsetRead);
         } else {
+            // otherwise it extends up to as much as we have read from the network (ie, written into physical buffer)
             inm->virtualBuffer.size = (int)(offsetWritten- offsetRead);
         }
         inm->virtualBuffer.sourceOffset = inm->posBufferRead;
+        // finally, advance the read mark by the size of the virtual buffer we produced
         inm->posBufferRead += inm->virtualBuffer.size;
         return 1;
     }
@@ -428,7 +463,7 @@ size_t rioWriteBulkCount(rio *r, char prefix, int count) {
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len) {
     size_t nwritten;
 
-    if ((nwritten = rioWriteBulkCount(r,'$',len)) == 0) return 0;
+    if ((nwritten = rioWriteBulkCount(r,'$',(int)len)) == 0) return 0;
     if (len > 0 && rioWrite(r,buf,len) == 0) return 0;
     if (rioWrite(r,"\r\n",2) == 0) return 0;
     return nwritten+len+2;

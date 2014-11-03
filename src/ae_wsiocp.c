@@ -61,6 +61,7 @@ typedef struct aeWatchedItem {
 /* structure that keeps state of sockets and Completion port handle */
 typedef struct aeApiState {
     HANDLE iocp;
+    HANDLE privIocp;
     int setsize;
     OVERLAPPED_ENTRY entries[MAX_COMPLETE_PER_POLL];
     list lookup[MAX_SOCKET_LOOKUP];
@@ -99,18 +100,19 @@ aeSockState *aeGetSockState(void *apistate, int fd) {
         node = listNextNode(node);
     }
     // not found. Do lazy create of sockState.
-    sockState = (aeSockState *) zmalloc(sizeof(aeSockState));
+    sockState = (aeSockState *)AllocMemoryNoCOW(sizeof(aeSockState));
     if (sockState != NULL) {
         sockState->fd = fd;
         sockState->masks = 0;
         sockState->wreqs = 0;
         sockState->reqs = NULL;
+        sockState->qosID = 0;
         memset(&sockState->wreqlist, 0, sizeof(sockState->wreqlist));
 
         if (listAddNodeHead(socklist, sockState) != NULL) {
             return sockState;
         } else {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
         }
     }
     return NULL;
@@ -130,8 +132,8 @@ aeSockState *aeGetExistingSockState(void *apistate, int fd) {
     while (node != NULL) {
         sockState = (aeSockState *)listNodeValue(node);
         if (sockState->fd == fd) {
-            return sockState;
-        }
+    return sockState;
+}
         node = listNextNode(node);
     }
 
@@ -168,13 +170,13 @@ void aeDelSockState(void *apistate, aeSockState *sockState) {
         sindex = aeSocketIndex(sockState->fd);
         socklist = &(((aeApiState *)apistate)->lookup[sindex]);
         if (removeMatchFromList(socklist, sockState) == 1) {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
             return;
         }
         // try closing list
         socklist = &(((aeApiState *)apistate)->closing);
         if (removeMatchFromList(socklist, sockState) == 1) {
-            zfree(sockState);
+            FreeMemoryNoCOW(sockState);
             return;
         }
     } else {
@@ -228,7 +230,7 @@ DWORD WINAPI WatcherThreadProc(LPVOID lpParameter)
             } else if (rval > WAIT_OBJECT_0 && rval <= watchedCount - WAIT_OBJECT_0) {
                 int id = watchedItems[rval - WAIT_OBJECT_0 - 1].id;
                 redisLog(REDIS_DEBUG, "WT: completion requested %d", id);
-                PostQueuedCompletionStatus(state->iocp, 0, ((unsigned long)(-(int)(rval - WAIT_OBJECT_0))), (LPOVERLAPPED) id);
+                PostQueuedCompletionStatus(state->privIocp, 0, ((unsigned long)(-(int)(rval - WAIT_OBJECT_0))), (LPOVERLAPPED) id);
                 postAllowed = 0;
             }
             LeaveCriticalSection(&(state->threadCS));
@@ -287,8 +289,12 @@ static void aeApiFree(aeEventLoop *eventLoop) {
             CloseHandle(state->iocp);
             state->iocp = NULL;
         }
+        if (state->privIocp) {
+            CloseHandle(state->privIocp);
+            state->privIocp = NULL;
+        }
         DeleteCriticalSection(&(state->threadCS));
-        zfree(state);
+        FreeMemoryNoCOW(state);
     }
     eventLoop->apidata = NULL;
     aeWinCleanup();
@@ -299,10 +305,12 @@ static void aeApiFree(aeEventLoop *eventLoop) {
 /* Called by ae to initialize state */
 static int aeApiCreate(aeEventLoop *eventLoop) {
     HMODULE kernel32_module;
-    aeApiState *state = (aeApiState *)zcalloc(sizeof(aeApiState));
+    aeApiState *state = (aeApiState *)AllocMemoryNoCOW(sizeof(aeApiState));
+    
 
     if (!state) return -1;
 
+    memset(state, 0, sizeof(aeApiState));
     eventLoop->apidata = state;
 
     InitializeCriticalSectionAndSpinCount(&(state->threadCS), 5000);
@@ -313,6 +321,13 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
                                          0,
                                          1);
     if (state->iocp == NULL) {
+        goto err;
+    }
+    state->privIocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE,
+        NULL,
+        0,
+        1);
+    if (state->privIocp == NULL) {
         goto err;
     }
 
@@ -335,7 +350,7 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
 
     state->setsize = eventLoop->setsize;
     /* initialize the IOCP socket code with state reference */
-    aeWinInit(state, state->iocp, aeGetSockState, aeDelSockState);
+    aeWinInit(state, state->iocp, state->privIocp, aeGetSockState, aeDelSockState);
     return 0;
 err:
     aeApiFree(eventLoop);
@@ -347,6 +362,10 @@ static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
     return 0;
 }
 
+HANDLE aeGetIocp(aeEventLoop * eventLoop, aeSockState * sockstate) {
+    aeApiState *state = (aeApiState *)eventLoop->apidata;
+    return (sockstate->masks & PRIV_SOCKET) ? state->privIocp : state->iocp;
+}
 
 
 /* monitor state changes for a socket */
@@ -376,14 +395,14 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
         if ((sockstate->masks & CONNECT_PENDING) == 0) {
             // if no write active, then need to queue write ready
             if (sockstate->wreqs == 0) {
-                asendreq *areq = (asendreq *)zmalloc(sizeof(asendreq));
+                asendreq *areq = (asendreq *)AllocMemoryNoCOW(sizeof(asendreq));
                 memset(areq, 0, sizeof(asendreq));
-                if (PostQueuedCompletionStatus(state->iocp,
+                if (PostQueuedCompletionStatus(aeGetIocp(eventLoop, sockstate),
                                             0,
                                             fd,
                                             &areq->ov) == 0) {
                     errno = GetLastError();
-                    zfree(areq);
+                    FreeMemoryNoCOW(areq);
                     return -1;
                 }
                 sockstate->wreqs++;
@@ -461,55 +480,65 @@ void aeEventSignaled(aeEventLoop *eventLoop, int rfd, int id)
 
 /* return array of sockets that are ready for read or write 
    depending on the mask for each socket */
-static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
+static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxCompletes) {
     aeApiState *state = (aeApiState *)eventLoop->apidata;
     aeSockState *sockstate;
     ULONG j;
     int numevents = 0;
     ULONG numComplete = 0;
     int rc;
+    if (maxCompletes > MAX_COMPLETE_PER_POLL) maxCompletes = MAX_COMPLETE_PER_POLL;
     int mswait = tvp ? (tvp->tv_sec * 1000) + (tvp->tv_usec / 1000) : INFINITE;
-
-    if (pGetQueuedCompletionStatusEx != NULL) {
-        /* first get an array of completion notifications */
-        rc = pGetQueuedCompletionStatusEx(state->iocp,
-                                        state->entries,
-                                        MAX_COMPLETE_PER_POLL,
-                                        &numComplete,
-                                        mswait,
-                                        FALSE);
+    
+    rc = pGetQueuedCompletionStatusEx(state->privIocp,
+                                    state->entries,
+                                    maxCompletes,
+                                    &numComplete,
+                                    0,
+                                    FALSE);
+    if (!rc) {
+        numComplete = 0;
     } else {
-        /* need to get one at a time. Use first array element */
-        rc = GetQueuedCompletionStatus(state->iocp,
-                                        &state->entries[0].dwNumberOfBytesTransferred,
-                                        &state->entries[0].lpCompletionKey,
-                                        &state->entries[0].lpOverlapped,
-                                        mswait);
-        if (!rc && state->entries[0].lpOverlapped == NULL) {
-            // timeout. Return.
-            return 0;
-        } else {
-            // check if more completions are ready
-            int lrc = 1;
-            rc = 1;
-            numComplete = 1;
-
-            while (numComplete < MAX_COMPLETE_PER_POLL) {
-                lrc = GetQueuedCompletionStatus(state->iocp,
-                                                &state->entries[numComplete].dwNumberOfBytesTransferred,
-                                                &state->entries[numComplete].lpCompletionKey,
-                                                &state->entries[numComplete].lpOverlapped,
-                                                0);
-                if (lrc) {
-                   numComplete++;
-                } else {
-                    if (state->entries[numComplete].lpOverlapped == NULL) break;
-                }
-            }
-        }
+        mswait = 0; // don't wait if we have any events
     }
+    maxCompletes -= numComplete;
+    int numComplete2 = 0;
+    rc = pGetQueuedCompletionStatusEx(state->iocp,
+        state->entries + numComplete,
+        maxCompletes,
+        &numComplete2,
+        0,
+        FALSE);
+    if (!rc) {
+        numComplete2 = 0;
+        if (mswait != 0) {
+            FILETIME beforeWait;
+            FILETIME afterWait;
+            GetSystemTimePreciseAsFileTime(&beforeWait);
+            rc = pGetQueuedCompletionStatusEx(state->iocp,
+                state->entries + numComplete,
+                maxCompletes,
+                &numComplete2,
+                mswait,
+                FALSE);
+            GetSystemTimePreciseAsFileTime(&afterWait);
+            time_t timeBefore = 0;
+            time_t timeAfter = 0;
+            timeBefore |= beforeWait.dwHighDateTime;
+            timeBefore <<= 32;
+            timeBefore |= beforeWait.dwLowDateTime;
+            timeAfter |= afterWait.dwHighDateTime;
+            timeAfter <<= 32;
+            timeAfter |= afterWait.dwLowDateTime;
+            eventLoop->totalIdleTime += (timeAfter - timeBefore); // in 100nanoseconds
+            if (!rc)
+                numComplete2 = 0;
+        }
+    } else {
+    }
+    numComplete += numComplete2;
 
-    if (rc && numComplete > 0) {
+    if (numComplete > 0) {
         LPOVERLAPPED_ENTRY entry = state->entries;
         for (j = 0; j < numComplete && numevents < state->setsize; j++, entry++) {
             int rfd = (int)entry->lpCompletionKey;
@@ -566,7 +595,7 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                                 areq->proc(areq->eventLoop, rfd, &areq->req, (int)written);
                             }
                             sockstate->wreqs--;
-                            zfree(areq);
+                            FreeMemoryNoCOW(areq);
                             /* if no active write requests, set ready to write */
                             if (sockstate->wreqs == 0 && sockstate->masks & AE_WRITABLE) {
                                 eventLoop->fired[numevents].fd = rfd;
@@ -577,7 +606,12 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                         }
                     }
                     if (matched == 0) {
-                        redisLog(REDIS_VERBOSE, "Sec:%lld Unknown complete (closed) on %d", gettimeofdaysecs(NULL), rfd);
+                        redisLog(REDIS_VERBOSE, "Unknown complete (closed) on %d bt:%d, ov:%llu, ovi:%llu, ovih:%llu", 
+                            rfd, 
+                            entry->dwNumberOfBytesTransferred, 
+                            entry->lpOverlapped, 
+                            entry->lpOverlapped->Internal, 
+                            entry->lpOverlapped->InternalHigh);
                         sockstate = NULL;
                     }
                 }
@@ -590,33 +624,33 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
                 while (node != NULL) {
                     sockstate = (aeSockState *)listNodeValue(node);
                     if (sockstate->fd == rfd) {
-                        if (sockstate->masks & CONNECT_PENDING) {
-                            /* check if connect complete */
-                            if (entry->lpOverlapped == &sockstate->ov_read) {
-                                sockstate->masks &= ~CONNECT_PENDING;
-                            }
-                        } else if (entry->lpOverlapped == &sockstate->ov_read) {
-                            // read complete
-                            sockstate->masks &= ~READ_QUEUED;
-                        } else {
-                            // check pending writes
-                            asendreq *areq = (asendreq *)entry->lpOverlapped;
-                            if (removeMatchFromList(&sockstate->wreqlist, areq)) {
-                                if (areq->proc != NULL) 
-                                    areq->proc(areq->eventLoop, rfd, &areq->req, -1);
-                                sockstate->wreqs--;
-                                zfree(areq);
-                            }
+                    if (sockstate->masks & CONNECT_PENDING) {
+                        /* check if connect complete */
+                        if (entry->lpOverlapped == &sockstate->ov_read) {
+                            sockstate->masks &= ~CONNECT_PENDING;
                         }
-                        if (sockstate->wreqs == 0 &&
-                            (sockstate->masks & (CONNECT_PENDING | READ_QUEUED | SOCKET_ATTACHED)) == 0) {
-                            if ((sockstate->masks & CLOSE_PENDING) != 0) {
-                                close(rfd);
-                                sockstate->masks &= ~(CLOSE_PENDING);
-                            }
-                            // safe to delete sockstate
-                            aeDelSockState(state, sockstate);
+                    } else if (entry->lpOverlapped == &sockstate->ov_read) {
+                        // read complete
+                        sockstate->masks &= ~READ_QUEUED;
+                    } else {
+                        // check pending writes
+                        asendreq *areq = (asendreq *)entry->lpOverlapped;
+                        if (removeMatchFromList(&sockstate->wreqlist, areq)) {
+                            if (areq->proc != NULL)
+                                areq->proc(areq->eventLoop, rfd, &areq->req, -1);
+                            sockstate->wreqs--;
+                            FreeMemoryNoCOW(areq);
                         }
+                    }
+                    if (sockstate->wreqs == 0 &&
+                        (sockstate->masks & (CONNECT_PENDING | READ_QUEUED | SOCKET_ATTACHED)) == 0) {
+                        if ((sockstate->masks & CLOSE_PENDING) != 0) {
+                            close(rfd);
+                            sockstate->masks &= ~(CLOSE_PENDING);
+                        }
+                        // safe to delete sockstate
+                        aeDelSockState(state, sockstate);
+                    }
                         break;
                     }
                     node = listNextNode(node);

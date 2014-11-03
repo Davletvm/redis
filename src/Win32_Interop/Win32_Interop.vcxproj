@@ -140,8 +140,7 @@ rc.exe -foresources/EventLog.res resources/EventLog.rc</Command>
     </Link>
     <Lib>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
-      <AdditionalDependencies>
-      </AdditionalDependencies>
+      <AdditionalDependencies>qwave.lib</AdditionalDependencies>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -183,8 +182,7 @@ rc.exe -foresources/EventLog.res resources/EventLog.rc</Command>
       <OptimizeReferences>true</OptimizeReferences>
     </Link>
     <Lib>
-      <AdditionalDependencies>
-      </AdditionalDependencies>
+      <AdditionalDependencies>qwave.lib</AdditionalDependencies>
     </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
