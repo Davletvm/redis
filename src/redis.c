@@ -3067,10 +3067,11 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         if (server.loading && priviliged) {
             double perc;
             time_t eta, elapsed;
+            off_t remaining_bytes;
 
             if (!server.loading_loaded_bytes) server.loading_loaded_bytes = 1;
 
-            off_t remaining_bytes = server.loading_total_bytes-
+            remaining_bytes = server.loading_total_bytes-
                                     server.loading_loaded_bytes;
 
             perc = ((double)server.loading_loaded_bytes /
