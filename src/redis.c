@@ -2928,6 +2928,12 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
                 "mem_fragmentation_ratio:%.2f\r\n",
                 zmalloc_get_fragmentation_ratio(zmalloc_get_rss())
                 );
+            if (server.postponeDeletes) {
+                info = sdscatprintf(info,
+                    "pending_deletes:%lu\r\n",
+                    listLength(server.pendingDeletes)
+                    );
+            }
         }
 #else
         info = sdscatprintf(info,
