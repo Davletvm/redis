@@ -362,7 +362,9 @@ static RedisParamterMapper g_redisArgMap =
     { cInclude,                         &fp1 },    // include [path]
 
     // sentinel commands
-    { cSentinel,                        &sp }
+    { cSentinel,                        &sp },
+
+    { cDatFiles,                        &fp2 }      // datfiles [maxnum] [path]
 };
 
 std::vector<std::string> &split(const std::string &s, char delim, std::vector<std::string> &elems) {
@@ -423,6 +425,8 @@ void ParseCommandLineArguments(int argc, char** argv) {
 
     bool confFile = false;
     string confFilePath;
+
+AGAIN:
     for (int n = (confFile ? 2 : 1); n < argc; n++) {
         if (string(argv[n]).substr(0, 2) == "--") {
             string argument = string(argv[n]).substr(2, argument.length() - 2);
@@ -441,10 +445,11 @@ void ParseCommandLineArguments(int argc, char** argv) {
                     for (auto p : sentinelSubCommands) {
                         params.push_back(p);
                     }
-                } catch (runtime_error re) {
+                }
+                catch (runtime_error re) {
                     // if no subcommands could be mapped, then assume this is the parameterless --sentinel command line only argument
                 }
-            } else if (argument == cServiceRun ) {
+            } else if (argument == cServiceRun) {
                 // When the service starts the current directory is %systemdir%. This needs to be changed to the 
                 // directory the executable is in so that the .conf file can be loaded.
                 char szFilePath[MAX_PATH];
@@ -463,14 +468,13 @@ void ParseCommandLineArguments(int argc, char** argv) {
             }
             g_argMap[argument].push_back(params);
             n += (int)params.size();
-        } else {
+        } else if (!confFile) {
             confFile = true;
             confFilePath = argv[n];
-            break;
+            ParseConfFile(confFilePath, g_argMap);
+            goto AGAIN;
         }
     }
-
-    if (confFile) ParseConfFile(confFilePath, g_argMap);
 
 #if 0
     cout << "arguments seen:" << endl;

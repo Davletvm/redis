@@ -57,3 +57,4 @@ const string cNo = "no";
 const string cDefaultSyslogIdent = "redis";
 const string cDefaultLogfile = "stdout";
 
+const string cDatFiles = "datfiles";

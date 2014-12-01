@@ -83,7 +83,7 @@ BOOL WriteToProcmon (wstring message)
 
 const SIZE_T cAllocationGranularity = 1 << 26;                   // 64MB per dlmalloc heap block 
 const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K sections = 1TB.
-const wchar_t* cMapFileBaseName = L"RedisQFork";
+const char* cMapFileBaseName = "RedisQFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
 
@@ -140,6 +140,10 @@ struct CleanupState {
     uint64_t * pageBitMap;
 };
 
+struct DatFilePaths {
+    char PrimaryPath[MAX_PATH];
+    unsigned int countInPrimaryPath;
+};
 
 QForkControl* g_pQForkControl;
 HANDLE g_hQForkControlFileMap;
@@ -148,6 +152,7 @@ HANDLE g_hForkedProcess;
 HANDLE g_hEndForkThread;
 BOOL g_isForkedProcess;
 CleanupState g_CleanupState;
+DatFilePaths g_DataFilePaths;
 int g_SlaveExitCode; // For slave process
 
 
@@ -444,6 +449,31 @@ void CreateEventHandle(HANDLE * out) {
     *out = h;
 }
 
+void DeleteExistingDatFiles(char * path) {
+
+    // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
+    // Clean up anything we can to prevent excessive disk usage.
+    char heapMemoryMapWildCard[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    sprintf_s(
+        heapMemoryMapWildCard,
+        MAX_PATH,
+        "%s\\%s_*.dat",
+        path,
+        cMapFileBaseName);
+    HANDLE hFind = FindFirstFileA(heapMemoryMapWildCard, &fd);
+    while (hFind != INVALID_HANDLE_VALUE) {
+        // Failure likely means the file is in use by another redis instance.
+        DeleteFileA(fd.cFileName);
+
+        if (FALSE == FindNextFileA(hFind, &fd)) {
+            FindClose(hFind);
+            hFind = INVALID_HANDLE_VALUE;
+        }
+    }
+
+}
+
 
 BOOL QForkMasterInit() {
 
@@ -453,6 +483,15 @@ BOOL QForkMasterInit() {
     FDAPI_SetForceCOWBuffer(ForceCOWBuffer);
 
     try {
+
+        if (g_argMap.find(cDatFiles) != g_argMap.end()) {
+            char* endPtr;
+            g_DataFilePaths.countInPrimaryPath = strtoul(g_argMap[cDatFiles].at(0).at(0).c_str(), &endPtr, 10);
+            char* end = NULL;
+            strcpy_s(g_DataFilePaths.PrimaryPath, g_argMap[cDatFiles].at(0).at(1).c_str());
+        }
+
+
         // allocate file map for qfork control so it can be passed to the forked process
         g_hQForkControlFileMap = CreateFileMappingW(
             INVALID_HANDLE_VALUE,
@@ -497,27 +536,10 @@ BOOL QForkMasterInit() {
         g_pQForkControl->availableBlocksInHeap = 0;
 
 
-
-        // FILE_FLAG_DELETE_ON_CLOSE will not clean up files in the case of a BSOD or power failure.
-        // Clean up anything we can to prevent excessive disk usage.
-        wchar_t heapMemoryMapWildCard[MAX_PATH];
-        WIN32_FIND_DATA fd;
-        swprintf_s(
-            heapMemoryMapWildCard,
-            MAX_PATH,
-            L"%s_*.dat",
-            cMapFileBaseName);
-        HANDLE hFind = FindFirstFile(heapMemoryMapWildCard, &fd);
-        while (hFind != INVALID_HANDLE_VALUE) {
-            // Failure likely means the file is in use by another redis instance.
-            DeleteFile(fd.cFileName);
-
-            if (FALSE == FindNextFile(hFind, &fd)) {
-                FindClose(hFind);
-                hFind = INVALID_HANDLE_VALUE;
-            }
+        DeleteExistingDatFiles(".");
+        if (g_DataFilePaths.countInPrimaryPath) {
+            DeleteExistingDatFiles(g_DataFilePaths.PrimaryPath);
         }
-
 
         SIZE_T mmSize = g_pQForkControl->maxAvailableBlockInHeap * cAllocationGranularity;
             
@@ -1133,17 +1155,25 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
 BOOL PhysicalMapMemory(int block)
 {
     try {
-        wchar_t heapMemoryMapPath[MAX_PATH];
-        swprintf_s(
+        char * path;
+        if (g_DataFilePaths.countInPrimaryPath) {
+            g_DataFilePaths.countInPrimaryPath--;
+            path = g_DataFilePaths.PrimaryPath;
+        } else {
+            path = ".";
+        }
+        char heapMemoryMapPath[MAX_PATH];
+        sprintf_s(
             heapMemoryMapPath,
             MAX_PATH,
-            L"%s_%d_%d.dat",
+            "%s\\%s_%d_%d.dat",
+            path,
             cMapFileBaseName,
             GetCurrentProcessId(),
             block);
 
         HANDLE file =
-            CreateFileW(
+            CreateFileA(
             heapMemoryMapPath,
             GENERIC_READ | GENERIC_WRITE,
             0,
@@ -1151,7 +1181,7 @@ BOOL PhysicalMapMemory(int block)
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
             NULL);
-        IFFAILTHROW(file != INVALID_HANDLE_VALUE, "PhysicalMapMemory: CreateFileW failed.");
+        IFFAILTHROW(file != INVALID_HANDLE_VALUE, "PhysicalMapMemory: CreateFileA failed.");
 
         SIZE_T mmSize = g_pQForkControl->heapBlockSize;
 
