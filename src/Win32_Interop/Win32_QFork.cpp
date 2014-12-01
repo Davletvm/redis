@@ -1155,6 +1155,7 @@ void AbortForkOperation(BOOL blockUntilCleanedup)
 BOOL PhysicalMapMemory(int block)
 {
     try {
+    AGAIN:
         char * path;
         if (g_DataFilePaths.countInPrimaryPath) {
             g_DataFilePaths.countInPrimaryPath--;
@@ -1181,6 +1182,11 @@ BOOL PhysicalMapMemory(int block)
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE,
             NULL);
+        if (file == INVALID_HANDLE_VALUE && path == g_DataFilePaths.PrimaryPath) {
+            g_DataFilePaths.countInPrimaryPath = 0;
+            goto AGAIN;
+        }
+
         IFFAILTHROW(file != INVALID_HANDLE_VALUE, "PhysicalMapMemory: CreateFileA failed.");
 
         SIZE_T mmSize = g_pQForkControl->heapBlockSize;
