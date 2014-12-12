@@ -86,6 +86,7 @@ const int cMaxBlocks = (1 << 16)/4;                                  // 64MB*16K
 const char* cMapFileBaseName = "RedisQFork";
 const int cDeadForkWait = 30000;
 const size_t pageSize = 4096;
+const SIZE_T cMiniBlockAllocationGranularity = 1 << 18;  // 256K
 
 typedef enum BlockState {
     bsINVALID = 0,
@@ -94,15 +95,16 @@ typedef enum BlockState {
 }BlockState;
 
 struct BlockData {
-    BlockState state;
     HANDLE heapMemoryMapFile;
     HANDLE heapMemoryMap;
 };
 
 struct QForkControl {
-    int availableBlocksInHeap;                 // number of blocks in blockMap (dynamically determined at run time)
+    int availableBlocksInHeap;
     int maxAvailableBlockInHeap;
-    SIZE_T heapBlockSize;           
+    int miniBlockAllocCount;
+    SIZE_T heapBlockSize;
+    SIZE_T heapAllocMiniBlockSize;
     BlockData heapBlockMap[cMaxBlocks];
     LPVOID heapStart;
 
@@ -135,6 +137,7 @@ struct CleanupState {
     int scannedPages;
     int exitCode;
     int heapBlocksToCleanup;
+    int heapMiniBlocksToCleanup;
     time_t forkExitTimeout;
     LPVOID heapEnd;
     uint64_t * pageBitMap;
@@ -181,7 +184,7 @@ __forceinline int64_t AddrToBitSlot(LPVOID addr, int * bit) {
     return c >> 6;
 }
 
-__forceinline bool IsAddrInHeap(LPVOID addr) {
+__forceinline bool IsAddrInCOWHeap(LPVOID addr) {
     return (g_CleanupState.currentState != osUNSTARTED && addr >= g_pQForkControl->heapStart && addr < g_CleanupState.heapEnd);
 }
 
@@ -192,7 +195,7 @@ __forceinline bool IsAddrCOW(LPVOID addr) {
 }
 
 void ForceCOWBuffer(LPVOID addr, size_t size) {
-    if (!IsAddrInHeap(addr) || size == 0) return;
+    if (!IsAddrInCOWHeap(addr) || size == 0) return;
     int bitstart, bitstop;
     uint64_t slotstart = AddrToBitSlot(addr, &bitstart);
     uint64_t slotend = AddrToBitSlot((BYTE*)addr + size - 1, &bitstop);
@@ -257,7 +260,7 @@ LONG CALLBACK VectoredHandler(PEXCEPTION_POINTERS exinfo) {
     if (exinfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
         if (exinfo->ExceptionRecord->ExceptionInformation[0] == 1) {
             LPVOID addr = (LPVOID) exinfo->ExceptionRecord->ExceptionInformation[1];
-            if (IsAddrInHeap(addr) && !IsAddrCOW(addr)) {
+            if (IsAddrInCOWHeap(addr) && !IsAddrCOW(addr)) {
                 DWORD oldProtect;
                 if (g_CleanupState.currentState >= osEXITED) {
                     if (VirtualProtect(addr, 1, PAGE_READWRITE, &oldProtect))
@@ -380,7 +383,7 @@ BOOL QForkSlaveInit(HANDLE QForkConrolMemoryMapHandle, DWORD ParentProcessID) {
         }
 
         IFFAILTHROW(dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
-        IFFAILTHROW(dlmallopt(M_GRANULARITY, cAllocationGranularity), "QForkmasterinit: DLMalloc failed initializing allocation granularity.");
+        IFFAILTHROW(dlmallopt(M_GRANULARITY, cMiniBlockAllocationGranularity), "QForkmasterinit: DLMalloc failed initializing allocation granularity.");
         
         // wait for parent to signal operation start
         WaitForSingleObject(g_pQForkControl->startOperation, INFINITE);
@@ -514,10 +517,6 @@ BOOL QForkMasterInit() {
         g_pQForkControl->inMemoryBuffersControlHandle = NULL;
 
 
-        // This must be called only once per process! Calling it more times than that will not recreate existing 
-        // section, and dlmalloc will ultimately fail with an access violation. Once is good.
-        IFFAILTHROW(dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
-        IFFAILTHROW(dlmallopt(M_GRANULARITY, cAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing allocation granularity.");
         
         g_pQForkControl->heapBlockSize = cAllocationGranularity;
 
@@ -526,15 +525,22 @@ BOOL QForkMasterInit() {
             memstatus.dwLength = sizeof(MEMORYSTATUSEX);
 
             IFFAILTHROW(GlobalMemoryStatusEx(&memstatus), "QForkMasterInit: Cannot get global memory status.");
-            DWORDLONG cMaxMemory = memstatus.ullTotalPhys * 10;
-            if (cMaxMemory > cMaxBlocks * cAllocationGranularity) {
-                cMaxMemory = cMaxBlocks * cAllocationGranularity;
+            long long cMaxMemory = memstatus.ullTotalPhys * 10;
+            if (cMaxMemory > (long long)cAllocationGranularity * cMaxBlocks) {
+                cMaxMemory = (long long)cAllocationGranularity * cMaxBlocks;
             }
             g_pQForkControl->maxAvailableBlockInHeap = (int)(cMaxMemory / cAllocationGranularity);
         }
 
         g_pQForkControl->availableBlocksInHeap = 0;
+        g_pQForkControl->miniBlockAllocCount = 0;
+        g_pQForkControl->heapAllocMiniBlockSize = cMiniBlockAllocationGranularity;
 
+        // This must be called only once per process! Calling it more times than that will not recreate existing 
+        // section, and dlmalloc will ultimately fail with an access violation. Once is good.
+        IFFAILTHROW(dlmallopt(M_MMAP_THRESHOLD, cAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing direct memory map threshold.");
+        IFFAILTHROW(dlmallopt(M_GRANULARITY, cMiniBlockAllocationGranularity), "QForkMasterInit: DLMalloc failed initializing allocation granularity.");
+        IFFAILTHROW(dlmallopt(M_TRIM_THRESHOLD, (long long)-1), "QForkMasterInit: DLMalloc failed initializing trim treshold.");
 
         DeleteExistingDatFiles(".");
         if (g_DataFilePaths.countInPrimaryPath) {
@@ -566,9 +572,6 @@ BOOL QForkMasterInit() {
                 PAGE_READWRITE);
             IFFAILTHROW(reserved, "QForkMasterInit: VirtualAllocEx of reserve segment failed.");
 
-            g_pQForkControl->heapBlockMap[n].state = 
-                ((n < g_pQForkControl->availableBlocksInHeap) ?
-                BlockState::bsUNMAPPED : BlockState::bsINVALID);
         }
 
         g_pQForkControl->typeOfOperation = OperationType::otINVALID;
@@ -755,14 +758,12 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect), "BeginForkOperation: VirtualProtect 1 failed");
         
         redisLog(REDIS_VERBOSE, "Protecting heap");
-        for (int x = 0; x < g_pQForkControl->availableBlocksInHeap; x++) {
-            IFFAILTHROW(VirtualProtect(
-                (byte*)g_pQForkControl->heapStart + x * g_pQForkControl->heapBlockSize,
-                g_pQForkControl->heapBlockSize,
-                PAGE_READONLY,
-                &oldProtect),
-                "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
-        }
+        IFFAILTHROW(VirtualProtect(
+            (byte*)g_pQForkControl->heapStart,
+            (g_pQForkControl->availableBlocksInHeap - 1) * g_pQForkControl->heapBlockSize + g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize,
+            PAGE_READONLY,
+            &oldProtect),
+            "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
         redisLog(REDIS_VERBOSE, "Protected heap");
 
         // Launch the "forked" process
@@ -803,7 +804,8 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         g_CleanupState.currentState = osINPROGRESS;
         g_CleanupState.inMemory = (type == otRDBINMEMORY);
         g_CleanupState.heapBlocksToCleanup = g_pQForkControl->availableBlocksInHeap;
-        g_CleanupState.heapEnd = (char*)g_pQForkControl->heapStart + g_pQForkControl->heapBlockSize * g_pQForkControl->availableBlocksInHeap;
+        g_CleanupState.heapMiniBlocksToCleanup = g_pQForkControl->miniBlockAllocCount;
+        g_CleanupState.heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->heapBlockSize - 1) * g_pQForkControl->availableBlocksInHeap + g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize;
         g_CleanupState.pageBitMap = (uint64_t*)calloc(g_pQForkControl->heapBlockSize * g_pQForkControl->availableBlocksInHeap / pageSize / (8 * 8), sizeof(uint64_t));
 
         (*childPID) = pi.dwProcessId;
@@ -925,7 +927,8 @@ void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * to
     *cowPages = g_CleanupState.cowPages;
     *copiedPages = g_CleanupState.copiedPages;
     *scannedPages = g_CleanupState.scannedPages;
-    *totalPages = g_CleanupState.heapBlocksToCleanup * (int)(g_pQForkControl->heapBlockSize / pageSize);
+    *totalPages = (g_CleanupState.heapBlocksToCleanup - 1) * (int)(g_pQForkControl->heapBlockSize / pageSize) +
+        g_CleanupState.heapMiniBlocksToCleanup * (int)(g_pQForkControl->heapAllocMiniBlockSize / pageSize);
 }
 
 
@@ -1017,8 +1020,8 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
             size_t size = g_CleanupState.copyBatchSize * pageSize;
             do {
 
-                if (g_CleanupState.offsetCopied + size > g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize) {
-                    size = g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize - g_CleanupState.offsetCopied;
+                if (g_CleanupState.offsetCopied + size > (BYTE*)g_CleanupState.heapEnd - g_pQForkControl->heapStart) {
+                    size = (BYTE*)g_CleanupState.heapEnd - g_pQForkControl->heapStart - g_CleanupState.offsetCopied;
                 }
 
                 int block = (int)(g_CleanupState.offsetCopied / g_pQForkControl->heapBlockSize);
@@ -1061,7 +1064,8 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
                 IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "AdvanceForkCleanup: UnmapViewOfFile failed.");
                 g_CleanupState.offsetCopied += size;
-                if (g_CleanupState.offsetCopied == g_CleanupState.heapBlocksToCleanup * g_pQForkControl->heapBlockSize) {
+                if (g_CleanupState.offsetCopied == 
+                    ((g_CleanupState.heapBlocksToCleanup - 1) * g_pQForkControl->heapBlockSize + g_CleanupState.heapMiniBlocksToCleanup * g_pQForkControl->miniBlockAllocCount)) {
                     g_CleanupState.currentState = osCLEANEDUP;
                     break;
                 }
@@ -1210,7 +1214,6 @@ BOOL PhysicalMapMemory(int block)
 
         g_pQForkControl->heapBlockMap[block].heapMemoryMap = map;
         g_pQForkControl->heapBlockMap[block].heapMemoryMapFile = file;
-        g_pQForkControl->heapBlockMap[block].state = bsMAPPED;
 
         return TRUE;
 
@@ -1231,74 +1234,65 @@ int blocksMapped = 0;
 int totalAllocCalls = 0;
 int totalFreeCalls = 0;
 
+
+BOOL AllocHeapLargeBlock(int count) {
+    totalAllocCalls++;
+
+    if (g_pQForkControl->availableBlocksInHeap + count > g_pQForkControl->maxAvailableBlockInHeap) {
+        errno = ENOMEM;
+        return FALSE;
+    }
+
+    for (int x = g_pQForkControl->availableBlocksInHeap; x < g_pQForkControl->availableBlocksInHeap + count; x++) {
+        if (!PhysicalMapMemory(x)) {
+            errno = ENOMEM;
+            return FALSE;
+        }
+    }
+    g_pQForkControl->availableBlocksInHeap = g_pQForkControl->availableBlocksInHeap + count;
+
+    return TRUE;
+}
+
+
+
 LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
     if (g_isForkedProcess) {
-        LPVOID rv =  VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT| (allocateHigh ? MEM_TOP_DOWN: 0), PAGE_READWRITE);
+        LPVOID rv = VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT | (allocateHigh ? MEM_TOP_DOWN : 0), PAGE_READWRITE);
         return rv;
     }
-    totalAllocCalls++;
-    LPVOID retPtr = (LPVOID)NULL;
-    if (size % g_pQForkControl->heapBlockSize != 0 ) {
+    if (size % g_pQForkControl->heapAllocMiniBlockSize != 0) {
         errno = EINVAL;
-        return retPtr;
-    }
-    int contiguousBlocksToAllocate = (int)(size / g_pQForkControl->heapBlockSize);
-
-    int startIndex = allocateHigh ? g_pQForkControl->availableBlocksInHeap - 1 : contiguousBlocksToAllocate - 1;
-    int endIndex = allocateHigh ? -1 : g_pQForkControl->availableBlocksInHeap - contiguousBlocksToAllocate + 1;
-    int direction = allocateHigh ? -1 : 1;
-    int blockIndex = 0;
-    int contiguousBlocksFound = 0;
-    for(blockIndex = startIndex; 
-        blockIndex != endIndex; 
-        blockIndex += direction) {
-        for (int n = 0; n < contiguousBlocksToAllocate; n++) {
-            if (g_pQForkControl->heapBlockMap[blockIndex + n * direction].state == BlockState::bsUNMAPPED) {
-                contiguousBlocksFound++;
-            }
-            else {
-                contiguousBlocksFound = 0;
-                break;
-            }
-        }
-        if (contiguousBlocksFound == contiguousBlocksToAllocate) {
-            break;
-        }
-    }
-
-    if (contiguousBlocksFound == contiguousBlocksToAllocate) {
-        int allocationStart = blockIndex + (allocateHigh ? 1 - contiguousBlocksToAllocate : 0);
-        LPVOID blockStart = 
-            reinterpret_cast<byte*>(g_pQForkControl->heapStart) + 
-            (g_pQForkControl->heapBlockSize * allocationStart);
-        for(int n = 0; n < contiguousBlocksToAllocate; n++ ) {
-            g_pQForkControl->heapBlockMap[allocationStart+n].state = BlockState::bsMAPPED;
-            blocksMapped++;
-        }
-        retPtr = blockStart;
-    }
-    else if (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate <= g_pQForkControl->maxAvailableBlockInHeap) {
-        LPVOID blockStart = reinterpret_cast<byte*>(g_pQForkControl->heapStart) + (g_pQForkControl->heapBlockSize * (g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound));
-        for (int x = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound; x < g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate; x++) {
-            if (x >= g_pQForkControl->availableBlocksInHeap) {
-                if (!PhysicalMapMemory(x)) {
-                    errno = ENOMEM;
-                    return NULL;
-                }
-            } else {
-                g_pQForkControl->heapBlockMap[x].state = BlockState::bsMAPPED;
-                blocksMapped++;
-            }
-        }
-        g_pQForkControl->availableBlocksInHeap = g_pQForkControl->availableBlocksInHeap - contiguousBlocksFound + contiguousBlocksToAllocate;
-        retPtr = blockStart;
-    } else {
-        errno = ENOMEM;
         return NULL;
     }
+    if (g_pQForkControl->availableBlocksInHeap == 0) {
+        if (!AllocHeapLargeBlock(1)) 
+            return NULL;
+    }
 
-    return retPtr;
+    LPVOID ptr = ((BYTE*)g_pQForkControl->heapStart) + 
+        (g_pQForkControl->availableBlocksInHeap - 1) * g_pQForkControl->heapBlockSize + 
+        g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize;
+
+    int miniBlocks = (int)(size / g_pQForkControl->heapAllocMiniBlockSize);
+    int miniBlocksInHeapBlock = (int)(g_pQForkControl->heapBlockSize / g_pQForkControl->heapAllocMiniBlockSize);
+    
+    if (miniBlocks > (miniBlocksInHeapBlock - g_pQForkControl->miniBlockAllocCount)) {
+        miniBlocks -= miniBlocksInHeapBlock - g_pQForkControl->miniBlockAllocCount;
+
+        int largeBlocks = (miniBlocks + miniBlocksInHeapBlock - 1) / miniBlocksInHeapBlock;
+        if (!AllocHeapLargeBlock(largeBlocks)) 
+            return NULL;
+        miniBlocks -= (largeBlocks - 1) * miniBlocksInHeapBlock;
+        g_pQForkControl->miniBlockAllocCount = miniBlocks;
+
+    } else {
+        g_pQForkControl->miniBlockAllocCount += miniBlocks;
+    }
+    return ptr;
+    
 }
+
 
 BOOL FreeHeapBlock(LPVOID block, size_t size)
 {
@@ -1322,34 +1316,8 @@ BOOL FreeHeapBlock(LPVOID block, size_t size)
         return 0;
     }
 
-    totalFreeCalls++;
-    if (size == 0) {
-        return FALSE;
-    }
-
-    INT_PTR ptrDiff = reinterpret_cast<byte*>(block) - reinterpret_cast<byte*>(g_pQForkControl->heapStart);
-    if (ptrDiff < 0 || (ptrDiff % g_pQForkControl->heapBlockSize) != 0) {
-        return FALSE;
-    }
-
-    int blockIndex = (int)(ptrDiff / g_pQForkControl->heapBlockSize);
-    if (blockIndex >= g_pQForkControl->availableBlocksInHeap) {
-        return FALSE;
-    }
-
-    int contiguousBlocksToFree = (int)(size / g_pQForkControl->heapBlockSize);
-
-    if (VirtualUnlock(block, size) == FALSE) {
-        DWORD err = GetLastError();
-        if (err != ERROR_NOT_LOCKED) {
-            return FALSE;
-        }
-    };
-    for (int n = 0; n < contiguousBlocksToFree; n++ ) {
-        blocksMapped--;
-        g_pQForkControl->heapBlockMap[blockIndex + n].state = BlockState::bsUNMAPPED;
-    }
-    return TRUE;
+    redisLog(REDIS_WARNING, "Unexpected free called");
+    throw std::system_error(std::error_code(), "Unexpected free called");
 }
 
 void SetupLogging() {
@@ -1370,7 +1338,8 @@ void SetupLogging() {
 
 void GetHeapExtent(HeapExtent * pextent) {
     pextent->heapStart = g_pQForkControl->heapStart;
-    pextent->heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->availableBlocksInHeap * g_pQForkControl->heapBlockSize);
+    pextent->heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->availableBlocksInHeap - 1)* g_pQForkControl->heapBlockSize +
+        g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize;
 }
 
 extern "C"

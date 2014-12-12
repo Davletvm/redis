@@ -585,6 +585,12 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0], "repl-inmemory-receive-buffer-size") &&
             argc == 2) {
             server.repl_inMemoryReceiveBuffer = (int)memtoll(argv[1], NULL);
+        } else if (!strcasecmp(argv[0], "maxmemory-max-rss") && argc == 2) {
+            server.rss_max_config = atoi(argv[1]);
+        } else if (!strcasecmp(argv[0], "maxmemory-cap-delta") && argc == 2) {
+            server.memory_cap_decrease_delta = atoi(argv[1]);
+        } else if (!strcasecmp(argv[0], "maxmemory-min-cap") && argc == 2) {
+            server.min_memory_cap = atoi(argv[1]);
         } else if (!strcasecmp(argv[0], "sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
              * mode ASAP. */
@@ -1037,6 +1043,15 @@ void configSetCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-inmemory-receive-buffer-size")) {
         if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 1024) goto badfmt;
         server.repl_inMemoryReceiveBuffer = (int)ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "maxmemory-max-rss")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 100) goto badfmt;
+        server.rss_max_config = (int)ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "maxmemory-cap-delta")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 0 || ll > 100) goto badfmt;
+        server.memory_cap_decrease_delta = (int)ll;
+    } else if (!strcasecmp(c->argv[2]->ptr, "maxmemory-min-cap")) {
+        if (getLongLongFromObject(o, &ll) == REDIS_ERR || ll < 0 || ll > 100) goto badfmt;
+        server.min_memory_cap = (int)ll;
     } else if (!strcasecmp(c->argv[2]->ptr, "repl-disable-tcp-nodelay")) {
         int yn = yesnotoi(o->ptr);
 
@@ -1170,6 +1185,9 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("repl-throttle-databw", (server.repl_inMemoryThrottleMinDataBW >> 0) * 1);
     config_get_numerical_field("repl-throttle-strict", server.repl_inMemoryThrottleReceiveCheck);
     config_get_numerical_field("repl-throttle-target", server.repl_inMemoryThrottleMaxTime / 1000);
+    config_get_numerical_field("maxmemory-max-rss", server.rss_max_config);
+    config_get_numerical_field("maxmemory-cap-delta", server.memory_cap_decrease_delta);
+    config_get_numerical_field("maxmemory-min-cap", server.min_memory_cap);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1988,7 +2006,10 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state, "repl-throttle-databw", (server.repl_inMemoryThrottleMinDataBW >> 0) * 1, 0);
     rewriteConfigNumericalOption(state, "repl-throttle-strict", server.repl_inMemoryThrottleReceiveCheck, 0);
     rewriteConfigNumericalOption(state, "repl-throttle-target", server.repl_inMemoryThrottleMaxTime / 1000, REDIS_DEFAULT_INMEMORYTHROTTLE_MAXTIME);
-    rewriteConfigYesNoOption(state,"aof-load-truncated",server.aof_load_truncated,REDIS_DEFAULT_AOF_LOAD_TRUNCATED);
+    rewriteConfigNumericalOption(state, "maxmemory-max-rss", server.rss_max_config, REDIS_DEFAULT_MAXMEMORY_RSS_MAX);
+    rewriteConfigNumericalOption(state, "maxmemory-cap-delta", server.memory_cap_decrease_delta, REDIS_DEFAULT_MAXMEMORY_CAP_DELTA);
+    rewriteConfigNumericalOption(state, "maxmemory-min-cap", server.min_memory_cap, REDIS_DEFAULT_MAXMEMORY_MIN_CAP);
+    rewriteConfigYesNoOption(state, "aof-load-truncated", server.aof_load_truncated, REDIS_DEFAULT_AOF_LOAD_TRUNCATED);
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines

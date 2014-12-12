@@ -151,6 +151,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_INMEMORY_RECEIVEBUFFER (1024 * 256)
 #define REDIS_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
 #define REDIS_DEFALT_PENDING_DELETE_QUANTA 1000
+#define REDIS_DEFAULT_MAXMEMORY_RSS_MAX 110
+#define REDIS_DEFAULT_MAXMEMORY_CAP_DELTA 5
+#define REDIS_DEFAULT_MAXMEMORY_MIN_CAP 30
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -808,6 +811,7 @@ struct redisServer {
     long long slowlog_log_slower_than; /* SLOWLOG time limit (to get logged) */
     unsigned long slowlog_max_len;     /* SLOWLOG max number of items logged */
     size_t resident_set_size;       /* RSS sampled in serverCron(). */
+    size_t resident_set_size_last;  /* Last seend RSS - did our heap grow? */
     /* The following two are used to track instantaneous "load" in terms
      * of operations per second. */
     long long ops_sec_last_sample_time; /* Timestamp of last sample (in ms) */
@@ -947,6 +951,10 @@ struct redisServer {
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
+    unsigned long long maxmemory_cap;  /* potentially lower cap due to rss oversize */
+    int rss_max_config;
+    int memory_cap_decrease_delta;
+    int min_memory_cap;
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
     int protects_used;              /* Whether any objects are protected */

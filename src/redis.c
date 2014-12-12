@@ -1609,6 +1609,10 @@ void initServerConfig(void) {
     server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
     server.maxmemory = 0;
+    server.maxmemory_cap = 0;
+    server.rss_max_config = REDIS_DEFAULT_MAXMEMORY_RSS_MAX;
+    server.memory_cap_decrease_delta = REDIS_DEFAULT_MAXMEMORY_CAP_DELTA;
+    server.min_memory_cap = REDIS_DEFAULT_MAXMEMORY_MIN_CAP;
     server.maxmemory_policy = REDIS_DEFAULT_MAXMEMORY_POLICY;
     server.maxmemory_samples = REDIS_DEFAULT_MAXMEMORY_SAMPLES;
     server.hash_max_ziplist_entries = REDIS_HASH_MAX_ZIPLIST_ENTRIES;
@@ -2011,6 +2015,7 @@ void initServer(void) {
     server.stat_starttime = time(NULL);
     server.stat_peak_memory = 0;
     server.resident_set_size = 0;
+    server.resident_set_size_last = 0;
     server.lastbgsave_status = REDIS_OK;
     server.aof_last_write_status = REDIS_OK;
     server.aof_last_write_errno = 0;
@@ -2890,6 +2895,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         char hmem[64];
         char peak_hmem[64];
         char rss_hmem[64];
+        char cap_hmem[64];
         size_t zmalloc_used = zmalloc_used_memory();
 
         /* Peak memory is updated from time to time by serverCron() so it
@@ -2902,6 +2908,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         bytesToHuman(hmem,zmalloc_used);
         bytesToHuman(peak_hmem,server.stat_peak_memory);
         bytesToHuman(rss_hmem, zmalloc_get_rss());
+        bytesToHuman(cap_hmem, server.maxmemory_cap);
         if (sections++) info = sdscat(info,"\r\n");
 #ifdef _WIN32
         info = sdscatprintf(info,
@@ -2925,8 +2932,12 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
             );
         if (priviliged) {
             info = sdscatprintf(info,
-                "mem_fragmentation_ratio:%.2f\r\n",
-                zmalloc_get_fragmentation_ratio(zmalloc_get_rss())
+                "mem_fragmentation_ratio:%.2f\r\n"
+                "maxmemory_cap:%llu\r\n"
+                "maxmemory_cap_human:%s\r\n",
+                zmalloc_get_fragmentation_ratio(zmalloc_get_rss()),
+                server.maxmemory_cap,
+                cap_hmem
                 );
             if (server.postponeDeletes) {
                 info = sdscatprintf(info,
@@ -3569,7 +3580,7 @@ void processPendingDeletes() {
  * used by the server.
  */
 int freeMemoryIfNeeded(void) {
-    long long mem_used, mem_tofree, mem_freed, mem_heap;
+    long long mem_used, mem_tofree = 0, mem_freed, mem_heap;
     int slaves = listLength(server.slaves);
     int monitors = listLength(server.monitors);
     mstime_t latency;
@@ -3610,8 +3621,26 @@ int freeMemoryIfNeeded(void) {
         mem_used -= aofRewriteBufferSize();
     }
 
+    long long memory_cap = server.maxmemory_cap ? server.maxmemory_cap : server.maxmemory;
+
+    server.resident_set_size = zmalloc_get_rss();
+    if (!server.masterhost && server.resident_set_size > server.resident_set_size_last && server.resident_set_size > server.maxmemory * server.rss_max_config / 100) {
+        // if we are beyond ideal rss, we need to move max memory to the left
+        server.resident_set_size_last = server.resident_set_size;
+        if (!server.maxmemory_cap || (long long) server.maxmemory_cap > mem_used) 
+            server.maxmemory_cap = mem_used;
+        server.maxmemory_cap = server.maxmemory_cap * (100 - server.memory_cap_decrease_delta) / 100;
+        if (server.maxmemory_cap < server.maxmemory * server.min_memory_cap / 100) {
+            server.maxmemory_cap = server.maxmemory * server.min_memory_cap / 100;
+        } else {
+            redisLog(REDIS_WARNING, "RSS Exhaustion - moving max memory cap to %llu", server.maxmemory_cap);
+        }
+        if (memory_cap > (long long) server.maxmemory_cap)
+            memory_cap = server.maxmemory_cap;
+    }
+
     /* Check if we are over the memory limit. */
-    BOOL objectMemoryExceeded = mem_used > (long long) server.maxmemory;
+    BOOL objectMemoryExceeded = mem_used > memory_cap;
 
     if (!objectMemoryExceeded) return REDIS_OK;
 
@@ -3619,7 +3648,7 @@ int freeMemoryIfNeeded(void) {
         return REDIS_ERR; /* We need to free memory, but policy forbids. */
 
     /* Compute how much memory we need to free. */
-    mem_tofree = mem_used - (size_t)server.maxmemory;
+    mem_tofree = mem_used - (size_t)memory_cap;
     mem_freed = 0;
     long long now = mstime();
     long long when; 
