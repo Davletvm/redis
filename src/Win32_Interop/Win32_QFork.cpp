@@ -805,7 +805,7 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         g_CleanupState.inMemory = (type == otRDBINMEMORY);
         g_CleanupState.heapBlocksToCleanup = g_pQForkControl->availableBlocksInHeap;
         g_CleanupState.heapMiniBlocksToCleanup = g_pQForkControl->miniBlockAllocCount;
-        g_CleanupState.heapEnd = (char*)g_pQForkControl->heapStart + (g_pQForkControl->heapBlockSize - 1) * g_pQForkControl->availableBlocksInHeap + g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize;
+        g_CleanupState.heapEnd = (char*)g_pQForkControl->heapStart + g_pQForkControl->heapBlockSize * (g_pQForkControl->availableBlocksInHeap - 1) + g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize;
         g_CleanupState.pageBitMap = (uint64_t*)calloc(g_pQForkControl->heapBlockSize * g_pQForkControl->availableBlocksInHeap / pageSize / (8 * 8), sizeof(uint64_t));
 
         (*childPID) = pi.dwProcessId;
@@ -1064,8 +1064,7 @@ void AdvanceCleanupForkOperation(BOOL forceEnd, int *exitCode) {
 
                 IFFAILTHROW(UnmapViewOfFile(heapAltRegion), "AdvanceForkCleanup: UnmapViewOfFile failed.");
                 g_CleanupState.offsetCopied += size;
-                if (g_CleanupState.offsetCopied == 
-                    ((g_CleanupState.heapBlocksToCleanup - 1) * g_pQForkControl->heapBlockSize + g_CleanupState.heapMiniBlocksToCleanup * g_pQForkControl->miniBlockAllocCount)) {
+                if (g_CleanupState.offsetCopied == (BYTE*)g_CleanupState.heapEnd - g_pQForkControl->heapStart) {
                     g_CleanupState.currentState = osCLEANEDUP;
                     break;
                 }
