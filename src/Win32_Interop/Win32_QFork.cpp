@@ -758,9 +758,17 @@ BOOL BeginForkOperation(OperationType type, char* fileName, int sendBufferSize, 
         IFFAILTHROW(VirtualProtect(g_pQForkControl, sizeof(QForkControl), PAGE_WRITECOPY, &oldProtect), "BeginForkOperation: VirtualProtect 1 failed");
         
         redisLog(REDIS_VERBOSE, "Protecting heap");
+        for (int x = 0; x < g_pQForkControl->availableBlocksInHeap - 1; x++) {
+            IFFAILTHROW(VirtualProtect(
+                (byte*)g_pQForkControl->heapStart + x * g_pQForkControl->heapBlockSize,
+                g_pQForkControl->heapBlockSize,
+                PAGE_READONLY,
+                &oldProtect),
+                "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
+        }
         IFFAILTHROW(VirtualProtect(
-            (byte*)g_pQForkControl->heapStart,
-            (g_pQForkControl->availableBlocksInHeap - 1) * g_pQForkControl->heapBlockSize + g_pQForkControl->miniBlockAllocCount * g_pQForkControl->heapAllocMiniBlockSize,
+            (byte*)g_pQForkControl->heapStart + (g_pQForkControl->availableBlocksInHeap - 1) * g_pQForkControl->heapBlockSize,
+            g_pQForkControl->heapAllocMiniBlockSize * g_pQForkControl->miniBlockAllocCount,
             PAGE_READONLY,
             &oldProtect),
             "BeginForkOperation: VirtualProtect 2 failed - Most likely your swap file is too small or system has too much memory pressure.");
@@ -1254,11 +1262,17 @@ BOOL AllocHeapLargeBlock(int count) {
 }
 
 
-
-LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
+LPVOID AllocHeapBlockMap(size_t size, BOOL allocateHigh) {
     if (g_isForkedProcess) {
         LPVOID rv = VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT | (allocateHigh ? MEM_TOP_DOWN : 0), PAGE_READWRITE);
         return rv;
+    }
+    return NULL;
+}
+
+LPVOID AllocHeapBlockMoreCore(size_t size) {
+    if (g_isForkedProcess) {
+        return NULL;
     }
     if (size % g_pQForkControl->heapAllocMiniBlockSize != 0) {
         errno = EINVAL;
@@ -1293,7 +1307,7 @@ LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh) {
 }
 
 
-BOOL FreeHeapBlock(LPVOID block, size_t size)
+BOOL FreeHeapBlockMap(LPVOID block, size_t size)
 {
     if (g_isForkedProcess) {
         char* cptr = (char*)block;

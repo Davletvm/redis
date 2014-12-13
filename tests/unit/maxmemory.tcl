@@ -1,6 +1,7 @@
 start_server {tags {"maxmemory"}} {
     test "Without maxmemory small integers are shared" {
         r config set maxmemory 0
+        r config set maxmemory-max-rss 1000
         r set a 1
         assert {[r object refcount a] > 1}
     }

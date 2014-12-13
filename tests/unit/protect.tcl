@@ -11,6 +11,7 @@ start_server {tags {"maxmemory"}} {
             # fast for us to reach that limit.
             set used [s used_memory]
             set limit [expr {$used+100*1024}]
+            r config set maxmemory-max-rss 1000
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
             # Now add keys until the limit is almost reached.

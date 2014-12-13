@@ -574,7 +574,10 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #include "Win32_QFork.h"
 #include "..\redisLog.h"
 #define HAVE_MMAP 1
-#define HAVE_MORECORE 0
+#define HAVE_MORECORE 1
+#define MORECORE_CANNOT_TRIM 1
+#define MORECORE_CONTIGUOUS 1
+#define MORECORE win32morecore
 #define LACKS_UNISTD_H
 #define LACKS_SYS_PARAM_H
 #define LACKS_SYS_MMAN_H
@@ -1705,29 +1708,13 @@ static int dev_zero_fd = -1; /* Cached file descriptor for /dev/zero. */
 
 /* Win32 MMAP via VirtualAlloc */
 static FORCEINLINE void* win32mmap(size_t size) {
-#ifdef USE_COW
-  void* ptr = AllocHeapBlock(size,FALSE);
-#else
-  void* ptr = VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
-#endif
-  if( ptr == NULL )
-  {
-      redisLog(REDIS_WARNING, "VirtualAlloc/COWAlloc fail!\n");
-  }
+  void* ptr = AllocHeapBlockMap(size,FALSE);
   return (ptr != 0)? ptr: MFAIL;
 }
 
 /* For direct MMAP, use MEM_TOP_DOWN to minimize interference */
 static FORCEINLINE void* win32direct_mmap(size_t size) {
-#ifdef USE_COW
-  void* ptr = AllocHeapBlock(size, TRUE);
-#else
-  void* ptr = VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT|MEM_TOP_DOWN, PAGE_READWRITE);
-#endif
-  if( ptr == NULL )
-  {
-      redisLog(REDIS_WARNING, "VirtualAlloc/COWAlloc fail!\n");
-  }
+  void* ptr = AllocHeapBlockMap(size, TRUE);
   return (ptr != 0)? ptr: MFAIL;
 }
 
@@ -1735,32 +1722,10 @@ static FORCEINLINE void* win32direct_mmap(size_t size) {
 static FORCEINLINE int win32munmap(void* ptr, size_t size) {
   char* cptr = (char*)ptr;
 
-if (FreeHeapBlock(cptr,size) == 0)
+if (FreeHeapBlockMap(cptr,size) == 0)
     return -1;
 else 
     return 0;
-/*
-  MEMORY_BASIC_INFORMATION minfo;
-  while (size) {
-    if (VirtualQuery(cptr, &minfo, sizeof(minfo)) == 0)
-      return -1;
-    if (minfo.BaseAddress != cptr || minfo.AllocationBase != cptr ||
-        minfo.State != MEM_COMMIT || minfo.RegionSize > size)
-      return -1;
-    
-#ifdef USE_COW
-    if (FreeHeapBlock(cptr) == 0)
-#else
-    if (VirtualFree(cptr, 0, MEM_RELEASE) == 0)
-#endif
-    {
-        return -1;
-    }
-    cptr += minfo.RegionSize;
-    size -= minfo.RegionSize;
-  }
-  return 0;
-*/
 }
 
 #define MMAP_DEFAULT(s)             win32mmap(s)
@@ -1774,6 +1739,15 @@ else
 #define MREMAP_DEFAULT(addr, osz, nsz, mv) mremap((addr), (osz), (nsz), (mv))
 #endif /* WIN32 */
 #endif /* HAVE_MREMAP */
+
+#if HAVE_MORECORE
+#if WIN32
+static FORCEINLINE void* win32morecore(size_t size) {
+    void* ptr = AllocHeapBlockMoreCore(size);
+    return (ptr != 0) ? ptr : MFAIL;
+}
+#endif
+#endif
 
 /**
  * Define CALL_MORECORE

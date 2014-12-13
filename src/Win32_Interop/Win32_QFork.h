@@ -84,8 +84,9 @@ void GetHeapExtent(HeapExtent * pextent);
 void GetCOWStats(int * cowPages, int * copiedPages, int * scannedPages, int * totalPages);
 
 // For DLMalloc use only
-LPVOID AllocHeapBlock(size_t size, BOOL allocateHigh);
-int FreeHeapBlock(LPVOID block, size_t size);
+LPVOID AllocHeapBlockMap(size_t size, BOOL allocateHigh);
+int FreeHeapBlockMap(LPVOID block, size_t size);
+LPVOID AllocHeapBlockMoreCore(size_t size);
 
 // Need to change default Redis maxmemory setting which is normally infinite
 extern BOOL g_isForkedProcess;
