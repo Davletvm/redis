@@ -33,7 +33,7 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set used [s used_memory_data]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -42,7 +42,7 @@ start_server {tags {"maxmemory"}} {
             while 1 {
                 r setex [randomKey] 10000 x
                 incr numkeys
-                if {[s used_memory]+4096 > $limit} {
+                if {[s used_memory_data]+4096 > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -52,7 +52,7 @@ start_server {tags {"maxmemory"}} {
             for {set j 0} {$j < $numkeys} {incr j} {
                 r setex [randomKey] 10000 x
             }
-            assert {[s used_memory] < ($limit+4096)}
+            assert {[s used_memory_data] < ($limit+4096)}
         }
     }
 
@@ -65,7 +65,7 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set used [s used_memory_data]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -74,7 +74,7 @@ start_server {tags {"maxmemory"}} {
             while 1 {
                 r set [randomKey] x
                 incr numkeys
-                if {[s used_memory]+4096 > $limit} {
+                if {[s used_memory_data]+4096 > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -91,7 +91,7 @@ start_server {tags {"maxmemory"}} {
                 }
             }
             if {[string match allkeys-* $policy]} {
-                assert {[s used_memory] < ($limit+4096)}
+                assert {[s used_memory_data] < ($limit+4096)}
             } else {
                 assert {$err == 1}
             }
@@ -107,7 +107,7 @@ start_server {tags {"maxmemory"}} {
             # Get the current memory limit and calculate a new limit.
             # We just add 100k to the current memory size so that it is
             # fast for us to reach that limit.
-            set used [s used_memory]
+            set used [s used_memory_data]
             set limit [expr {$used+100*1024}]
             r config set maxmemory $limit
             r config set maxmemory-policy $policy
@@ -121,7 +121,7 @@ start_server {tags {"maxmemory"}} {
                 } else {
                     r set "key:$numkeys" x
                 }
-                if {[s used_memory]+4096 > $limit} {
+                if {[s used_memory_data]+4096 > $limit} {
                     assert {$numkeys > 10}
                     break
                 }
@@ -135,7 +135,7 @@ start_server {tags {"maxmemory"}} {
                 catch {r setex "foo:$j" 10000 x}
             }
             # We should still be under the limit.
-            assert {[s used_memory] < ($limit+4096)}
+            assert {[s used_memory_data] < ($limit+4096)}
             # However all our non volatile keys should be here.
             for {set j 0} {$j < $numkeys} {incr j 2} {
                 assert {[r exists "key:$j"]}

@@ -12,7 +12,8 @@ source tests/support/test.tcl
 source tests/support/util.tcl
 
 set ::all_tests_1 {
-    unit/other
+    unit/maxmemory
+    unit/protect
 }
 
 

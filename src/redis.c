@@ -2896,6 +2896,7 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         char peak_hmem[64];
         char rss_hmem[64];
         char cap_hmem[64];
+        char estimated_hmem[64];
         size_t zmalloc_used = zmalloc_used_memory();
 
         /* Peak memory is updated from time to time by serverCron() so it
@@ -2905,10 +2906,13 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         if (zmalloc_used > server.stat_peak_memory)
             server.stat_peak_memory = zmalloc_used;
 
+        size_t estimated_mem = (size_t)(((double)zmalloc_used) / server.stat_peak_memory * 0.95 * zmalloc_get_rss());
+
         bytesToHuman(hmem,zmalloc_used);
         bytesToHuman(peak_hmem,server.stat_peak_memory);
         bytesToHuman(rss_hmem, zmalloc_get_rss());
         bytesToHuman(cap_hmem, server.maxmemory_cap);
+        bytesToHuman(estimated_hmem, estimated_mem);
         if (sections++) info = sdscat(info,"\r\n");
 #ifdef _WIN32
         info = sdscatprintf(info,
@@ -2917,14 +2921,18 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
             "used_memory_human:%s\r\n"
             "used_memory_rss:%llu\r\n"
             "used_memory_rss_human:%s\r\n"
+            "used_memory_data:%llu\r\n"
+            "used_memory_data_human:%s\r\n"
             "used_memory_peak:%llu\r\n"
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
             "mem_allocator:%s\r\n",
-            (long long)zmalloc_used,
-            hmem,
+            (long long)estimated_mem,
+            estimated_hmem,
             (long long)zmalloc_get_rss(),
             rss_hmem,
+            zmalloc_used,
+            hmem,
             (long long)server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
