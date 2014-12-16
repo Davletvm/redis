@@ -857,15 +857,21 @@ void trackOperationsPerSecond(void) {
     unsigned long long received_sec = t > 0 ? (received * 1000 / t) : 0;
 
     unsigned long long idleTime = server.el->totalIdleTime - server.stat_idletime_last_sample;
-    unsigned long long idleTimePerSec;
-    idleTimePerSec = t > 0 ? (idleTime * 1000 / t) : 0;
+    unsigned long long eventsAfterWait = server.el->countEventsWait - server.stat_eventAfterWait_last;
+    unsigned long long eventsAfterNoWait = server.el->countEventsNoWait - server.stat_evetnAfterNowait_last;
 
+    unsigned long long idleTimePerSec, eventsAfterWaitPerSec, eventsAfterNoWaitPerSec;
+    idleTimePerSec = t > 0 ? (idleTime * 1000 / t) : 0;
+    eventsAfterWaitPerSec = t > 0 ? (eventsAfterWait * 1000 / t) : 0;
+    eventsAfterNoWaitPerSec = t > 0 ? (eventsAfterNoWait * 1000 / t) : 0;
     ops_sec = t > 0 ? (ops*1000/t) : 0;
 
     server.ops_sec_samples[server.ops_sec_idx] = ops_sec;
     server.stat_bytes_received_samples[server.ops_sec_idx] = received_sec;
     server.stat_bytes_sent_samples[server.ops_sec_idx] = sent_sec;
     server.stat_idletime_samples[server.ops_sec_idx] = idleTimePerSec;
+    server.stat_eventAfterWait_samples[server.ops_sec_idx] = eventsAfterWaitPerSec;
+    server.stat_eventAfterNoWait_samples[server.ops_sec_idx] = eventsAfterNoWaitPerSec;
     server.ops_sec_idx = (server.ops_sec_idx+1) % REDIS_OPS_SEC_SAMPLES;
 
     server.ops_sec_last_sample_time = mstime();
@@ -873,6 +879,8 @@ void trackOperationsPerSecond(void) {
     server.stat_bytes_received_last_sample = server.stat_bytes_received;
     server.stat_bytes_sent_last_sample = server.stat_bytes_sent;
     server.stat_idletime_last_sample = server.el->totalIdleTime;
+    server.stat_eventAfterWait_last = server.el->countEventsWait;
+    server.stat_evetnAfterNowait_last = server.el->countEventsNoWait;
 
 }
 
@@ -912,6 +920,25 @@ unsigned long long getIdleTimePerSecond() {
         sum += server.stat_idletime_samples[j];
     return sum / REDIS_OPS_SEC_SAMPLES;
 }
+
+unsigned long long getEventsWaitPerSecond() {
+    int j;
+    unsigned long long sum = 0;
+
+    for (j = 0; j < REDIS_OPS_SEC_SAMPLES; j++)
+        sum += server.stat_eventAfterWait_samples[j];
+    return sum / REDIS_OPS_SEC_SAMPLES;
+}
+
+unsigned long long getEventsNoWaitPerSecond() {
+    int j;
+    unsigned long long sum = 0;
+
+    for (j = 0; j < REDIS_OPS_SEC_SAMPLES; j++)
+        sum += server.stat_eventAfterNoWait_samples[j];
+    return sum / REDIS_OPS_SEC_SAMPLES;
+}
+
 
 /* Check for timeouts. Returns non-zero if the client was terminated */
 int clientsCronHandleTimeout(redisClient *c) {
@@ -1900,6 +1927,8 @@ void resetServerStats(void) {
     server.stat_bytes_received = 0;
     server.stat_bytes_sent = 0;
     server.stat_idletime_last_sample = 0;
+    server.stat_eventAfterWait_last = 0;
+    server.stat_evetnAfterNowait_last = 0;
 }
 
 void initServer(void) {
@@ -3349,11 +3378,15 @@ sds genRedisInfoStringBasedOnPrivilidge(char *section, int priviliged) {
         "used_cpu_sys:%.2f\r\n"
         "used_cpu_user:%.2f\r\n"
         "used_cpu_avg_ms_per_sec:%d\r\n"
-        "server_load:%.2f\r\n",
+        "server_load:%.2f\r\n"
+        "event_wait:%llu\r\n"
+        "event_no_wait:%llu\r\n",
         (float)self_ru.ru_stime.tv_sec+(float)self_ru.ru_stime.tv_usec/1000000,
         (float)self_ru.ru_utime.tv_sec+(float)self_ru.ru_utime.tv_usec/1000000,
         server.cpu_time_ms_per_sec,
-        100.0 - ((float)getIdleTimePerSecond()) / 100000
+        100.0 - ((float)getIdleTimePerSecond()) / 100000,
+        getEventsWaitPerSecond(),
+        getEventsNoWaitPerSecond()
         );
     }
 

@@ -530,11 +530,16 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp, int maxComplet
             timeAfter |= afterWait.dwHighDateTime;
             timeAfter <<= 32;
             timeAfter |= afterWait.dwLowDateTime;
+            eventLoop->lastIdleTime = timeAfter;
             eventLoop->totalIdleTime += (timeAfter - timeBefore); // in 100nanoseconds
-            if (!rc)
+            if (!rc) {
                 numComplete2 = 0;
+            } else {
+                eventLoop->countEventsWait += numComplete2;
+            }
         }
     } else {
+        eventLoop->countEventsNoWait += numComplete2;
     }
     numComplete += numComplete2;
 

@@ -104,6 +104,10 @@ typedef struct aeEventLoop {
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
     size_t totalIdleTime;
+    size_t countEventsNoWait;
+    size_t countEventsWait;
+    size_t maxBusyTime;
+    size_t lastIdleTime;
 } aeEventLoop;
 
 /* Prototypes */

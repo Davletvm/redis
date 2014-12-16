@@ -823,6 +823,10 @@ struct redisServer {
     unsigned long long stat_bytes_sent_samples[REDIS_OPS_SEC_SAMPLES];
     unsigned long long stat_idletime_last_sample;
     unsigned long long stat_idletime_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_eventAfterWait_last;
+    unsigned long long stat_eventAfterWait_samples[REDIS_OPS_SEC_SAMPLES];
+    unsigned long long stat_evetnAfterNowait_last;
+    unsigned long long stat_eventAfterNoWait_samples[REDIS_OPS_SEC_SAMPLES];
     int ops_sec_idx;
     /* Configuration */
     int verbosity;                  /* Loglevel in redis.conf */
