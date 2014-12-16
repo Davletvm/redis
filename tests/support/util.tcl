@@ -367,5 +367,5 @@ proc start_write_load {host port seconds} {
 
 # Stop a process generating write load executed with start_write_load.
 proc stop_write_load {handle} {
-    catch {exec /bin/kill -9 $handle}
+    kill_proc2 $handle
 }
